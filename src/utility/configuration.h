@@ -1,0 +1,208 @@
+/*******************************************************************************
+ * MIT License
+ *
+ * This file is part of GPU-HeiPa.
+ *
+ * Copyright (C) 2025 Henning Woydt <henning.woydt@informatik.uni-heidelberg.de>
+ *
+ * Permission is hereby granted, free of charge, to any person obtaining a copy
+ * of this software and associated documentation files (the "Software"), to deal
+ * in the Software without restriction, including without limitation the rights
+ * to use, copy, modify, merge, publish, distribute, sublicense, and/or sell
+ * copies of the Software, and to permit persons to whom the Software is
+ * furnished to do so, subject to the following conditions:
+ *
+ * The above copyright notice and this permission notice shall be included in all
+ * copies or substantial portions of the Software.
+ *
+ * THE SOFTWARE IS PROVIDED "AS IS", WITHOUT WARRANTY OF ANY KIND, EXPRESS OR
+ * IMPLIED, INCLUDING BUT NOT LIMITED TO THE WARRANTIES OF MERCHANTABILITY,
+ * FITNESS FOR A PARTICULAR PURPOSE AND NONINFRINGEMENT. IN NO EVENT SHALL THE
+ * AUTHORS OR COPYRIGHT HOLDERS BE LIABLE FOR ANY CLAIM, DAMAGES OR OTHER
+ * LIABILITY, WHETHER IN AN ACTION OF CONTRACT, TORT OR OTHERWISE, ARISING FROM,
+ * OUT OF OR IN CONNECTION WITH THE SOFTWARE OR THE USE OR OTHER DEALINGS IN THE
+ * SOFTWARE.
+ ******************************************************************************/
+
+#ifndef GPU_HEIPA_CONFIGURATION_H
+#define GPU_HEIPA_CONFIGURATION_H
+
+#include <iostream>
+#include <random>
+#include <string>
+#include <vector>
+
+#include "definitions.h"
+#include "JSON_util.h"
+#include "kokkos_util.h"
+
+namespace GPU_HeiPa {
+    struct CommandLineOption {
+        std::string large_key;
+        std::string small_key;
+        std::string description;
+        std::string default_val;
+        std::string input;
+        bool is_set;
+    };
+
+    class Configuration {
+        std::vector<CommandLineOption> options = {
+            {"--help", "", "Produces the help message", "", "", false},
+            {"--graph", "-g", "Filepath to the graph.", "", "", false},
+            {"--mapping", "-m", "Output filepath to the generated mapping.", "GPU-HeiPa_par.txt", "", false},
+            {"--k", "-k", "Number of blocks k", "", "", false},
+            {"--imbalance", "-e", "Allowed imbalance (for example 0.03).", "0.03", "", false},
+            {"--config", "-c", "Broad Config.", "0.03", "", false},
+            {"--statistics", "", "Output filepath to the statistics file.", "GPU-HeiPa_stats.JSON", "", false},
+            {"--seed", "-s", "Seed for more randomness.", "0", "", false}
+        };
+
+    public:
+        // graph information
+        std::string graph_in;
+        std::string mapping_out;
+        std::string statistics_out;
+
+        // partition information
+        partition_t k = 0;
+        f64 imbalance = 0.0;
+
+        // partitioning algorithm
+        std::string config;
+
+        // random initialization
+        u64 seed = 0;
+
+        // device space info
+        std::string device_space;
+
+        Configuration() = default;
+
+        Configuration(int argc, char *argv[]) {
+            // read command lines into vector
+            std::vector<std::string> args(argv, argv + argc);
+
+            // check for a help message
+            for (size_t i = 1; i < (size_t) argc; ++i) {
+                if (args[i] == "--help") {
+                    print_help_message();
+                    exit(EXIT_SUCCESS);
+                }
+            }
+
+            // read all command line args
+            for (size_t i = 1; i < (size_t) argc; ++i) {
+                for (auto &[large_key, small_key, description, default_val, input, is_set]: options) {
+                    if (large_key == args[i] || small_key == args[i]) {
+                        input = args[i + 1];
+                        is_set = true;
+                        i += 1;
+                        break;
+                    }
+                }
+            }
+
+            // extract info
+            graph_in = get("--graph");
+            mapping_out = get("--mapping");
+            statistics_out = get("--statistics");
+
+            k = (partition_t) std::stoul(get("--k"));
+
+            imbalance = std::stod(get("--imbalance"));
+
+            // partitioning algorithm
+            config = get("--config");
+
+            // random initialization
+            if (is_set("--seed")) {
+                seed = std::stoull(get("--seed"));
+            } else {
+                seed = std::random_device{}();
+            }
+
+            device_space = Hei_Pa::get_kokkos_execution_space_as_str();
+        }
+
+        /**
+         * Returns whether the option was entered.
+         *
+         * @param var The option in interest.
+         * @return True if the option was entered, false else.
+         */
+        bool is_set(const std::string &var) {
+            for (const auto &[large_key, small_key, description, default_val, input, is_set]: options) {
+                if (large_key == var || small_key == var) {
+                    return is_set;
+                }
+            }
+            std::cout << "Command Line \"" << var << "\" is not an allowed name!" << std::endl;
+            exit(EXIT_FAILURE);
+        }
+
+        /**
+         * Gets the entered input as a string.
+         *
+         * @param var The option in interest.
+         * @return The input.
+         */
+        std::string get(const std::string &var) {
+            for (const auto &[large_key, small_key, description, default_val, input, is_set]: options) {
+                if (large_key == var || small_key == var) {
+                    if (input.empty() && default_val.empty()) {
+                        std::cout << "Command Line \"" << var << "\" not set!" << std::endl;
+                        exit(EXIT_FAILURE);
+                    } else if (input.empty()) {
+                        return default_val;
+                    }
+                    return input;
+                }
+            }
+            std::cout << "Command Line \"" << var << "\" is not an allowed name!" << std::endl;
+            exit(EXIT_FAILURE);
+        }
+
+        /**
+         * Prints the help message.
+         */
+        void print_help_message() {
+            for (const auto &[large_key, small_key, description, default_val, input, is_set]: options) {
+                if (small_key.empty()) {
+                    std::cout << "[ " << large_key << "] - " << description << std::endl;
+                } else {
+                    std::cout << "[ " << large_key << ", " << small_key << "] - " << description << std::endl;
+                }
+            }
+        }
+
+        /**
+         * Converts algorithm configuration into a string in JSON format.
+         *
+         * @param n_tabs Number of tabs appended in front of each line (for visual purposes).
+         * @return String in JSON format.
+         */
+        std::string to_JSON(const int n_tabs = 0) const {
+            std::string tabs;
+            for (int i = 0; i < n_tabs; ++i) { tabs.push_back('\t'); }
+
+            std::string s = "{\n";
+
+            s += tabs + to_JSON_MACRO(graph_in);
+            s += tabs + to_JSON_MACRO(mapping_out);
+            s += tabs + to_JSON_MACRO(statistics_out);
+            s += tabs + to_JSON_MACRO(k);
+            s += tabs + to_JSON_MACRO(imbalance);
+            s += tabs + to_JSON_MACRO(config);
+            s += tabs + to_JSON_MACRO(seed);
+            s += tabs + to_JSON_MACRO(device_space);
+
+            s.pop_back();
+            s.pop_back();
+            s += "\n" + tabs + "}";
+            return s;
+        }
+    };
+}
+
+#endif //GPU_HEIPA_CONFIGURATION_H
