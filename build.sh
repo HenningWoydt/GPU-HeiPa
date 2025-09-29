@@ -83,6 +83,7 @@ echo "Building with $JOBS parallel jobs (override with MAX_THREADS)."
 rm -rf extern/local
 rm -rf extern/kokkos-4.7.00
 rm -rf extern/kokkos-kernels-4.7.00
+rm -rf extern/KaHIP
 
 ROOT=${PWD}
 GCC=$(which gcc || true)
@@ -96,6 +97,23 @@ git submodule update --init --recursive
 # make local folder for all includes
 mkdir -p extern
 cd extern && rm -rf local && mkdir local && cd "${ROOT}"
+
+# --- Download KaHIP 3.19 ---
+echo "Downloading KaHIP 3.19..."
+if (
+  cd extern \
+  && rm -f v3.19.tar.gz \
+  && rm -rf KaHIP \
+  && wget -q https://github.com/KaHIP/KaHIP/archive/refs/tags/v3.19.tar.gz \
+  && tar -xzf v3.19.tar.gz \
+  && mv KaHIP-3.19 KaHIP \
+  && rm -f v3.19.tar.gz
+); then
+  echo "KaHIP 3.19 downloaded and extracted successfully."
+else
+  echo "Failed to download KaHIP!" >&2
+  exit 1
+fi
 
 # --- Download Kokkos-Kernels 4.7.00 ---
 echo "Downloading Kokkos-Kernels 4.7.00..."
@@ -197,6 +215,26 @@ if (
   echo "Kokkos-Kernels 4.7.00 build completed successfully."
 else
   echo "Kokkos-Kernels 4.7.00 build failed!" >&2
+  exit 1
+fi
+cd "${ROOT}"
+
+# --- build KaHIP ---
+echo "Building KaHIP 3.19..."
+if (
+  cd "${ROOT}/extern/KaHIP" \
+  && mkdir -p build && cd build \
+  && cmake .. \
+    -DCMAKE_BUILD_TYPE=Release \
+    -DCMAKE_INSTALL_PREFIX="${ROOT}/extern/local/kahip" \
+    -DNOMPI=ON \
+    -DCMAKE_POSITION_INDEPENDENT_CODE=ON \
+    > /dev/null 2>&1 \
+  && make install -j "$JOBS" > /dev/null 2>&1
+); then
+  echo "KaHIP 3.19 build completed successfully."
+else
+  echo "KaHIP 3.19 build failed!" >&2
   exit 1
 fi
 cd "${ROOT}"

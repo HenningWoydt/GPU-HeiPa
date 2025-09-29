@@ -1,3 +1,0 @@
-[submodule "extern/KaHIP"]
-	path = extern/KaHIP
-	url = git@github.com:KaHIP/KaHIP.git
