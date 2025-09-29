@@ -7,12 +7,7 @@ cmake-build-minsizerel
 cmake-build-relwithdebinfo
 build/
 
-
-extern/GKlib/
-extern/Jet-Partitioner/
-extern/kokkos-4.7.00/
-extern/kokkos-kernels-4.7.00/
-extern/local/
-extern/METIS/
-
-data/
+extern/kokkos-4.7.00
+extern/kokkos-kernels-4.7.00
+extern/local
+extern/KaHIP
