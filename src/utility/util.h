@@ -250,7 +250,7 @@ namespace GPU_HeiPa {
 
         // 1) Enlarge the stream's internal buffer (optional but helps).
         std::vector<char> stream_buf(1 << 20); // 1 MB
-        out.rdbuf()->pubsetbuf(stream_buf.data(), stream_buf.size());
+        out.rdbuf()->pubsetbuf(stream_buf.data(), (long int) stream_buf.size());
 
         // 2) Our own aggregation buffer for batched writes.
         std::string buf;
@@ -260,49 +260,6 @@ namespace GPU_HeiPa {
             // Convert integer to text without iostream overhead.
             char tmp[32]; // enough for signed 64-bit
             auto val = partition(u);
-            auto res = std::to_chars(std::begin(tmp), std::end(tmp), val);
-            if (res.ec != std::errc{}) {
-                std::cerr << "Error: to_chars failed while writing.\n";
-                return;
-            }
-            const size_t len = static_cast<size_t>(res.ptr - tmp);
-
-            // Flush our buffer if adding this line would overflow capacity.
-            if (buf.size() + len + 1 > buf.capacity()) {
-                out.write(buf.data(), static_cast<std::streamsize>(buf.size()));
-                buf.clear();
-            }
-            buf.append(tmp, len);
-            buf.push_back('\n');
-        }
-
-        if (!buf.empty())
-            out.write(buf.data(), static_cast<std::streamsize>(buf.size()));
-
-        out.flush(); // optional
-    }
-
-    inline void write_partition(const std::vector<int> &partition,
-                                const std::string &file_path) {
-        vertex_t n = (vertex_t) partition.size();
-        std::ofstream out(file_path, std::ios::binary);
-        if (!out) {
-            std::cerr << "Error: Could not open " << file_path << " to write partition!\n";
-            return;
-        }
-
-        // 1) Enlarge the stream's internal buffer (optional but helps).
-        std::vector<char> stream_buf(1 << 20); // 1 MB
-        out.rdbuf()->pubsetbuf(stream_buf.data(), stream_buf.size());
-
-        // 2) Our own aggregation buffer for batched writes.
-        std::string buf;
-        buf.reserve(1 << 20); // 1 MB; tune as needed
-
-        for (vertex_t u = 0; u < n; ++u) {
-            // Convert integer to text without iostream overhead.
-            char tmp[32]; // enough for signed 64-bit
-            auto val = partition[u];
             auto res = std::to_chars(std::begin(tmp), std::end(tmp), val);
             if (res.ec != std::errc{}) {
                 std::cerr << "Error: to_chars failed while writing.\n";
