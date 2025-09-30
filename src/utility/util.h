@@ -39,7 +39,8 @@
 #include "definitions.h"
 
 namespace GPU_HeiPa {
-    inline std::vector<std::string> split(const std::string &str, char c) {
+    inline std::vector<std::string> split(const std::string &str,
+                                          char c) {
         std::vector<std::string> splits;
 
         std::istringstream iss(str);
@@ -175,11 +176,13 @@ namespace GPU_HeiPa {
         return std::chrono::high_resolution_clock::now();
     }
 
-    inline f64 get_seconds(std::chrono::high_resolution_clock::time_point sp, std::chrono::high_resolution_clock::time_point ep) {
+    inline f64 get_seconds(std::chrono::high_resolution_clock::time_point sp,
+                           std::chrono::high_resolution_clock::time_point ep) {
         return (f64) std::chrono::duration_cast<std::chrono::nanoseconds>(ep - sp).count() / 1e9;
     }
 
-    inline f64 get_milli_seconds(std::chrono::high_resolution_clock::time_point sp, std::chrono::high_resolution_clock::time_point ep) {
+    inline f64 get_milli_seconds(std::chrono::high_resolution_clock::time_point sp,
+                                 std::chrono::high_resolution_clock::time_point ep) {
         return (f64) std::chrono::duration_cast<std::chrono::nanoseconds>(ep - sp).count() / 1e6;
     }
 
@@ -224,7 +227,8 @@ namespace GPU_HeiPa {
         return p;
     }
 
-    inline void write_partition(const std::vector<partition_t> &partition, const std::string &file_path) {
+    inline void write_partition(const std::vector<partition_t> &partition,
+                                const std::string &file_path) {
         std::ofstream out(file_path, std::ios::binary); // Open file in binary mode for faster writing
         if (!out.is_open()) {
             std::cerr << "Error: Could not open " << file_path << " to write partition!" << std::endl;
