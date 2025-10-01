@@ -31,6 +31,9 @@
 
 #include "graph.h"
 #include "host_graph.h"
+#include "mapping.h"
+#include "partition.h"
+#include "../coarsening/two_hop_matching.h"
 #include "../utility/definitions.h"
 #include "../utility/configuration.h"
 #include "../utility/profiler.h"
@@ -41,15 +44,23 @@ namespace GPU_HeiPa {
         Configuration config;
         weight_t lmax = 0;
 
+        vertex_t n;
+        vertex_t m;
+        partition_t k;
+
         HostGraph host_g;
 
         std::vector<Graph> graphs;
+        std::vector<Mapping> mappings;
+
+        Partition partition;
 
         explicit Solver(Configuration t_config) : config(std::move(t_config)) {
         }
 
         std::vector<partition_t> solve() {
-            load_graph();
+            internal_solve();
+
 
             std::string config_JSON = config.to_JSON();
             std::string profile_JSON = Profiler::instance().to_JSON();
@@ -66,9 +77,58 @@ namespace GPU_HeiPa {
         }
 
     private:
-        void load_graph() {
+        void internal_solve() {
+            initialize();
+
+            const partition_t c = 4;
+
+            u32 level = 0;
+            while (graphs.back().n > c * k) {
+                matching();
+                coarsening();
+
+                level += 1;
+            }
+
+            initial_partitioning();
+
+            while (!mappings.empty()) {
+                level -= 1;
+
+                uncoarsening();
+                refinement();
+            }
+        }
+
+        void initialize() {
             host_g = from_file(config.graph_in);
+
+            n = host_g.n;
+            m = host_g.m;
+            k = config.k;
+            lmax = (weight_t) std::ceil((1.0 + config.imbalance) * ((f64) host_g.g_weight / (f64) config.k));
+
             graphs.emplace_back(from_HostGraph(host_g));
+
+            partition = initial_partition(n, k, lmax);
+        }
+
+        void matching() {
+            mappings.emplace_back(two_hop_matcher_get_mapping(graphs.back(), partition));
+        }
+
+        void coarsening() {
+            graphs.emplace_back(from_Graph_Mapping(graphs.back(), mappings.back()));
+            contract(partition, mappings.back());
+        }
+
+        void initial_partitioning() {
+        }
+
+        void refinement() {
+        }
+
+        void uncoarsening() {
         }
     };
 }

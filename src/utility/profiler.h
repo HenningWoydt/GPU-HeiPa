@@ -292,14 +292,15 @@ namespace GPU_HeiPa {
     };
 
     struct ScopedTimer {
-        const char* group;
-        const char* function;
-        const char* kernel;
+        const char *group;
+        const char *function;
+        const char *kernel;
         std::chrono::time_point<std::chrono::system_clock> t0;
         bool stopped = false;
 
-        ScopedTimer(const char* g, const char* f, const char* k)
-            : group(g), function(f), kernel(k), t0(get_time_point()) {}
+        ScopedTimer(const char *g, const char *f, const char *k)
+            : group(g), function(f), kernel(k), t0(get_time_point()) {
+        }
 
         void stop() {
             if (!stopped) {
@@ -312,7 +313,6 @@ namespace GPU_HeiPa {
 
         ~ScopedTimer() { stop(); }
     };
-
 }
 
 #endif //GPU_HEIPA_PROFILER_H

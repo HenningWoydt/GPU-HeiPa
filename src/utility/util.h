@@ -151,7 +151,7 @@ namespace GPU_HeiPa {
     }
 
     inline size_t str_to_ints(const std::string &str,
-                            std::vector<vertex_t> &ints) noexcept {
+                              std::vector<vertex_t> &ints) noexcept {
         size_t idx = 0;
         vertex_t curr_number = 0;
 

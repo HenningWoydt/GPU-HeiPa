@@ -28,6 +28,7 @@
 #define GPU_HEIPA_GRAPH_H
 
 #include "host_graph.h"
+#include "partition.h"
 #include "../utility/definitions.h"
 #include "../utility/util.h"
 #include "../utility/profiler.h"
@@ -39,7 +40,7 @@ namespace GPU_HeiPa {
         weight_t g_weight = 0;
 
         DeviceWeight weights;
-        DeviceU32 neighborhood;
+        DeviceVertex neighborhood;
         DeviceVertex edges_u;
         DeviceVertex edges_v;
         DeviceWeight edges_w;
@@ -54,7 +55,7 @@ namespace GPU_HeiPa {
         g.g_weight = host_g.g_weight;
 
         g.weights = DeviceWeight(Kokkos::view_alloc(Kokkos::WithoutInitializing, "vertex_weights"), host_g.n);
-        g.neighborhood = DeviceU32(Kokkos::view_alloc(Kokkos::WithoutInitializing, "neighborhood"), host_g.n + 1);
+        g.neighborhood = DeviceVertex(Kokkos::view_alloc(Kokkos::WithoutInitializing, "neighborhood"), host_g.n + 1);
         g.edges_u = DeviceVertex(Kokkos::view_alloc(Kokkos::WithoutInitializing, "edges_u"), host_g.m);
         g.edges_v = DeviceVertex(Kokkos::view_alloc(Kokkos::WithoutInitializing, "edges_v"), host_g.m);
         g.edges_w = DeviceWeight(Kokkos::view_alloc(Kokkos::WithoutInitializing, "edges_w"), host_g.m);
@@ -80,6 +81,119 @@ namespace GPU_HeiPa {
         t_fill_edges_u.stop();
 
         return g;
+    }
+
+    inline Graph from_Graph_Mapping(const Graph &old_g,
+                                    const Mapping &mapping) {
+        // initialize vars and allocate memory
+        ScopedTimer t_initialize{"coarsening", "from_Graph_Mapping", "initialize"};
+        Graph coarse_g;
+
+        coarse_g.n = mapping.coarse_n;
+        coarse_g.g_weight = old_g.g_weight;
+
+        coarse_g.weights = DeviceWeight(Kokkos::view_alloc(Kokkos::WithoutInitializing, "vertex_weights"), mapping.coarse_n);
+        coarse_g.neighborhood = DeviceVertex(Kokkos::view_alloc(Kokkos::WithoutInitializing, "neighborhood"), mapping.coarse_n + 1);
+
+        DeviceVertex degrees = DeviceVertex(Kokkos::view_alloc(Kokkos::WithoutInitializing, "degrees"), mapping.coarse_n);
+        DeviceVertex max_degrees = DeviceVertex(Kokkos::view_alloc(Kokkos::WithoutInitializing, "max_degrees"), mapping.coarse_n);
+
+        DeviceU32 hash_offsets = DeviceU32(Kokkos::view_alloc(Kokkos::WithoutInitializing, "hash_offsets"), coarse_g.n + 1);
+        DeviceVertex hash_keys("hash_keys", old_g.m);
+        DeviceWeight hash_vals("hash_vals", old_g.m);
+        t_initialize.stop();
+
+        // set memory to 0
+        ScopedTimer t_initialize_set_0{"coarsening", "from_Graph_Mapping", "initialize_set_0"};
+        Kokkos::deep_copy(coarse_g.weights, 0);
+        Kokkos::deep_copy(degrees, 0);
+        Kokkos::deep_copy(max_degrees, 0);
+        Kokkos::deep_copy(hash_offsets, 0);
+        Kokkos::deep_copy(hash_keys, coarse_g.n);
+        Kokkos::deep_copy(hash_vals, 0);
+        t_initialize_set_0.stop();
+
+        // determine weight of new vertices and maximum degree
+        ScopedTimer t_max_degrees{"coarsening", "from_Graph_Mapping", "max_degrees"};
+        Kokkos::parallel_for("max_degrees", old_g.n, KOKKOS_LAMBDA(const vertex_t u) {
+            vertex_t deg = old_g.neighborhood(u + 1) - old_g.neighborhood(u);
+            weight_t u_w = old_g.weights(u);
+            vertex_t v = mapping.mapping(u);
+
+            Kokkos::atomic_add(&max_degrees(v), deg);
+            Kokkos::atomic_add(&coarse_g.weights(v), u_w);
+        });
+        Kokkos::fence();
+        t_max_degrees.stop();
+
+        // prefix sum over all degrees
+        ScopedTimer t_max_degrees_prefix_sum{"coarsening", "from_Graph_Mapping", "max_degrees_prefix_sum"};
+        Kokkos::parallel_scan("prefix_sum_offsets", coarse_g.n + 1, KOKKOS_LAMBDA(const u32 i, u32 &running, const bool final) {
+            u32 cnt = i < coarse_g.n ? max_degrees(i) : 0;
+            if (final) hash_offsets(i) = running;
+            running += cnt;
+        });
+        t_max_degrees_prefix_sum.stop();
+
+        ScopedTimer t_hash_edges{"coarsening", "from_Graph_Mapping", "hash_edges"};
+        Kokkos::parallel_for("hash_edges", old_g.m, KOKKOS_LAMBDA(const u32 i) {
+            vertex_t u = old_g.edges_u(i);
+            vertex_t v = old_g.edges_v(i);
+            weight_t w = old_g.edges_w(i);
+
+            vertex_t u_new = mapping.mapping(u);
+            vertex_t v_new = mapping.mapping(v);
+
+            if (u_new == v_new) { return; } // this edge vanishes
+
+            u32 beg = hash_offsets(u_new);
+            u32 end = hash_offsets(u_new + 1);
+            u32 len = end - beg;
+            if (len == 0) { return; }
+
+            // 32-bit multiplicative mix on v_new; keep in range [0,size)
+            u32 x = v_new;
+            x ^= x >> 16;
+            x *= 0x7feb352dU;
+            x ^= x >> 15;
+            x *= 0x846ca68bU;
+            x ^= x >> 16;
+
+            uint32_t idx = beg + x % len;
+            for (u32 j = 0; j < len; ++j) {
+                if (idx == end) { idx = beg; }
+                vertex_t old = Kokkos::atomic_compare_exchange(&hash_keys(idx), coarse_g.n, v_new);
+                if (old == coarse_g.n || old == v_new) {
+                    Kokkos::atomic_add(&hash_vals(idx), w);
+                    if (old == coarse_g.n) { Kokkos::atomic_inc(&degrees(u_new)); }
+                    break;
+                }
+                idx += 1;
+            }
+        });
+        Kokkos::fence();
+        t_hash_edges.stop();
+
+        ScopedTimer t_build_offsets{"coarsening", "from_Graph_Mapping", "build_offsets"};
+        Kokkos::parallel_scan("build_offsets", coarse_g.n + 1, KOKKOS_LAMBDA(const u32 i, u32 &running, const bool final) {
+            const u32 cnt = i < coarse_g.n ? degrees(i) : 0;
+            if (final) coarse_g.neighborhood(i) = running;
+            running += cnt;
+        });
+        Kokkos::fence();
+        Kokkos::deep_copy(coarse_g.m, Kokkos::subview(coarse_g.neighborhood, coarse_g.n));  // copy final number of edges m
+        Kokkos::fence();
+
+        t_build_offsets.stop();
+
+        ScopedTimer t_allocate_edges{"coarsening", "from_Graph_Mapping", "allocate_edges"};
+
+        t_allocate_edges.stop();
+
+
+
+
+        return coarse_g;
     }
 }
 
