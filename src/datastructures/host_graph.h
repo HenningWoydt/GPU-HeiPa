@@ -54,19 +54,19 @@ namespace GPU_HeiPa {
             exit(EXIT_FAILURE);
         }
 
-        std::ifstream file(file_path);
-        if (!file.is_open()) {
-            std::cerr << "Could not open file " << file_path << "!" << std::endl;
-            exit(EXIT_FAILURE);
-        }
+        // Open in binary; give a large buffer (e.g., 32 MB).
+        std::ifstream file(file_path, std::ios::binary);
+        static std::vector<char> big_buf(32u << 20); // 32 MB
+        file.rdbuf()->pubsetbuf(big_buf.data(), (long) big_buf.size());
 
-        std::string line(64, ' ');
+        std::string line;
+        line.reserve(1u << 20); // 1 MB per line buffer to reduce reallocs
         bool has_v_weights = false;
         bool has_e_weights = false;
 
         // read in header
         while (std::getline(file, line)) {
-            if (line[0] == '%') { continue; }
+            if (line.empty() || line[0] == '%') { continue; }
 
             // read in header
             std::vector<std::string> header = split_ws(line);
@@ -102,7 +102,7 @@ namespace GPU_HeiPa {
         while (std::getline(file, line)) {
             if (line[0] == '%') { continue; }
             // convert the lines into ints
-            str_to_ints(line, ints);
+            size_t size = str_to_ints(line, ints);
 
             size_t i = 0;
 
@@ -112,7 +112,7 @@ namespace GPU_HeiPa {
             g.weights(u) = w;
             g.g_weight += w;
 
-            while (i < ints.size()) {
+            while (i < size) {
                 vertex_t v = ints[i++] - 1;
 
                 // check if edge weights

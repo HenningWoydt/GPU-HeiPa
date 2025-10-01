@@ -150,10 +150,8 @@ namespace GPU_HeiPa {
         ints.resize(idx);
     }
 
-    inline void str_to_ints(const std::string &str,
-                            std::vector<vertex_t> &ints) {
-        ints.resize(str.size());
-
+    inline size_t str_to_ints(const std::string &str,
+                            std::vector<vertex_t> &ints) noexcept {
         size_t idx = 0;
         vertex_t curr_number = 0;
 
@@ -163,13 +161,15 @@ namespace GPU_HeiPa {
                 idx += curr_number != 0;
                 curr_number = 0;
             } else {
-                curr_number = curr_number * 10 + (vertex_t) (c - '0');
+                // curr_number = curr_number * 10 + (vertex_t) (c - '0');
+                curr_number = (curr_number << 3) + (curr_number << 1) + (vertex_t) (c - '0');
             }
         }
 
         ints[idx] = curr_number;
         idx += curr_number != 0;
-        ints.resize(idx);
+
+        return idx;
     }
 
     inline auto get_time_point() {
