@@ -29,19 +29,21 @@
 
 #include <vector>
 
+#include "graph.h"
 #include "host_graph.h"
 #include "../utility/definitions.h"
 #include "../utility/configuration.h"
+#include "../utility/profiler.h"
 
 namespace GPU_HeiPa {
-
     class Solver {
-        public:
+    public:
         Configuration config;
         weight_t lmax = 0;
 
-        HostGraph host_graph;
+        HostGraph host_g;
 
+        std::vector<Graph> graphs;
 
         explicit Solver(Configuration t_config) : config(std::move(t_config)) {
         }
@@ -49,16 +51,26 @@ namespace GPU_HeiPa {
         std::vector<partition_t> solve() {
             load_graph();
 
+            std::string config_JSON = config.to_JSON();
+            std::string profile_JSON = Profiler::instance().to_JSON();
+
+            // Combine manually into a single JSON string
+            std::string combined_JSON = "{\n";
+            combined_JSON += "  \"config\": " + config_JSON + ",\n";
+            combined_JSON += "  \"profile\": " + profile_JSON + "\n";
+            combined_JSON += "}";
+
+            std::cout << combined_JSON << std::endl;
+
             return {};
         }
 
     private:
         void load_graph() {
-            host_graph = load_graph_from_file(config.graph_in);
+            host_g = from_file(config.graph_in);
+            graphs.emplace_back(from_HostGraph(host_g));
         }
-
     };
-
 }
 
 #endif //GPU_HEIPA_SOLVER_H

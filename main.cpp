@@ -34,7 +34,11 @@
 using namespace GPU_HeiPa;
 
 int main(int argc, char *argv[]) {
+    std::ios::sync_with_stdio(false);
+    std::cout.tie(nullptr);
+
     Kokkos::ScopeGuard guard(argc, argv);
+    Kokkos::fence();
 
     if (argc == 1) {
         // Configuration config;

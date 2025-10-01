@@ -31,6 +31,7 @@
 
 #include "../utility/definitions.h"
 #include "../utility/util.h"
+#include "../utility/profiler.h"
 
 namespace GPU_HeiPa {
     struct HostGraph {
@@ -44,7 +45,8 @@ namespace GPU_HeiPa {
         HostWeight edges_w;
     };
 
-    inline HostGraph load_graph_from_file(const std::string &file_path) {
+    inline HostGraph from_file(const std::string &file_path) {
+        ScopedTimer t_read_header{"io", "from_file", "read_header"};
         HostGraph g;
 
         if (!file_exists(file_path)) {
@@ -73,11 +75,11 @@ namespace GPU_HeiPa {
 
             // allocate space
             g.g_weight = 0;
-            g.weights = HostWeight("weights", g.n);
-            g.neighborhood = HostVertex("neighborhood", g.n + 1);
+            g.weights = HostWeight(Kokkos::view_alloc(Kokkos::WithoutInitializing, "weights"), g.n);
+            g.neighborhood = HostVertex(Kokkos::view_alloc(Kokkos::WithoutInitializing, "neighborhood"), g.n + 1);
             g.neighborhood(0) = 0;
-            g.edges_v = HostVertex("edges_v", g.m);
-            g.edges_w = HostWeight("edges_w", g.m);
+            g.edges_v = HostVertex(Kokkos::view_alloc(Kokkos::WithoutInitializing, "edges_v"), g.m);
+            g.edges_w = HostWeight(Kokkos::view_alloc(Kokkos::WithoutInitializing, "edges_w"), g.m);
 
             // read in header
             std::string fmt = "000";
@@ -89,10 +91,12 @@ namespace GPU_HeiPa {
 
             break;
         }
+        t_read_header.stop();
 
+        ScopedTimer t_read_edges{"io", "from_file", "read_edges"};
         // read in edges
         vertex_t u = 0;
-        std::vector<vertex_t> ints;
+        std::vector<vertex_t> ints(g.n);
         vertex_t curr_m = 0;
 
         while (std::getline(file, line)) {
@@ -127,6 +131,7 @@ namespace GPU_HeiPa {
             std::cerr << "Number of expected edges " << g.m << " not equal to number edges " << curr_m << " found!" << std::endl;
             exit(EXIT_FAILURE);
         }
+        t_read_edges.stop();
 
         return g;
     }

@@ -161,7 +161,16 @@ fi
 echo "Using C++ compiler: ${CXX}"
 
 # ---- backend-specific flags ----
-KOKKOS_COMMON="-DCMAKE_INSTALL_PREFIX=${ROOT}/extern/local/kokkos -DKokkos_ENABLE_SERIAL=ON -DKokkos_ENABLE_TESTS=OFF"
+# Common
+KOKKOS_COMMON="-DCMAKE_INSTALL_PREFIX=${ROOT}/extern/local/kokkos \
+               -DKokkos_ENABLE_SERIAL=ON \
+               -DKokkos_ENABLE_TESTS=OFF \
+               -DCMAKE_BUILD_TYPE=Release \
+               -DKokkos_ENABLE_DEBUG=OFF \
+               -DKokkos_ENABLE_DEBUG_BOUNDS_CHECK=OFF \
+               -DKokkos_ENABLE_PROFILING=OFF \
+               -DKokkos_ENABLE_TUNING=OFF"
+
 if [ "$USE_CUDA" = "ON" ]; then
   # Kokkos w/ CUDA
   KOKKOS_BACKEND="-DKokkos_ENABLE_CUDA=ON -DKokkos_ENABLE_OPENMP=OFF -DKokkos_ENABLE_CUDA_LAMBDA=ON"
@@ -172,6 +181,14 @@ else
   KOKKOS_ARCH="-DKokkos_ARCH_NATIVE=ON"
 fi
 
+# Optional but often helpful:
+# - LTO/IPO (if your toolchain supports it)
+EXTRA_FLAGS="-DCMAKE_INTERPROCEDURAL_OPTIMIZATION=ON"
+
+# Strong optimization defaults for Release (keep warnings mute flag if you want)
+CXX_RELEASE_FLAGS="-O3 -DNDEBUG -march=native -mtune=native -fno-math-errno -fomit-frame-pointer"
+# If you accept non-IEEE behavior, add (optional): -ffast-math
+
 # --- build kokkos ---
 echo "Building Kokkos 4.7.00..."
 if (
@@ -181,9 +198,11 @@ if (
     ${KOKKOS_COMMON} \
     ${KOKKOS_BACKEND} \
     ${KOKKOS_ARCH} \
+    ${EXTRA_FLAGS} \
     -DCMAKE_CXX_STANDARD=17 \
     -DCMAKE_CXX_EXTENSIONS=OFF \
     -DKokkosKernels_ENABLE_TESTS=OFF \
+    -DCMAKE_CXX_FLAGS_RELEASE="${CXX_RELEASE_FLAGS}" \
     -DCMAKE_CXX_FLAGS="-w" \
     ${ARCH_FLAG:+-D${ARCH_FLAG}} \
     > /dev/null 2>&1 \
@@ -195,20 +214,24 @@ else
   exit 1
 fi
 
-# --- build kokkos-kernels ---
-echo "Building Kokkos-Kernels 4.7.00... (may take some time)"
+echo "Building Kokkos-Kernels 4.7.00..."
 if (
   cd "${ROOT}/extern/kokkos-kernels-4.7.00" \
   && mkdir -p build && cd build \
   && cmake .. \
     -DCMAKE_INSTALL_PREFIX="${ROOT}/extern/local/kokkos-kernels" \
     -DCMAKE_PREFIX_PATH="${ROOT}/extern/local/kokkos" \
+    -DCMAKE_BUILD_TYPE=Release \
     -DCMAKE_CXX_STANDARD=17 \
     -DCMAKE_CXX_EXTENSIONS=OFF \
     -DKokkosKernels_ENABLE_TESTS=OFF \
     -DKokkosKernels_ENABLE_EXAMPLES=OFF \
     -DKokkosKernels_ENABLE_PERFTESTS=OFF \
+    -DCMAKE_CXX_FLAGS_RELEASE="${CXX_RELEASE_FLAGS}" \
     -DCMAKE_CXX_FLAGS="-w" \
+    ${KOKKOS_BACKEND} \
+    ${KOKKOS_ARCH} \
+    ${EXTRA_FLAGS} \
     > /dev/null 2>&1 \
   && make install -j "$JOBS" > /dev/null 2>&1
 ); then
