@@ -66,7 +66,7 @@ namespace GPU_HeiPa {
 
         // read in header
         while (std::getline(file, line)) {
-            if (line.empty() || line[0] == '%') { continue; }
+            if (line[0] == '%') { continue; }
 
             // read in header
             std::vector<std::string> header = split_ws(line);
