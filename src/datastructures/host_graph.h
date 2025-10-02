@@ -93,8 +93,8 @@ namespace GPU_HeiPa {
         }
         t_read_header.stop();
 
-        ScopedTimer t_read_edges{"io", "from_file", "read_edges"};
         // read in edges
+        ScopedTimer t_read_edges{"io", "from_file", "read_edges"};
         vertex_t u = 0;
         std::vector<vertex_t> ints(g.n);
         vertex_t curr_m = 0;
@@ -126,6 +126,39 @@ namespace GPU_HeiPa {
 
             u += 1;
         }
+
+        /*
+        while (std::getline(file, line)) {
+            if (line[0] == '%') { continue; }
+
+            char *p = line.data();
+            char *end = p + line.size();
+
+            // vertex weight (optional)
+            weight_t w = 1;
+            if (has_v_weights) {
+                read_weight(p, end, w);
+            }
+            g.weights(u) = w;
+            g.g_weight += w;
+
+            // neighbors (and optional edge weights)
+            vertex_t v;
+            while (read_vertex(p, end, v)) {
+                w = 1;
+                if (has_e_weights) {
+                    read_weight(p, end, w);
+                }
+
+                g.edges_v(curr_m) = v - 1;
+                g.edges_w(curr_m) = w;
+                ++curr_m;
+            }
+
+            g.neighborhood(u + 1) = curr_m;
+            ++u;
+        }
+        */
 
         if (curr_m != g.m) {
             std::cerr << "Number of expected edges " << g.m << " not equal to number edges " << curr_m << " found!" << std::endl;

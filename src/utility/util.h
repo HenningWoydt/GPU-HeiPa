@@ -172,6 +172,34 @@ namespace GPU_HeiPa {
         return idx;
     }
 
+    inline bool read_vertex(char *&p, const char *end, vertex_t &v) noexcept {
+        // skip non-digits
+        while (p < end && *p == ' ') { ++p; }
+        if (p >= end) return false; // no number found
+
+        // read digits
+        v = 0;
+        while (p < end && *p != ' ') {
+            v = (v << 3) + (v << 1) + (vertex_t) (*p - '0');
+            ++p;
+        }
+        return true; // number parsed, p now at first non-digit (possibly end)
+    }
+
+    inline bool read_weight(char *&p, const char *end, weight_t &w) noexcept {
+        // skip non-digits
+        while (p < end && *p == ' ') { ++p; }
+        if (p >= end) return false; // no number found
+
+        // read digits
+        w = 0;
+        while (p < end && *p != ' ') {
+            w = (w << 3) + (w << 1) + (weight_t) (*p - '0');
+            ++p;
+        }
+        return true; // number parsed, p now at first non-digit (possibly end)
+    }
+
     inline auto get_time_point() {
         return std::chrono::high_resolution_clock::now();
     }

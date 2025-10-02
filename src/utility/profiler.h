@@ -150,7 +150,6 @@ namespace GPU_HeiPa {
             std::fprintf(out, "=================================================\n");
         }
 
-        // --------- JSON export (nested) ----------
         // --------- JSON export (nested, pretty-printed) ----------
         std::string to_JSON() const {
             auto esc = [](const std::string &s) {

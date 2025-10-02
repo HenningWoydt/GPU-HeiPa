@@ -91,8 +91,6 @@ GCC=$(which gcc || true)
 echo "Root          : ${ROOT}"
 echo "Using C compiler: ${GCC:-<system default>}"
 
-# update all submodules
-git submodule update --init --recursive
 
 # make local folder for all includes
 mkdir -p extern
