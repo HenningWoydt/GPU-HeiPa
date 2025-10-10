@@ -29,7 +29,63 @@
 
 #include <Kokkos_Core_fwd.hpp>
 
-namespace Hei_Pa {
+#include "definitions.h"
+
+namespace GPU_HeiPa {
+    template<typename T>
+    KOKKOS_INLINE_FUNCTION
+    constexpr T min_sentinel() {
+        if constexpr (std::is_same<T, f32>::value) {
+            return -1e30f;
+        } else if constexpr (std::is_same<T, f64>::value) {
+            return -1e300;
+        } else if constexpr (std::is_same<T, s8>::value) {
+            return -128;
+        } else if constexpr (std::is_same<T, s16>::value) {
+            return -32768;
+        } else if constexpr (std::is_same<T, s32>::value) {
+            return -2147483647 - 1;
+        } else if constexpr (std::is_same<T, s64>::value) {
+            return static_cast<s64>(-9223372036854775807LL - 1);
+        } else if constexpr (std::is_same<T, u8>::value ||
+                             std::is_same<T, u16>::value ||
+                             std::is_same<T, u32>::value ||
+                             std::is_same<T, u64>::value) {
+            return 0; // No negative sentinel for unsigned
+        } else {
+            return static_cast<T>(-1); // fallback for unknown types
+        }
+    }
+
+    template<typename T>
+    KOKKOS_INLINE_FUNCTION
+    constexpr T max_sentinel() {
+        if constexpr (std::is_same<T, f32>::value) {
+            return 1e30f;
+        } else if constexpr (std::is_same<T, f64>::value) {
+            return 1e300;
+        } else if constexpr (std::is_same<T, s8>::value) {
+            return 127;
+        } else if constexpr (std::is_same<T, s16>::value) {
+            return 32767;
+        } else if constexpr (std::is_same<T, s32>::value) {
+            return 2147483647;
+        } else if constexpr (std::is_same<T, s64>::value) {
+            return static_cast<s64>(9223372036854775807LL);
+        } else if constexpr (
+            std::is_same<T, u8>::value ||
+            std::is_same<T, u16>::value ||
+            std::is_same<T, u32>::value ||
+            std::is_same<T, u64>::value
+        ) {
+            // all bits 1 for unsigned gives the maximum
+            return static_cast<T>(-1);
+        } else {
+            // fallback for other types
+            return std::numeric_limits<T>::max();
+        }
+    }
+
     std::string get_kokkos_execution_space_as_str() {
         using ExecSpace = Kokkos::DefaultExecutionSpace;
 #if defined(KOKKOS_ENABLE_CUDA)

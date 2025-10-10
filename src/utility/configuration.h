@@ -122,7 +122,7 @@ namespace GPU_HeiPa {
                 seed = std::random_device{}();
             }
 
-            device_space = Hei_Pa::get_kokkos_execution_space_as_str();
+            device_space = get_kokkos_execution_space_as_str();
         }
 
         /**

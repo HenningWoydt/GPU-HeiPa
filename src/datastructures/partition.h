@@ -28,6 +28,7 @@
 #define GPU_HEIPA_PARTITION_H
 
 #include "mapping.h"
+#include "graph.h"
 #include "../utility/definitions.h"
 #include "../utility/util.h"
 #include "../utility/profiler.h"
@@ -45,7 +46,7 @@ namespace GPU_HeiPa {
     inline Partition initial_partition(const vertex_t t_n,
                                        const partition_t t_k,
                                        const weight_t t_lmax) {
-        ScopedTimer t{"io", "initial_partition", "initialize"};
+        ScopedTimer t{"io", "partition", "initialize"};
         Partition partition;
 
         partition.n = t_n;
@@ -72,6 +73,63 @@ namespace GPU_HeiPa {
         Kokkos::fence();
 
         std::swap(partition.map, temp_device_partition);
+    }
+
+    inline void uncontract(Partition &partition,
+                           const Mapping &mapping) {
+        ScopedTimer _t("uncoarsening", "partition", "uncontract");
+
+        // reset activity
+        DevicePartition temp_device_partition = DevicePartition("device_partition", partition.n);
+        Kokkos::parallel_for("initialize", mapping.old_n, KOKKOS_LAMBDA(const vertex_t u) {
+            vertex_t new_v = mapping.mapping(u);
+            temp_device_partition(u) = partition.map(new_v);
+        });
+        Kokkos::fence();
+
+        std::swap(partition.map, temp_device_partition);
+    }
+
+    inline void recalculate_weights(Partition &partition,
+                                    const Graph &g) {
+        ScopedTimer _t("initial_partitioning", "Partition", "recalculate_weights");
+
+        // reset weights
+        Kokkos::deep_copy(partition.bweights, 0);
+        Kokkos::fence();
+
+        // set weights
+        Kokkos::parallel_for("set_block_weights", g.n, KOKKOS_LAMBDA(const vertex_t u) {
+            partition_t u_id = partition.map(u);
+            Kokkos::atomic_add(&partition.bweights(u_id), g.weights(u));
+        });
+        Kokkos::fence();
+    }
+
+    struct PartitionHost {
+        vertex_t n = 0;
+        partition_t k = 0;
+        weight_t lmax = 0;
+
+        HostPartition map;
+        HostWeight bweights;
+    };
+
+    inline PartitionHost to_host_p_manager(const Partition &partition) {
+        PartitionHost host_p_manager;
+
+        host_p_manager.n = partition.n;
+        host_p_manager.k = partition.k;
+        host_p_manager.lmax = partition.lmax;
+
+        host_p_manager.map = HostPartition("partition", partition.n);
+        host_p_manager.bweights = HostWeight("b_weights", partition.k);
+        Kokkos::deep_copy(host_p_manager.map, partition.map);
+        Kokkos::deep_copy(host_p_manager.bweights, partition.bweights);
+        Kokkos::fence();
+
+
+        return host_p_manager;
     }
 }
 

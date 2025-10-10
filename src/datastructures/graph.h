@@ -28,7 +28,7 @@
 #define GPU_HEIPA_GRAPH_H
 
 #include "host_graph.h"
-#include "partition.h"
+#include "mapping.h"
 #include "../utility/definitions.h"
 #include "../utility/util.h"
 #include "../utility/profiler.h"
@@ -86,7 +86,7 @@ namespace GPU_HeiPa {
     inline Graph from_Graph_Mapping(const Graph &old_g,
                                     const Mapping &mapping) {
         // initialize vars and allocate memory
-        ScopedTimer t_initialize{"coarsening", "from_Graph_Mapping", "initialize"};
+        ScopedTimer t_initialize{"contraction", "from_Graph_Mapping", "initialize"};
         Graph coarse_g;
 
         coarse_g.n = mapping.coarse_n;
@@ -104,7 +104,7 @@ namespace GPU_HeiPa {
         t_initialize.stop();
 
         // set memory to 0
-        ScopedTimer t_initialize_set_0{"coarsening", "from_Graph_Mapping", "initialize_set_0"};
+        ScopedTimer t_initialize_set_0{"contraction", "from_Graph_Mapping", "initialize_set_0"};
         Kokkos::deep_copy(coarse_g.weights, 0);
         Kokkos::deep_copy(degrees, 0);
         Kokkos::deep_copy(max_degrees, 0);
@@ -114,7 +114,7 @@ namespace GPU_HeiPa {
         t_initialize_set_0.stop();
 
         // determine weight of new vertices and maximum degree
-        ScopedTimer t_max_degrees{"coarsening", "from_Graph_Mapping", "max_degrees"};
+        ScopedTimer t_max_degrees{"contraction", "from_Graph_Mapping", "max_degrees"};
         Kokkos::parallel_for("max_degrees", old_g.n, KOKKOS_LAMBDA(const vertex_t u) {
             vertex_t deg = old_g.neighborhood(u + 1) - old_g.neighborhood(u);
             weight_t u_w = old_g.weights(u);
@@ -127,15 +127,16 @@ namespace GPU_HeiPa {
         t_max_degrees.stop();
 
         // prefix sum over all degrees
-        ScopedTimer t_max_degrees_prefix_sum{"coarsening", "from_Graph_Mapping", "max_degrees_prefix_sum"};
+        ScopedTimer t_max_degrees_prefix_sum{"contraction", "from_Graph_Mapping", "max_degrees_prefix_sum"};
         Kokkos::parallel_scan("prefix_sum_offsets", coarse_g.n + 1, KOKKOS_LAMBDA(const u32 i, u32 &running, const bool final) {
             u32 cnt = i < coarse_g.n ? max_degrees(i) : 0;
             if (final) hash_offsets(i) = running;
             running += cnt;
         });
+        Kokkos::fence();
         t_max_degrees_prefix_sum.stop();
 
-        ScopedTimer t_hash_edges{"coarsening", "from_Graph_Mapping", "hash_edges"};
+        ScopedTimer t_hash_edges{"contraction", "from_Graph_Mapping", "hash_edges"};
         Kokkos::parallel_for("hash_edges", old_g.m, KOKKOS_LAMBDA(const u32 i) {
             vertex_t u = old_g.edges_u(i);
             vertex_t v = old_g.edges_v(i);
@@ -174,26 +175,79 @@ namespace GPU_HeiPa {
         Kokkos::fence();
         t_hash_edges.stop();
 
-        ScopedTimer t_build_offsets{"coarsening", "from_Graph_Mapping", "build_offsets"};
+        ScopedTimer t_build_offsets{"contraction", "from_Graph_Mapping", "build_offsets"};
         Kokkos::parallel_scan("build_offsets", coarse_g.n + 1, KOKKOS_LAMBDA(const u32 i, u32 &running, const bool final) {
             const u32 cnt = i < coarse_g.n ? degrees(i) : 0;
             if (final) coarse_g.neighborhood(i) = running;
             running += cnt;
         });
         Kokkos::fence();
-        Kokkos::deep_copy(coarse_g.m, Kokkos::subview(coarse_g.neighborhood, coarse_g.n));  // copy final number of edges m
+        Kokkos::deep_copy(coarse_g.m, Kokkos::subview(coarse_g.neighborhood, coarse_g.n)); // copy final number of edges m
         Kokkos::fence();
 
         t_build_offsets.stop();
+        ScopedTimer t_allocate_edges{"contraction", "from_Graph_Mapping", "allocate_edges"};
 
-        ScopedTimer t_allocate_edges{"coarsening", "from_Graph_Mapping", "allocate_edges"};
+        coarse_g.edges_u = DeviceVertex(Kokkos::view_alloc(Kokkos::WithoutInitializing, "edges_u"), coarse_g.m);
+        coarse_g.edges_v = DeviceVertex(Kokkos::view_alloc(Kokkos::WithoutInitializing, "edges_v"), coarse_g.m);
+        coarse_g.edges_w = DeviceWeight(Kokkos::view_alloc(Kokkos::WithoutInitializing, "edges_w"), coarse_g.m);
 
         t_allocate_edges.stop();
+        ScopedTimer t_fill_coarse_graph{"contraction", "from_Graph_Mapping", "fill_coarse_graph"};
 
+        Kokkos::parallel_for("materialize_edges", coarse_g.n, KOKKOS_LAMBDA(const vertex_t u_new) {
+            u32 out = coarse_g.neighborhood(u_new);
+            u32 end = coarse_g.neighborhood(u_new + 1);
 
+            u32 off = hash_offsets(u_new);
+            u32 size = hash_offsets(u_new + 1) - off;
 
+            for (u32 idx = 0; idx < size && out < end; ++idx) {
+                u32 pos = off + idx;
+                vertex_t v = hash_keys(pos);
+                if (v != coarse_g.n) {
+                    coarse_g.edges_v(out) = v;
+                    coarse_g.edges_w(out) = hash_vals(pos);
+                    ++out;
+                }
+            }
+        });
+        Kokkos::fence();
+
+        t_fill_coarse_graph.stop();
+        ScopedTimer t_fill_coarse_u{"contraction", "from_Graph_Mapping", "fill_coarse_u"};
+
+        Kokkos::parallel_for("fill_edges_u", coarse_g.n, KOKKOS_LAMBDA(const vertex_t u) {
+            u32 begin = coarse_g.neighborhood(u);
+            u32 end = coarse_g.neighborhood(u + 1);
+            for (u32 i = begin; i < end; ++i) {
+                coarse_g.edges_u(i) = u;
+            }
+        });
+        Kokkos::fence();
 
         return coarse_g;
+    }
+
+    inline HostGraph to_host_graph(const Graph &device_g) {
+        HostGraph host_g;
+
+        host_g.n = device_g.n;
+        host_g.m = device_g.m;
+        host_g.g_weight = device_g.g_weight;
+
+        host_g.weights = HostWeight(Kokkos::view_alloc(Kokkos::WithoutInitializing, "weights_host"), device_g.n);
+        host_g.neighborhood = HostVertex(Kokkos::view_alloc(Kokkos::WithoutInitializing, "neighborhood_host"), device_g.n + 1);
+        host_g.edges_v = HostVertex(Kokkos::view_alloc(Kokkos::WithoutInitializing, "edges_v_host"), device_g.m);
+        host_g.edges_w = HostWeight(Kokkos::view_alloc(Kokkos::WithoutInitializing, "edges_w_host"), device_g.m);
+
+        Kokkos::deep_copy(host_g.weights, device_g.weights);
+        Kokkos::deep_copy(host_g.neighborhood, device_g.neighborhood);
+        Kokkos::deep_copy(host_g.edges_v, device_g.edges_v);
+        Kokkos::deep_copy(host_g.edges_w, device_g.edges_w);
+        Kokkos::fence();
+
+        return host_g;
     }
 }
 
