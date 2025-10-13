@@ -88,13 +88,16 @@ namespace GPU_HeiPa {
         void internal_solve() {
             initialize();
 
-            const partition_t c = 128;
+            const partition_t c = 8;
 
             u32 level = 0;
             while (graphs.back().n > c * k) {
                 matching();
 
-                if (mappings.back().old_n == mappings.back().coarse_n) { mappings.pop_back(); break; }
+                if (mappings.back().old_n == mappings.back().coarse_n) {
+                    mappings.pop_back();
+                    break;
+                }
 
                 coarsening();
 
@@ -107,6 +110,8 @@ namespace GPU_HeiPa {
 
             while (!mappings.empty()) {
                 level -= 1;
+
+                std::cout << "level " << level << " " << graphs.back().n << " " << graphs.back().m << " " << max_weight(partition) << " " << lmax << std::endl;
 
                 uncoarsening();
                 refinement();

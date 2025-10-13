@@ -106,6 +106,21 @@ namespace GPU_HeiPa {
         Kokkos::fence();
     }
 
+    inline weight_t max_weight(Partition &partition) {
+        weight_t max_val = 0;
+
+        Kokkos::parallel_reduce("compute_max_weight", partition.k, KOKKOS_LAMBDA(const partition_t i, weight_t &local_max) {
+                                    if (partition.bweights(i) > local_max) {
+                                        local_max = partition.bweights(i);
+                                    }
+                                },
+                                Kokkos::Max<weight_t>(max_val)
+        );
+        Kokkos::fence();
+
+        return max_val;
+    }
+
     struct PartitionHost {
         vertex_t n = 0;
         partition_t k = 0;
