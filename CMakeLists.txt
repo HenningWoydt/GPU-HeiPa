@@ -17,15 +17,15 @@ set(CMAKE_EXPORT_COMPILE_COMMANDS ON)
 
 # --- KaHIP library ---
 set(KaHIP_ROOT "${CMAKE_CURRENT_SOURCE_DIR}/extern/local/kahip")
-find_library(KAHIP_LIBRARY 
-    NAMES kahip libkahip
-    PATHS ${KaHIP_ROOT}/lib
-    NO_DEFAULT_PATH
+find_library(KAHIP_LIBRARY
+        NAMES kahip libkahip
+        PATHS ${KaHIP_ROOT}/lib
+        NO_DEFAULT_PATH
 )
-find_path(KAHIP_INCLUDE_DIR 
-    NAMES kaHIP_interface.h
-    PATHS ${KaHIP_ROOT}/include
-    NO_DEFAULT_PATH
+find_path(KAHIP_INCLUDE_DIR
+        NAMES kaHIP_interface.h
+        PATHS ${KaHIP_ROOT}/include
+        NO_DEFAULT_PATH
 )
 
 message(STATUS "Found KaHIP: ${KAHIP_LIBRARY}")
@@ -43,7 +43,7 @@ set(CMAKE_CXX_EXTENSIONS OFF)
 set(CMAKE_POSITION_INDEPENDENT_CODE ON)
 set(CMAKE_EXPORT_COMPILE_COMMANDS ON)
 set(CMAKE_CXX_FLAGS_RELEASE "-O3 -DNDEBUG -march=native -pipe -finline-functions -ftree-vectorize -funroll-loops -falign-loops -fno-rtti -Wall -Wextra -pedantic -Wno-unused-variable -Wno-unused-parameter -Wconversion -Wsign-conversion -Wfloat-conversion")
-set(CMAKE_CXX_FLAGS_RELWITHDEBINFO  "-O3 -march=native -DNDEBUG -pipe -fno-inline-functions -ftree-vectorize -funroll-loops -falign-loops -fno-rtti -Wall -Wextra -pedantic -Wno-unused-variable -Wno-unused-parameter -Wconversion -Wsign-conversion -Wfloat-conversion")
+set(CMAKE_CXX_FLAGS_RELWITHDEBINFO "-O3 -march=native -DNDEBUG -pipe -fno-inline-functions -ftree-vectorize -funroll-loops -falign-loops -fno-rtti -Wall -Wextra -pedantic -Wno-unused-variable -Wno-unused-parameter -Wconversion -Wsign-conversion -Wfloat-conversion")
 set(CMAKE_CXX_FLAGS_DEBUG "-g -march=native -pipe -Wall -Wextra -Wno-unused-variable -Wno-unused-parameter -Wconversion -Wsign-conversion -Wfloat-conversion -pedantic")
 
 file(GLOB_RECURSE SOURCES CONFIGURE_DEPENDS "src/*.cpp")

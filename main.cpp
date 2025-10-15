@@ -34,27 +34,30 @@
 using namespace GPU_HeiPa;
 
 int main(int argc, char *argv[]) {
+    auto sp = get_time_point();
     std::ios::sync_with_stdio(false);
     std::cout.tie(nullptr);
 
-    Kokkos::ScopeGuard guard(argc, argv);
-    Kokkos::fence();
+    ScopedTimer _t_guard("io", "main", "ScopeGuard");
+    Kokkos::initialize();
+    _t_guard.stop();
 
     if (argc == 1) {
         // Configuration config;
         // config.print_help_message();
         // return 0;
         {
+            ScopedTimer _t_parse("io", "main", "parse_args");
             std::vector<std::pair<std::string, std::string> > input = {
-                {"--graph", "../../graph_collection/mapping/rgg24.graph"},
-                {"--mapping", "../data/out/partition/rgg24.txt"},
-                {"--statistics", "../data/out/statistics/rgg24.JSON"},
+                // {"--graph", "../../graph_collection/mapping/rgg24.graph"},
+                // {"--mapping", "../data/out/partition/rgg24.txt"},
+                // {"--statistics", "../data/out/statistics/rgg24.JSON"},
                 // {"--graph", "../../graph_collection/mapping/eur.graph"},
                 // {"--mapping", "../data/out/partition/eur.txt"},
                 // {"--statistics", "../data/out/statistics/eur.JSON"},
-                // {"--graph", "../../graph_collection/mapping/cfd2.mtx.graph"},
-                // {"--mapping", "../data/out/partition/cfd2.mtx.txt"},
-                // {"--statistics", "../data/out/statistics/cfd2.mtx.JSON"},
+                {"--graph", "../../graph_collection/mapping/cfd2.mtx.graph"},
+                {"--mapping", "../data/out/partition/cfd2.mtx.txt"},
+                {"--statistics", "../data/out/statistics/cfd2.mtx.JSON"},
                 {"--k", "32"},
                 {"--imbalance", "0.03"},
                 {"--config", "IM"},
@@ -84,6 +87,7 @@ int main(int argc, char *argv[]) {
             }
 
             Configuration config(argc_temp, argv_temp);
+            _t_parse.stop();
             Solver(config).solve();
 
             for (int i = 0; i < argc_temp; ++i) { delete[] argv_temp[i]; }
@@ -93,6 +97,10 @@ int main(int argc, char *argv[]) {
         Configuration config(argc, argv);
         Solver(config).solve();
     }
+    Kokkos::finalize();
+
+    auto ep = get_time_point();
+    std::cout << "Total Time: " << get_seconds(sp, ep) << " seconds." << std::endl;
 
     return 0;
 }

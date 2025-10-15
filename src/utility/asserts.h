@@ -149,7 +149,7 @@ namespace GPU_HeiPa {
         HostGraph host_g = to_host_graph(device_g);
         HostVertex host_edges_u = HostVertex("edges_u", host_g.m);
         Kokkos::deep_copy(host_edges_u, device_g.edges_u);
-        PartitionHost host_p_manager = to_host_p_manager(partition);
+        PartitionHost host_p_manager = to_host_partition(partition);
 
         assert_no_loops(host_g);
         assert_no_double_edges(host_g);

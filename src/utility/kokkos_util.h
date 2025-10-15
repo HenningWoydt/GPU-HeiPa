@@ -108,6 +108,33 @@ namespace GPU_HeiPa {
         if (std::is_same<ExecSpace, Kokkos::Serial>::value) { return "Serial"; }
 #endif
     }
+
+    KOKKOS_INLINE_FUNCTION
+    u32 xs32(u32 x) {
+        x ^= x << 13;
+        x ^= x >> 17;
+        x ^= x << 5;
+        return x;
+    }
+
+    /**
+     * Uniformly pick a random element from a rank-1 Kokkos View.
+     * Assumes `size > 0`. Returns the element by value.
+     *
+     * @tparam View1D A rank-1 Kokkos::View (or subview) with operator()(u32)
+     * @param v       The view
+     * @param size    Number of items to sample from (usually v.extent(0))
+     * @param seed    Run seed (same across threads if you want determinism)
+     */
+    template<class View1D>
+    KOKKOS_INLINE_FUNCTION
+    auto draw_random(const View1D &v, u64 size, u32 seed) {
+        // simple xorshift-based PRN; fine for selection
+        const u32 r = xs32(seed ^ 0x9e3779b9u);
+        const u64 idx = r % size;
+
+        return v(idx);
+    }
 }
 
 #endif //GPU_HEIPA_KOKKOS_UTIL_H

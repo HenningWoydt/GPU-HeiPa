@@ -34,21 +34,24 @@
 #include "mapping.h"
 #include "partition.h"
 #include "../coarsening/two_hop_matching.h"
+#include "../refinement/jet_label_propagation.h"
 #include "../initial_partitioning/kaffpa_initial_partitioning.h"
 #include "../utility/definitions.h"
 #include "../utility/configuration.h"
 #include "../utility/profiler.h"
 #include "../utility/asserts.h"
+#include "../utility/edge_cut.h"
 
 namespace GPU_HeiPa {
     class Solver {
     public:
         Configuration config;
-        weight_t lmax = 0;
+        std::chrono::time_point<std::chrono::system_clock> sp;
 
         vertex_t n = 0;
         vertex_t m = 0;
         partition_t k = 0;
+        weight_t lmax = 0;
 
         HostGraph host_g;
 
@@ -57,7 +60,11 @@ namespace GPU_HeiPa {
 
         Partition partition;
 
+        weight_t initial_edge_cut = 0;
+        weight_t initial_max_block_weight = 0;
+
         explicit Solver(Configuration t_config) : config(std::move(t_config)) {
+            sp = get_time_point();
         }
 
         std::vector<partition_t> solve() {
@@ -69,17 +76,33 @@ namespace GPU_HeiPa {
 
             write_partition(host_partition, graphs.back().n, config.mapping_out);
             _t_write.stop();
+            auto ep = get_time_point();
+            f64 duration = get_seconds(sp, ep);
 
-            std::string config_JSON = config.to_JSON();
-            std::string profile_JSON = Profiler::instance().to_JSON();
+            std::cout << "Total time        : " << duration << std::endl;
+            std::cout << "#Nodes            : " << graphs.back().n << std::endl;
+            std::cout << "#Edges            : " << graphs.back().m << std::endl;
+            std::cout << "k                 : " << config.k << std::endl;
+            std::cout << "Lmax              : " << lmax << std::endl;
+            std::cout << "Init. edge-cut    : " << initial_edge_cut << std::endl;
+            std::cout << "Init. max block w : " << initial_max_block_weight << std::endl;
+            std::cout << "Final edge-cut    : " << edge_cut(graphs.back(), partition) << std::endl;
+            std::cout << "Final max block w : " << max_weight(partition) << std::endl;
 
-            // Combine manually into a single JSON string
-            std::string combined_JSON = "{\n";
-            combined_JSON += "  \"config\": " + config_JSON + ",\n";
-            combined_JSON += "  \"profile\": " + profile_JSON + "\n";
-            combined_JSON += "}";
+            size_t n_empty_partitions = 0;
+            size_t n_overloaded_partitions = 0;
+            weight_t sum_too_much = 0;
+            PartitionHost partition_host = to_host_partition(partition);
+            for (partition_t id = 0; id < config.k; ++id) {
+                n_empty_partitions += partition_host.bweights(id) == 0;
+                n_overloaded_partitions += partition_host.bweights(id) > lmax;
+                sum_too_much += std::max((weight_t) 0, partition_host.bweights(id) - lmax);
+            }
+            std::cout << "#empty partitions : " << n_empty_partitions << std::endl;
+            std::cout << "#oload partitions : " << n_overloaded_partitions << std::endl;
+            std::cout << "Sum oload weights : " << sum_too_much << std::endl;
 
-            std::cout << combined_JSON << std::endl;
+            Profiler::instance().print_table_ascii_colored(std::cout);
 
             return {};
         }
@@ -94,27 +117,29 @@ namespace GPU_HeiPa {
             while (graphs.back().n > c * k) {
                 matching();
 
-                if (mappings.back().old_n == mappings.back().coarse_n) {
+                // TODO: this should not be necessary
+                if ((f64) mappings.back().coarse_n > TwoHopMatcher().threshold * (f64) mappings.back().old_n) {
                     mappings.pop_back();
                     break;
                 }
 
                 coarsening();
 
-                std::cout << "level " << level << " " << graphs.back().n << " " << graphs.back().m << std::endl;
+                // std::cout << "level " << level << " " << graphs.back().n << " " << graphs.back().m << std::endl;
 
                 level += 1;
             }
 
+            u32 max_level = level;
             initial_partitioning();
 
             while (!mappings.empty()) {
                 level -= 1;
 
-                std::cout << "level " << level << " " << graphs.back().n << " " << graphs.back().m << " " << max_weight(partition) << " " << lmax << std::endl;
+                // std::cout << "level " << level << " " << graphs.back().n << " " << graphs.back().m << " " << max_weight(partition) << " " << lmax << std::endl;
 
                 uncoarsening();
-                refinement();
+                refinement(max_level, level);
             }
         }
 
@@ -128,7 +153,7 @@ namespace GPU_HeiPa {
 
             graphs.emplace_back(from_HostGraph(host_g));
 
-            partition = initial_partition(n, k, lmax);
+            partition = initialize_partition(n, k, lmax);
             Kokkos::deep_copy(partition.map, 0);
             Kokkos::deep_copy(partition.bweights, 0);
             Kokkos::fence();
@@ -151,13 +176,17 @@ namespace GPU_HeiPa {
         }
 
         void initial_partitioning() {
-            kaffpa_initial_partition(graphs.back(), (int) k, config.imbalance, (int) config.seed, partition);
+            kaffpa_initial_partition(graphs.back(), (int) k, config.imbalance, (u32) config.seed, partition);
             recalculate_weights(partition, graphs.back());
+
+            initial_edge_cut = edge_cut(graphs.back(), partition);
+            initial_max_block_weight = max_weight(partition);
 
             assert_state_after_partition(graphs.back(), partition, config.k);
         }
 
-        void refinement() {
+        void refinement(u32 max_level, u32 level) {
+            refine(graphs.back(), partition, k, lmax, max_level, level);
             assert_state_after_partition(graphs.back(), partition, config.k);
         }
 

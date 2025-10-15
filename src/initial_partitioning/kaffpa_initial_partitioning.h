@@ -49,17 +49,17 @@ namespace GPU_HeiPa {
 
         int n = (int) device_g.n;
         vertex_t m = device_g.m;
-        int *vwgt = (int *) malloc(n * sizeof(int));
-        int *xadj = (int *) malloc((n + 1) * sizeof(int));
+        int *vwgt = (int *) malloc((u64) n * sizeof(int));
+        int *xadj = (int *) malloc((u64) (n + 1) * sizeof(int));
         xadj[0] = 0;
         int *adjcwgt = (int *) malloc(m * sizeof(int));
         int *adjncy = (int *) malloc(m * sizeof(int));
         bool suppress_output = true;
         int mode = FAST;
         int edge_cut_temp = 0;
-        int *part_temp = (int *) malloc(n * sizeof(int));
+        int *part_temp = (int *) malloc((u64) n * sizeof(int));
         int edge_cut = std::numeric_limits<int>::max();
-        int *part = (int *) malloc(n * sizeof(int));
+        int *part = (int *) malloc((u64) n * sizeof(int));
 
         for (vertex_t old_u = 0; old_u < host_g.n; ++old_u) {
             vwgt[old_u] = (int) host_g.weights(old_u);

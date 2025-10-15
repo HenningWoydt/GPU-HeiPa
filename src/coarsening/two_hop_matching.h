@@ -305,7 +305,7 @@ namespace GPU_HeiPa {
                 vertex_t u = device_g.edges_u(i);
                 vertex_t v = device_g.edges_v(i);
 
-                // if (partition.map(u) != partition.map(v)) { return; }
+                if (partition.map(u) != partition.map(v)) { return; }
                 if (matching(u) != u || matching(v) != v) { return; }
                 if (device_g.weights(u) + device_g.weights(v) > thm.lmax) { return; }
 
@@ -380,7 +380,7 @@ namespace GPU_HeiPa {
                     vertex_t v = thm.hash_vertex_array(i).v;
                     if (v == u) { continue ; }
                     if (matching(v) != v) { continue ; }
-                    // if (p_manager.partition(u) != p_manager.partition(v)) { continue ; }
+                    if (partition.map(u) != partition.map(v)) { continue ; }
                     if (g.weights(u) + g.weights(v) > thm.lmax) { continue ; }
 
                     f32 rating = (f32) (1) / (f32) (g.weights(u) * g.weights(v));
@@ -452,7 +452,7 @@ namespace GPU_HeiPa {
                     vertex_t v = thm.hash_vertex_array(i).v;
                     if (v == u) { continue ; }
                     if (matching(v) != v) { continue ; }
-                    // if (p_manager.partition(u) != p_manager.partition(v)) { continue ; }
+                    if (partition.map(u) != partition.map(v)) { continue ; }
                     if (g.weights(u) + g.weights(v) > thm.lmax) { continue ; }
 
                     f32 rating = (f32) (1) / (f32) (g.weights(u) * g.weights(v));
@@ -516,71 +516,7 @@ namespace GPU_HeiPa {
 
                         if (u == v) { continue; }
                         if (matching(v) != v) { continue; } // ignore already matched
-                        // if (p_manager.partition(u) != p_manager.partition(v)) { continue ; }
-                        if (g.weights(u) + g.weights(v) > thm.lmax) { continue; } // resulting weight to large
-
-                        f32 rating = (f32) ((mid_e_w + v_e_w) * (mid_e_w + v_e_w)) / (f32) (g.weights(u) * g.weights(v));
-                        rating += edge_noise(u, v);
-
-                        if (rating > best_rating) {
-                            best_v = v;
-                            best_rating = rating;
-                        }
-                    }
-                }
-
-                thm.preferred_neighbor(u) = best_v;
-            });
-            Kokkos::fence();
-
-            Kokkos::parallel_for("apply_matching", g.n, KOKKOS_LAMBDA(const vertex_t u) {
-                vertex_t v = thm.preferred_neighbor(u);
-                vertex_t preferred_v = thm.preferred_neighbor(v);
-
-                if (matching(u) != u || matching(v) != v) { return; }
-
-                if (u == preferred_v && u < v) {
-                    matching(u) = v;
-                    matching(v) = u;
-                }
-            });
-            Kokkos::fence();
-        }
-    }
-
-    inline void zero_deg_matching(TwoHopMatcher &thm,
-                                  const Graph &g,
-                                  DeviceVertex &matching,
-                                  const Partition &partition) {
-        ScopedTimer _t("coarsening", "TwoHopMatcher", "zero_deg_matching");
-
-        for (u32 iteration = 0; iteration < thm.max_iterations_zero_deg; ++iteration) {
-            if ((f64) n_matched_v(matching, g.n) >= thm.threshold * (f64) g.n) { return; }
-
-            Kokkos::parallel_for("reset", g.n, KOKKOS_LAMBDA(const vertex_t u) {
-                thm.preferred_neighbor(u) = u;
-            });
-            Kokkos::fence();
-
-            Kokkos::parallel_for("pick_neighbor", g.n, KOKKOS_LAMBDA(const vertex_t u) {
-                if (matching(u) != u) { return; } // ignore already matched
-
-                vertex_t best_v = u;
-                f32 best_rating = 0;
-
-                for (u32 i = g.neighborhood(u); i < g.neighborhood(u + 1); ++i) {
-                    vertex_t mid_v = g.edges_v(i);
-                    weight_t mid_e_w = g.edges_w(i);
-                    vertex_t mid_deg = g.neighborhood(mid_v + 1) - g.neighborhood(mid_v);
-                    if (mid_deg > 10) { continue; } // avoid matchmaker with high degree
-
-                    for (u32 j = g.neighborhood(mid_v); j < g.neighborhood(mid_v + 1); ++j) {
-                        vertex_t v = g.edges_v(j);
-                        weight_t v_e_w = g.edges_w(j);
-
-                        if (u == v) { continue; }
-                        if (matching(v) != v) { continue; } // ignore already matched
-                        // if (p_manager.partition(u) != p_manager.partition(v)) { continue ; }
+                        if (partition.map(u) != partition.map(v)) { continue ; }
                         if (g.weights(u) + g.weights(v) > thm.lmax) { continue; } // resulting weight to large
 
                         f32 rating = (f32) ((mid_e_w + v_e_w) * (mid_e_w + v_e_w)) / (f32) (g.weights(u) * g.weights(v));
@@ -640,10 +576,6 @@ namespace GPU_HeiPa {
 
         if ((f64) n_matched < thm.threshold * (f64) g.n) {
             relative_matching(thm, g, matching, partition);
-        }
-
-        if ((f64) n_matched < thm.threshold * (f64) g.n) {
-            // zero_deg_matching(thm, g, matching, partition);
         }
 
         return determine_translation(matching, g.n);

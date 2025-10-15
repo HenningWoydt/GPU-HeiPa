@@ -43,6 +43,41 @@
 #endif
 
 namespace GPU_HeiPa {
+    // ===== Helpers (keep with your class or in an anon namespace) =====
+    static std::string pad_cell(const std::string &s, unsigned int w) {
+        if (w <= 0) return "";
+        if (s.size() <= w) return s + std::string(w - s.size(), ' ');
+        if (w <= 1) return s.substr(0, w);
+        return s.substr(0, w - 1) + "…";
+    }
+
+    struct ZebraTheme {
+        // Use 256-color backgrounds by default; fall back to simple if needed
+        // You can tweak these. 236/235 are subtle dark grays; 22 is a dark green.
+        const char *even_bg = "\x1b[48;5;236m";
+        const char *odd_bg = "\x1b[48;5;235m";
+        const char *header_bg = "\x1b[48;5;238m";
+        const char *rule_fg = "\x1b[38;5;240m";
+        const char *text_fg = "\x1b[38;5;252m";
+        const char *bold_on = "\x1b[1m";
+        const char *bold_off = "\x1b[22m";
+        const char *reset = "\x1b[0m";
+    };
+
+    // Simpler theme (basic 8 colors) if 256-color looks bad
+    static ZebraTheme basic_theme() {
+        return ZebraTheme{
+            /*even_bg*/ "\x1b[47m", // white bg
+            /*odd_bg*/ "\x1b[107m", // bright white bg
+            /*header_bg*/"\x1b[47m",
+            /*rule_fg*/ "\x1b[90m", // bright black (gray)
+            /*text_fg*/ "\x1b[30m", // black text
+            /*bold_on*/ "\x1b[1m",
+            /*bold_off*/ "\x1b[22m",
+            /*reset*/ "\x1b[0m"
+        };
+    }
+
     // ---------- simple stats -----------
     struct KTStat {
         double total_ms = 0.0;
@@ -82,6 +117,149 @@ namespace GPU_HeiPa {
             f.agg.add(ms);
             g.agg.add(ms);
             total_.add(ms);
+        }
+
+        // ===== Colored printer =====
+        void print_table_ascii_colored(std::ostream &os = std::cout,
+                                       int max_funcs_per_group = -1,
+                                       int max_kernels_per_func = -1,
+                                       unsigned int name_width = 48,
+                                       bool force_color = false,
+                                       bool use_basic_colors = false) const {
+#if !ENABLE_PROFILER
+            os << "Profiler disabled (ENABLE_PROFILER=0).\n";
+            return;
+#endif
+            if (total_.total_ms <= 0.0) {
+                os << "Profiler: no samples recorded.\n";
+                return;
+            }
+
+            // Color gating
+            const bool no_color_env = std::getenv("NO_COLOR") != nullptr;
+            bool color_ok = !no_color_env && (force_color || true);
+
+            ZebraTheme theme = use_basic_colors ? basic_theme() : ZebraTheme{};
+            auto apply_bg = [&](const std::string &s, bool header, bool even)-> std::string {
+                if (!color_ok) return s + '\n';
+                const char *bg = header ? theme.header_bg : (even ? theme.even_bg : theme.odd_bg);
+                // Paint the whole line with bg + foreground text color, then reset.
+                return std::string(bg) + theme.text_fg + s + theme.reset + '\n';
+            };
+            auto apply_rule = [&](const std::string &s)-> std::string {
+                if (!color_ok) return s + '\n';
+                return std::string(theme.rule_fg) + s + theme.reset + '\n';
+            };
+
+            // Clamp name column
+            if (name_width < 24) name_width = 24;
+            if (name_width > 96) name_width = 96;
+
+            auto fmt_ms = [](double x) {
+                std::ostringstream s;
+                s.setf(std::ios::fixed);
+                s << std::setprecision(3) << x;
+                return s.str();
+            };
+            auto fmt_pct = [](double x) {
+                std::ostringstream s;
+                s.setf(std::ios::fixed);
+                s << std::setprecision(1) << x;
+                return s.str();
+            };
+            auto pct_of_total = [&](double ms) { return total_.total_ms > 0.0 ? (ms * 100.0 / total_.total_ms) : 0.0; };
+
+            // Sort groups
+            std::vector<std::pair<std::string, KTGroup const *> > gs;
+            gs.reserve(groups_.size());
+            for (auto &kv: groups_) gs.emplace_back(kv.first, &kv.second);
+            std::sort(gs.begin(), gs.end(),
+                      [](auto &a, auto &b) { return a.second->agg.total_ms > b.second->agg.total_ms; });
+
+            const int W_CALL = 8, W_TOT = 12, W_AVG = 10, W_PCT = 7;
+            auto make_rule = [&]() {
+                return std::string(name_width + 3u + W_CALL + 3 + W_TOT + 3 + W_AVG + 3 + W_PCT, '-');
+            };
+
+            // Build and write lines with zebra
+            size_t row_index = 0; // for zebra striping (header counts separately)
+
+            // Header rule
+            os << apply_rule(make_rule()); {
+                std::string hdr;
+                hdr.reserve(120);
+                // Optional bold for header
+                if (color_ok) hdr += theme.bold_on;
+                hdr += pad_cell("Scope", name_width);
+                hdr += "   " + pad_cell("Calls", W_CALL);
+                hdr += "   " + pad_cell("Total ms", W_TOT);
+                hdr += "   " + pad_cell("Avg ms", W_AVG);
+                hdr += "   " + pad_cell("%Tot", W_PCT);
+                if (color_ok) hdr += theme.bold_off;
+                os << apply_bg(hdr, /*header=*/true, /*even=*/true);
+            }
+            os << apply_rule(make_rule());
+
+            auto emit_row = [&](const std::string &scope, const std::string &calls,
+                                const std::string &tot, const std::string &avg, const std::string &pct) {
+                std::string line;
+                line.reserve(128 + scope.size());
+                line += pad_cell(scope, name_width);
+                line += "   " + pad_cell(calls, W_CALL);
+                line += "   " + pad_cell(tot, W_TOT);
+                line += "   " + pad_cell(avg, W_AVG);
+                line += "   " + pad_cell(pct, W_PCT);
+                const bool even = (row_index++ % 2 == 0);
+                os << apply_bg(line, /*header=*/false, even);
+            };
+
+            // TOTAL
+            emit_row("TOTAL", "-", fmt_ms(total_.total_ms), "-", fmt_pct(100.0));
+
+            // Groups
+            for (size_t gi = 0; gi < gs.size(); ++gi) {
+                const auto &gname = gs[gi].first;
+                const auto *gptr = gs[gi].second;
+
+                // Sort functions
+                std::vector<std::pair<std::string, KTKernels const *> > fs;
+                for (auto &fk: gptr->functions) fs.emplace_back(fk.first, &fk.second);
+                std::sort(fs.begin(), fs.end(),
+                          [](auto &a, auto &b) { return a.second->agg.total_ms > b.second->agg.total_ms; });
+                if (max_funcs_per_group >= 0 && (int) fs.size() > max_funcs_per_group)
+                    fs.resize((size_t) max_funcs_per_group);
+
+                emit_row("+-- [G] " + gname, "-", fmt_ms(gptr->agg.total_ms), "-", fmt_pct(pct_of_total(gptr->agg.total_ms)));
+
+                // Functions
+                for (size_t fi = 0; fi < fs.size(); ++fi) {
+                    const auto &fname = fs[fi].first;
+                    const auto *fptr = fs[fi].second;
+
+                    // Sort kernels
+                    std::vector<std::pair<std::string, KTStat const *> > ks;
+                    for (auto &kk: fptr->kernels) ks.emplace_back(kk.first, &kk.second);
+                    std::sort(ks.begin(), ks.end(),
+                              [](auto &a, auto &b) { return a.second->total_ms > b.second->total_ms; });
+                    if (max_kernels_per_func >= 0 && (int) ks.size() > max_kernels_per_func)
+                        ks.resize((size_t) max_kernels_per_func);
+
+                    emit_row("|   +-- [F] " + fname, "-", fmt_ms(fptr->agg.total_ms), "-", fmt_pct(pct_of_total(fptr->agg.total_ms)));
+
+                    for (size_t ki = 0; ki < ks.size(); ++ki) {
+                        const auto &kname = ks[ki].first;
+                        const auto *kstat = ks[ki].second;
+                        emit_row("|   |   +-- [K] " + kname,
+                                 std::to_string(kstat->calls),
+                                 fmt_ms(kstat->total_ms),
+                                 fmt_ms(kstat->avg()),
+                                 fmt_pct(pct_of_total(kstat->total_ms)));
+                    }
+                }
+            }
+
+            // Footer rule
+            os << apply_rule(make_rule());
         }
 
         // --------- Pretty print (sorted by total time desc at each level) ----------
@@ -152,6 +330,10 @@ namespace GPU_HeiPa {
 
         // --------- JSON export (nested, pretty-printed) ----------
         std::string to_JSON() const {
+#if !ENABLE_PROFILER
+            return "{}";
+#endif
+
             auto esc = [](const std::string &s) {
                 std::ostringstream e;
                 for (char c: s) {
@@ -291,23 +473,34 @@ namespace GPU_HeiPa {
     };
 
     struct ScopedTimer {
+#if ENABLE_PROFILER
         const char *group;
         const char *function;
         const char *kernel;
         std::chrono::time_point<std::chrono::system_clock> t0;
         bool stopped = false;
+#endif
 
+#if ENABLE_PROFILER
         ScopedTimer(const char *g, const char *f, const char *k)
             : group(g), function(f), kernel(k), t0(get_time_point()) {
         }
+#else
+        ScopedTimer(const char *g, const char *f, const char *k) {
+        }
+#endif
 
         void stop() {
+#if !ENABLE_PROFILER
+            return;
+#else
             if (!stopped) {
                 Profiler::instance().add(
                     group, function, kernel,
                     get_milli_seconds(t0, get_time_point()));
                 stopped = true;
             }
+#endif
         }
 
         ~ScopedTimer() { stop(); }

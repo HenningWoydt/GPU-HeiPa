@@ -43,9 +43,9 @@ namespace GPU_HeiPa {
         DeviceWeight bweights;
     };
 
-    inline Partition initial_partition(const vertex_t t_n,
-                                       const partition_t t_k,
-                                       const weight_t t_lmax) {
+    inline Partition initialize_partition(const vertex_t t_n,
+                                          const partition_t t_k,
+                                          const weight_t t_lmax) {
         ScopedTimer t{"io", "partition", "initialize"};
         Partition partition;
 
@@ -68,7 +68,7 @@ namespace GPU_HeiPa {
         Kokkos::parallel_for("initialize", mapping.old_n, KOKKOS_LAMBDA(const vertex_t u) {
             // TODO: multiple threads may write the same value, is this bad?
             vertex_t u_new = mapping.mapping(u);
-            temp_device_partition(u_new) = mapping.mapping(u);
+            temp_device_partition(u_new) = partition.map(u);
         });
         Kokkos::fence();
 
@@ -121,6 +121,20 @@ namespace GPU_HeiPa {
         return max_val;
     }
 
+    inline void copy_into(Partition &dst, const Partition &src, u32 n) {
+        ScopedTimer _t("refine", "PartitionManager", "copy_into");
+
+        dst.n = src.n;
+        dst.k = src.k;
+        dst.lmax = src.lmax;
+
+        auto rN = std::make_pair<size_t, size_t>(0, n);
+        Kokkos::deep_copy(Kokkos::subview(dst.map, rN), Kokkos::subview(src.map, rN));
+        Kokkos::deep_copy(dst.bweights, src.bweights);
+
+        Kokkos::fence();
+    }
+
     struct PartitionHost {
         vertex_t n = 0;
         partition_t k = 0;
@@ -130,21 +144,20 @@ namespace GPU_HeiPa {
         HostWeight bweights;
     };
 
-    inline PartitionHost to_host_p_manager(const Partition &partition) {
-        PartitionHost host_p_manager;
+    inline PartitionHost to_host_partition(const Partition &partition) {
+        PartitionHost host_partition;
 
-        host_p_manager.n = partition.n;
-        host_p_manager.k = partition.k;
-        host_p_manager.lmax = partition.lmax;
+        host_partition.n = partition.n;
+        host_partition.k = partition.k;
+        host_partition.lmax = partition.lmax;
 
-        host_p_manager.map = HostPartition("partition", partition.n);
-        host_p_manager.bweights = HostWeight("b_weights", partition.k);
-        Kokkos::deep_copy(host_p_manager.map, partition.map);
-        Kokkos::deep_copy(host_p_manager.bweights, partition.bweights);
+        host_partition.map = HostPartition("partition", partition.n);
+        host_partition.bweights = HostWeight("b_weights", partition.k);
+        Kokkos::deep_copy(host_partition.map, partition.map);
+        Kokkos::deep_copy(host_partition.bweights, partition.bweights);
         Kokkos::fence();
 
-
-        return host_p_manager;
+        return host_partition;
     }
 }
 

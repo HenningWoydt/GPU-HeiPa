@@ -55,11 +55,34 @@ namespace GPU_HeiPa {
 
     inline std::vector<std::string> split_ws(const std::string &str) {
         std::vector<std::string> result;
-        std::istringstream iss(str);
-        std::string token;
-        while (iss >> token) {
-            // skips all whitespace automatically
-            result.push_back(token);
+        std::string current;
+
+        for (char c: str) {
+            if (std::isspace(static_cast<unsigned char>(c))) {
+                // If we hit whitespace and have a word, store it
+                if (!current.empty()) {
+                    result.push_back(current);
+                    current.clear();
+                }
+            } else {
+                // Add non-whitespace characters to the current word
+                current += c;
+            }
+        }
+
+        // Add the last token if there is one
+        if (!current.empty()) {
+            result.push_back(current);
+        }
+
+        return result;
+    }
+
+    template<typename T>
+    T str_to_int(const std::string &s) {
+        T result = 0;
+        for (char c: s) {
+            result = result * 10 + ((T) c - (T) '0');
         }
         return result;
     }

@@ -46,7 +46,7 @@ namespace GPU_HeiPa {
     };
 
     inline HostGraph from_file(const std::string &file_path) {
-        ScopedTimer t_read_header{"io", "from_file", "read_header"};
+        ScopedTimer t_allocate{"io", "from_file", "allocate"};
         HostGraph g;
 
         if (!file_exists(file_path)) {
@@ -56,7 +56,7 @@ namespace GPU_HeiPa {
 
         // Open in binary; give a large buffer (e.g., 32 MB).
         std::ifstream file(file_path, std::ios::binary);
-        static std::vector<char> big_buf(32u << 20); // 32 MB
+        std::vector<char> big_buf(32u << 20); // 32 MB
         file.rdbuf()->pubsetbuf(big_buf.data(), (long) big_buf.size());
 
         std::string line;
@@ -64,14 +64,17 @@ namespace GPU_HeiPa {
         bool has_v_weights = false;
         bool has_e_weights = false;
 
+        t_allocate.stop();
+        ScopedTimer t_read_header{"io", "from_file", "read_header"};
+
         // read in header
         while (std::getline(file, line)) {
             if (line[0] == '%') { continue; }
 
             // read in header
             std::vector<std::string> header = split_ws(line);
-            g.n = (vertex_t) std::stoul(header[0]);
-            g.m = (vertex_t) std::stoul(header[1]) * 2;
+            g.n = str_to_int<vertex_t>(header[0]);
+            g.m = str_to_int<vertex_t>(header[1]) * 2;
 
             // allocate space
             g.g_weight = 0;
@@ -126,39 +129,6 @@ namespace GPU_HeiPa {
 
             u += 1;
         }
-
-        /*
-        while (std::getline(file, line)) {
-            if (line[0] == '%') { continue; }
-
-            char *p = line.data();
-            char *end = p + line.size();
-
-            // vertex weight (optional)
-            weight_t w = 1;
-            if (has_v_weights) {
-                read_weight(p, end, w);
-            }
-            g.weights(u) = w;
-            g.g_weight += w;
-
-            // neighbors (and optional edge weights)
-            vertex_t v;
-            while (read_vertex(p, end, v)) {
-                w = 1;
-                if (has_e_weights) {
-                    read_weight(p, end, w);
-                }
-
-                g.edges_v(curr_m) = v - 1;
-                g.edges_w(curr_m) = w;
-                ++curr_m;
-            }
-
-            g.neighborhood(u + 1) = curr_m;
-            ++u;
-        }
-        */
 
         if (curr_m != g.m) {
             std::cerr << "Number of expected edges " << g.m << " not equal to number edges " << curr_m << " found!" << std::endl;
