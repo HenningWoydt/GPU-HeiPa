@@ -46,95 +46,152 @@ namespace GPU_HeiPa {
     };
 
     inline HostGraph from_file(const std::string &file_path) {
-        ScopedTimer t_allocate{"io", "from_file", "allocate"};
-        HostGraph g;
-
+        ScopedTimer _t_allocate("io", "CSRGraph", "allocate");
         if (!file_exists(file_path)) {
             std::cerr << "File " << file_path << " does not exist!" << std::endl;
             exit(EXIT_FAILURE);
         }
 
-        // Open in binary; give a large buffer (e.g., 32 MB).
-        std::ifstream file(file_path, std::ios::binary);
-        std::vector<char> big_buf(32u << 20); // 32 MB
-        file.rdbuf()->pubsetbuf(big_buf.data(), (long) big_buf.size());
+        // mmap the whole file
+        MMap mm = mmap_file_ro(file_path);
+        char *p = mm.data;
+        const char *end = mm.data + mm.size; // (tiny fix: don't do -1)
 
-        std::string line;
-        line.reserve(1u << 20); // 1 MB per line buffer to reduce reallocs
+        _t_allocate.stop();
+        ScopedTimer _t_read_header("io", "CSRGraph", "read_header");
+
+        // skip comment lines
+        while (*p == '%') {
+            while (*p != '\n') { ++p; }
+            ++p;
+        }
+
+        // skip whitespace
+        while (*p == ' ') { ++p; }
+
+        // read number of vertices
+        HostGraph g;
+        g.n = 0;
+        while (*p != ' ' && *p != '\n') {
+            g.n = g.n * 10 + (vertex_t) (*p - '0');
+            ++p;
+        }
+
+        // skip whitespace
+        while (*p == ' ') { ++p; }
+
+        // read number of edges
+        g.m = 0;
+        while (*p != ' ' && *p != '\n') {
+            g.m = g.m * 10 + (vertex_t) (*p - '0');
+            ++p;
+        }
+        g.m *= 2;
+
+        // search end of line or fmt
+        std::string fmt = "000";
         bool has_v_weights = false;
         bool has_e_weights = false;
-
-        t_allocate.stop();
-        ScopedTimer t_read_header{"io", "from_file", "read_header"};
-
-        // read in header
-        while (std::getline(file, line)) {
-            if (line[0] == '%') { continue; }
-
-            // read in header
-            std::vector<std::string> header = split_ws(line);
-            g.n = str_to_int<vertex_t>(header[0]);
-            g.m = str_to_int<vertex_t>(header[1]) * 2;
-
-            // allocate space
-            g.g_weight = 0;
-            g.weights = HostWeight(Kokkos::view_alloc(Kokkos::WithoutInitializing, "weights"), g.n);
-            g.neighborhood = HostVertex(Kokkos::view_alloc(Kokkos::WithoutInitializing, "neighborhood"), g.n + 1);
-            g.neighborhood(0) = 0;
-            g.edges_v = HostVertex(Kokkos::view_alloc(Kokkos::WithoutInitializing, "edges_v"), g.m);
-            g.edges_w = HostWeight(Kokkos::view_alloc(Kokkos::WithoutInitializing, "edges_w"), g.m);
-
-            // read in header
-            std::string fmt = "000";
-            if (header.size() == 3 && header[2].size() == 3) {
-                fmt = header[2];
+        while (*p == ' ') { ++p; }
+        if (*p != '\n') {
+            // found fmt
+            fmt[0] = *p;
+            ++p;
+            if (*p != '\n') {
+                // found fmt
+                fmt[1] = *p;
+                ++p;
+                if (*p != '\n') {
+                    // found fmt
+                    fmt[2] = *p;
+                    ++p;
+                }
             }
-            has_v_weights = fmt[1] == '1';
-            has_e_weights = fmt[2] == '1';
-
-            break;
+            // skip whitespaces
+            while (*p == ' ') { ++p; }
         }
-        t_read_header.stop();
+        g.g_weight = 0;
+        g.weights = HostWeight(Kokkos::view_alloc(Kokkos::WithoutInitializing, "weights"), g.n);
+        g.neighborhood = HostVertex(Kokkos::view_alloc(Kokkos::WithoutInitializing, "neighborhood"), g.n + 1);
+        g.neighborhood(0) = 0;
+        g.edges_v = HostVertex(Kokkos::view_alloc(Kokkos::WithoutInitializing, "edges_v"), g.m);
+        g.edges_w = HostWeight(Kokkos::view_alloc(Kokkos::WithoutInitializing, "edges_w"), g.m);
+        has_v_weights = fmt[1] == '1';
+        has_e_weights = fmt[2] == '1';
 
-        // read in edges
-        ScopedTimer t_read_edges{"io", "from_file", "read_edges"};
+        _t_read_header.stop();
+        ScopedTimer _t_read_edges("io", "CSRGraph", "read_edges");
+
+        ++p;
         vertex_t u = 0;
-        std::vector<vertex_t> ints(g.n);
-        vertex_t curr_m = 0;
-
-        while (std::getline(file, line)) {
-            if (line[0] == '%') { continue; }
-            // convert the lines into ints
-            size_t size = str_to_ints(line, ints);
-
-            size_t i = 0;
-
-            // check if vertex weights
-            weight_t w = 1;
-            if (has_v_weights) { w = (weight_t) ints[i++]; }
-            g.weights(u) = w;
-            g.g_weight += w;
-
-            while (i < size) {
-                vertex_t v = ints[i++] - 1;
-
-                // check if edge weights
-                w = 1;
-                if (has_e_weights) { w = (weight_t) ints[i++]; }
-                g.edges_v(curr_m) = v;
-                g.edges_w(curr_m) = w;
-                curr_m += 1;
+        size_t curr_m = 0;
+        while (p < end) {
+            // skip comment lines
+            while (*p == '%') {
+                while (*p != '\n') { ++p; }
+                ++p;
             }
-            g.neighborhood(u + 1) = curr_m;
 
-            u += 1;
+            // skip whitespaces
+            while (*p == ' ') { ++p; }
+
+            // read in vertex weight
+            weight_t vw = 1;
+            if (has_v_weights) {
+                vw = 0;
+                while (*p != ' ' && *p != '\n') {
+                    vw = vw * 10 + (weight_t) (*p - '0');
+                    ++p;
+                }
+
+                // skip whitespaces
+                while (*p == ' ') { ++p; }
+            }
+            g.weights(u) = vw;
+            g.g_weight += vw;
+
+            // read in edges
+            while (*p != '\n' && p < end) {
+                vertex_t v = 0;
+                weight_t w = 1;
+
+                while (*p != ' ' && *p != '\n') {
+                    v = v * 10 + (vertex_t) (*p - '0');
+                    ++p;
+                }
+
+                // skip whitespaces
+                while (*p == ' ') { ++p; }
+
+                if (has_e_weights) {
+                    w = 0;
+                    while (*p != ' ' && *p != '\n') {
+                        w = w * 10 + (weight_t) (*p - '0');
+                        ++p;
+                    }
+
+                    // skip whitespaces
+                    while (*p == ' ') { ++p; }
+                }
+
+                g.edges_v(curr_m) = v - 1;
+                g.edges_w(curr_m) = w;
+                ++curr_m;
+            }
+            g.neighborhood(u + 1) = (vertex_t) curr_m;
+            ++u;
+            ++p;
         }
 
         if (curr_m != g.m) {
-            std::cerr << "Number of expected edges " << g.m << " not equal to number edges " << curr_m << " found!" << std::endl;
+            std::cerr << "Number of expected edges " << g.m << " not equal to number edges " << curr_m << " found!\n";
+            munmap_file(mm);
             exit(EXIT_FAILURE);
         }
-        t_read_edges.stop();
+
+        _t_read_edges.stop();
+        // done with the file
+        munmap_file(mm);
 
         return g;
     }
