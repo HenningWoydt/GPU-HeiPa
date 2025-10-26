@@ -38,7 +38,7 @@ int main(int argc, char *argv[]) {
     std::ios::sync_with_stdio(false);
     std::cout.tie(nullptr);
 
-    ScopedTimer _t_guard("io", "main", "ScopeGuard");
+    ScopedTimer _t_guard("io", "main", "Kokkos::initialize");
     Kokkos::initialize();
     _t_guard.stop();
 
@@ -97,7 +97,11 @@ int main(int argc, char *argv[]) {
         Configuration config(argc, argv);
         Solver(config).solve();
     }
+    ScopedTimer _t_guard_end("io", "main", "Kokkos::finalize");
     Kokkos::finalize();
+    _t_guard_end.stop();
+
+    Profiler::instance().print_table_ascii_colored(std::cout);
 
     auto ep = get_time_point();
     std::cout << "Total Time: " << get_seconds(sp, ep) << " seconds." << std::endl;

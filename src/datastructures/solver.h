@@ -102,8 +102,6 @@ namespace GPU_HeiPa {
             std::cout << "#oload partitions : " << n_overloaded_partitions << std::endl;
             std::cout << "Sum oload weights : " << sum_too_much << std::endl;
 
-            Profiler::instance().print_table_ascii_colored(std::cout);
-
             return {};
         }
 
