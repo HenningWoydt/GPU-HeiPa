@@ -56,6 +56,10 @@ namespace GPU_HeiPa {
         partition.map = DevicePartition(Kokkos::view_alloc(Kokkos::WithoutInitializing, "partition"), t_n);
         partition.bweights = DeviceWeight(Kokkos::view_alloc(Kokkos::WithoutInitializing, "b_weights"), t_k);
 
+        Kokkos::deep_copy(partition.map, 0);
+        Kokkos::deep_copy(partition.bweights, 0);
+        Kokkos::fence();
+
         return partition;
     }
 

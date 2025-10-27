@@ -135,6 +135,107 @@ namespace GPU_HeiPa {
 
         return v(idx);
     }
+
+    KOKKOS_INLINE_FUNCTION
+    u32 hash32(u32 x) {
+        // Knuth multiplicative hash
+        return x * 2654435761u;
+    }
+
+    KOKKOS_INLINE_FUNCTION
+    u32 floor_log2_u32(u32 v) {
+        // precondition: v > 0
+#if defined(__CUDA_ARCH__)
+        // CUDA device: count-leading-zeros (32-bit)
+        return 31u - (u32) __clz(v);
+#elif defined(__HIP_DEVICE_COMPILE__)
+        // HIP device: same builtin
+        return 31u - (u32) __clz(v);
+#elif defined(_MSC_VER)
+        // MSVC host
+        unsigned long idx;
+        _BitScanReverse(&idx, v);
+        return (u32) idx;
+#elif defined(__GNUC__) || defined(__clang__)
+        // GCC/Clang host
+        return 31u - (u32) __builtin_clz(v);
+#else
+        // portable fallback
+        u32 r = 0;
+        while (v >>= 1) ++r;
+        return r;
+#endif
+    }
+
+    KOKKOS_INLINE_FUNCTION
+    u32 floor_log2_u64(u64 x) {
+        if (x == 0ull) return 0u;
+#if defined(__CUDA_ARCH__)
+        return 63u - (u32) __clzll((unsigned long long) x);
+#elif defined(__HIP_DEVICE_COMPILE__)
+        return 63u - (u32) __clzll((unsigned long long) x);
+#else
+        return 63u - (u32) __builtin_clzll((unsigned long long) x);
+#endif
+    }
+
+    KOKKOS_INLINE_FUNCTION
+    u64 abs_s64_to_u64(s64 x) {
+        return (x >= 0)
+                   ? (u64) x
+                   : (x == (s64) 0x8000000000000000LL ? (1ull << 63) : (u64) (-x));
+    }
+
+    // Helper: bitcast float->u32 without UB
+    KOKKOS_INLINE_FUNCTION
+    u32 f32_bits(f32 x) {
+        union {
+            f32 f;
+            u32 u;
+        } u;
+        u.f = x;
+        return u.u;
+    }
+
+    // Helper: pack rating+tie into one u64
+    KOKKOS_INLINE_FUNCTION
+    u64 pack_f32_vertex(f32 rating, vertex_t v) {
+        const u32 r = f32_bits(rating); // monotonic if rating >= 0
+        const u32 tie = 0xFFFFFFFFu - (u32) v; // prefer smaller v on ties
+        return (u64(r) << 32) | u64(tie);
+    }
+
+    // Helper: unpack vertex from packed pair
+    KOKKOS_INLINE_FUNCTION
+    vertex_t unpack_vertex(u64 packed) {
+        if (packed == 0ull) return UINT32_MAX;
+        const u32 inv_v = (u32) (packed & 0xFFFFFFFFu);
+        return (vertex_t) (0xFFFFFFFFu - inv_v);
+    }
+
+    // Pack (score:int32, vertex:uint32) -> uint64
+    KOKKOS_INLINE_FUNCTION
+    u64 pack_s32_partition(s32 score, partition_t p) {
+        // Make signed int32 sortable in unsigned domain by biasing
+        const u32 biased = static_cast<u32>(score) ^ 0x80000000u;
+        // Prefer *larger* score first, then smaller vertex on tie → invert vertex
+        const u32 inv_v  = 0xFFFFFFFFu - static_cast<u32>(p);
+        return (static_cast<u64>(biased) << 32) | static_cast<u64>(inv_v);
+    }
+
+    // Unpack partition
+    KOKKOS_INLINE_FUNCTION
+    partition_t unpack_partition(u64 packed) {
+        const u32 inv_v = static_cast<u32>(packed & 0xFFFFFFFFu);
+        return static_cast<vertex_t>(0xFFFFFFFFu - inv_v);
+    }
+
+    // Unpack s32
+    KOKKOS_INLINE_FUNCTION
+    s32 unpack_score(u64 packed) {
+        const u32 biased = static_cast<u32>(packed >> 32);
+        return static_cast<s32>(biased ^ 0x80000000u);
+    }
 }
 
 #endif //GPU_HEIPA_KOKKOS_UTIL_H

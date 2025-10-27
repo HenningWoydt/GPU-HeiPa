@@ -53,32 +53,10 @@ namespace GPU_HeiPa {
         return sum;
     }
 
-    inline weight_t edge_cut(const Graph &device_g,
-                             const Partition &partition,
-                             const BlockConnectivity &bc) {
-        weight_t total_comm_cost = 0;
-
-        Kokkos::parallel_reduce("edge_cut", device_g.n, KOKKOS_LAMBDA(const vertex_t u, weight_t &local_comm_cost) {
-                                    partition_t u_id = partition.map(u);
-                                    weight_t sum = 0;
-
-                                    for (u32 i = bc.row(u); i < bc.row(u + 1); ++i) {
-                                        partition_t id = bc.ids(i);
-                                        weight_t w = bc.weights(i);
-
-                                        if (id == u_id) { continue; }
-                                        if (id == partition.k) { continue; }
-
-                                        sum += w;
-                                    }
-
-                                    local_comm_cost += sum;
-                                },
-                                total_comm_cost);
-        Kokkos::fence();
-
-        /*
-        Kokkos::parallel_reduce("edge_cut", bc.size, KOKKOS_LAMBDA(const u32 j, weight_t &local_comm_cost) {
+    inline weight_t edge_cut(const BlockConnectivity &bc,
+                             const Partition &partition) {
+        weight_t total_edge_cut = 0;
+        Kokkos::parallel_reduce("edge_cut", bc.size, KOKKOS_LAMBDA(const u32 j, weight_t &local_edge_cut) {
                                     vertex_t u = bc.us(j);
                                     partition_t u_id = partition.map(u);
 
@@ -86,14 +64,13 @@ namespace GPU_HeiPa {
                                     weight_t w = bc.weights(j);
 
                                     if (id != u_id && id != partition.k) {
-                                        local_comm_cost += w;
+                                        local_edge_cut += w;
                                     }
                                 },
-                                total_comm_cost);
+                                total_edge_cut);
         Kokkos::fence();
-        */
 
-        return total_comm_cost;
+        return total_edge_cut;
     }
 }
 

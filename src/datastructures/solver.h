@@ -114,27 +114,16 @@ namespace GPU_HeiPa {
             u32 level = 0;
             while (graphs.back().n > c * k) {
                 matching();
-
-                // TODO: this should not be necessary
-                if ((f64) mappings.back().coarse_n > TwoHopMatcher().threshold * (f64) mappings.back().old_n) {
-                    mappings.pop_back();
-                    break;
-                }
-
                 coarsening();
-
-                // std::cout << "level " << level << " " << graphs.back().n << " " << graphs.back().m << std::endl;
 
                 level += 1;
             }
 
-            u32 max_level = level;
+            u32 max_level = level - 1;
             initial_partitioning();
 
             while (!mappings.empty()) {
                 level -= 1;
-
-                // std::cout << "level " << level << " " << graphs.back().n << " " << graphs.back().m << " " << max_weight(partition) << " " << lmax << std::endl;
 
                 uncoarsening();
                 refinement(max_level, level);
@@ -184,7 +173,9 @@ namespace GPU_HeiPa {
         }
 
         void refinement(u32 max_level, u32 level) {
-            refine(graphs.back(), partition, k, lmax, max_level, level);
+            weight_t temp_lmax = (weight_t) std::ceil((1.0 + config.imbalance + (config.imbalance * ((f64) level / (f64) max_level))) * ((f64) host_g.g_weight / (f64) config.k));
+
+            refine(graphs.back(), partition, k, temp_lmax, max_level, level);
             assert_state_after_partition(graphs.back(), partition, config.k);
         }
 
