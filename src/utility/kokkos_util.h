@@ -236,6 +236,19 @@ namespace GPU_HeiPa {
         const u32 biased = static_cast<u32>(packed >> 32);
         return static_cast<s32>(biased ^ 0x80000000u);
     }
+
+    KOKKOS_INLINE_FUNCTION
+partition_t random_partition(vertex_t u, u32 seed, u32 prime, u32 xor_const, partition_t k) {
+        // Mix in the seed with a 32-bit hash style formula
+        u32 key = (u * prime) ^ (xor_const + seed * 0x9e3779b9u); // 0x9e3779b9u is 32-bit golden ratio
+        key ^= key >> 16;
+        key *= 0x85ebca6bu; // Murmur3 finalizer constants
+        key ^= key >> 13;
+        key *= 0xc2b2ae35u;
+        key ^= key >> 16;
+
+        return key % k;
+    }
 }
 
 #endif //GPU_HEIPA_KOKKOS_UTIL_H

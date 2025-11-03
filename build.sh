@@ -96,6 +96,40 @@ echo "Using C compiler: ${GCC:-<system default>}"
 mkdir -p extern
 cd extern && rm -rf local && mkdir local && cd "${ROOT}"
 
+# --- Download GKlib (latest release) ---
+echo "Downloading GKlib..."
+if (
+  cd extern \
+  && rm -f gklib.tar.gz \
+  && rm -rf GKlib \
+  && wget -q https://github.com/KarypisLab/GKlib/archive/refs/heads/master.tar.gz -O gklib.tar.gz \
+  && tar -xzf gklib.tar.gz \
+  && mv GKlib-master GKlib \
+  && rm -f gklib.tar.gz
+); then
+  echo "GKlib downloaded and extracted successfully."
+else
+  echo "Failed to download GKlib!" >&2
+  exit 1
+fi
+
+# --- Download METIS 5.2.1 ---
+echo "Downloading METIS 5.2.1..."
+if (
+  cd extern \
+  && rm -f metis-5.2.1.tar.gz \
+  && rm -rf METIS \
+  && wget -q https://github.com/KarypisLab/METIS/archive/refs/tags/v5.2.1.tar.gz -O metis-5.2.1.tar.gz \
+  && tar -xzf metis-5.2.1.tar.gz \
+  && mv METIS-5.2.1 METIS \
+  && rm -f metis-5.2.1.tar.gz
+); then
+  echo "METIS 5.2.1 downloaded and extracted successfully."
+else
+  echo "Failed to download METIS v5.2.1!" >&2
+  exit 1
+fi
+
 # --- Download KaHIP 3.19 ---
 echo "Downloading KaHIP 3.19..."
 if (
@@ -230,6 +264,33 @@ if (
   echo "Kokkos-Kernels 4.7.00 build completed successfully."
 else
   echo "Kokkos-Kernels 4.7.00 build failed!" >&2
+  exit 1
+fi
+cd "${ROOT}"
+
+# install GKLIB into a local folder
+export CFLAGS="-Wall -Wno-error=pedantic -Wno-error -D_GNU_SOURCE -DHAVE_STRDUP=1"
+export CPPFLAGS="-Wall -Wno-error=pedantic -Wno-error -D_GNU_SOURCE -DHAVE_STRDUP=1"
+
+echo "Building GKlib..."
+if cd "${ROOT}/extern/GKlib" && rm -rf build \
+  && make config prefix="${ROOT}/extern/local/GKlib" cc="${GCC}" > /dev/null 2>&1 \
+  && make install > /dev/null 2>&1; then
+  echo "GKlib build completed successfully."
+else
+  echo "GKlib build failed!" >&2
+  exit 1
+fi
+cd "${ROOT}"
+
+echo "Building METIS..."
+if cd "${ROOT}/extern/METIS" \
+  && rm -rf build \
+  && make config prefix="${ROOT}/extern/local/METIS" gklib_path="${ROOT}/extern/local/GKlib" cc="${GCC}" > /dev/null 2>&1 \
+  && make install > /dev/null 2>&1; then
+  echo "METIS build completed successfully."
+else
+  echo "METIS build failed!" >&2
   exit 1
 fi
 cd "${ROOT}"

@@ -33,10 +33,29 @@ namespace GPU_HeiPa {
      * Maps each vertex of a graph to a new vertex of its coarser representation.
      */
     struct Mapping {
-        vertex_t old_n;
-        vertex_t coarse_n;
-        DeviceVertex mapping;
+        vertex_t old_n = 0;
+        vertex_t coarse_n = 0;
+        UnmanagedDeviceVertex mapping;
     };
+
+    inline Mapping initialize_mapping(vertex_t t_old_n,
+                                      vertex_t t_coarse_n,
+                                      KokkosMemoryStack &mem_stack) {
+        Mapping mapping;
+
+        mapping.old_n = t_old_n;
+        mapping.coarse_n = t_coarse_n;
+
+        auto *mapping_ptr = (vertex_t *) get_chunk(mem_stack, sizeof(vertex_t) * t_old_n);
+        mapping.mapping = UnmanagedDeviceVertex(mapping_ptr, t_old_n);
+
+        return mapping;
+    }
+
+    inline void free_mapping(Mapping &mapping,
+                             KokkosMemoryStack &mem_stack) {
+        pop(mem_stack);
+    }
 }
 
 #endif //GPU_HEIPA_MAPPING_H

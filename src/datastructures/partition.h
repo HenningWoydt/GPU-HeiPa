@@ -39,13 +39,15 @@ namespace GPU_HeiPa {
         partition_t k = 0;
         weight_t lmax = 0;
 
-        DevicePartition map;
-        DeviceWeight bweights;
+        UnmanagedDevicePartition map;
+        UnmanagedDevicePartition temp_map;
+        UnmanagedDeviceWeight bweights;
     };
 
     inline Partition initialize_partition(const vertex_t t_n,
                                           const partition_t t_k,
-                                          const weight_t t_lmax) {
+                                          const weight_t t_lmax,
+                                          KokkosMemoryStack &mem_stack) {
         ScopedTimer t{"io", "partition", "initialize"};
         Partition partition;
 
@@ -53,8 +55,12 @@ namespace GPU_HeiPa {
         partition.k = t_k;
         partition.lmax = t_lmax;
 
-        partition.map = DevicePartition(Kokkos::view_alloc(Kokkos::WithoutInitializing, "partition"), t_n);
-        partition.bweights = DeviceWeight(Kokkos::view_alloc(Kokkos::WithoutInitializing, "b_weights"), t_k);
+        auto *map_ptr = (partition_t *) get_chunk(mem_stack, sizeof(partition_t) * t_n);
+        auto *temp_map_ptr = (partition_t *) get_chunk(mem_stack, sizeof(partition_t) * t_n);
+        auto *bweights_ptr = (weight_t *) get_chunk(mem_stack, sizeof(weight_t) * t_k);
+        partition.map = UnmanagedDevicePartition(map_ptr, t_n);
+        partition.temp_map = UnmanagedDevicePartition(temp_map_ptr, t_n);
+        partition.bweights = UnmanagedDeviceWeight(bweights_ptr, t_k);
 
         Kokkos::deep_copy(partition.map, 0);
         Kokkos::deep_copy(partition.bweights, 0);
@@ -63,35 +69,38 @@ namespace GPU_HeiPa {
         return partition;
     }
 
+    inline void free_partition(const Partition &partition,
+                               KokkosMemoryStack &mem_stack) {
+        pop(mem_stack);
+        pop(mem_stack);
+        pop(mem_stack);
+    }
+
     inline void contract(Partition &partition,
                          const Mapping &mapping) {
-        ScopedTimer t{"coarsening", "partition", "contract"};
-        // reset activity
-        DevicePartition temp_device_partition = DevicePartition(Kokkos::view_alloc(Kokkos::WithoutInitializing, "partition"), partition.n);
-
+        ScopedTimer t{"contraction", "partition", "contract"};
         Kokkos::parallel_for("initialize", mapping.old_n, KOKKOS_LAMBDA(const vertex_t u) {
             // TODO: multiple threads may write the same value, is this bad?
             vertex_t u_new = mapping.mapping(u);
-            temp_device_partition(u_new) = partition.map(u);
+            partition.temp_map(u_new) = partition.map(u);
         });
         Kokkos::fence();
 
-        std::swap(partition.map, temp_device_partition);
+        std::swap(partition.map, partition.temp_map);
     }
 
     inline void uncontract(Partition &partition,
                            const Mapping &mapping) {
-        ScopedTimer _t("uncoarsening", "partition", "uncontract");
+        ScopedTimer _t("uncontraction", "partition", "uncontract");
 
         // reset activity
-        DevicePartition temp_device_partition = DevicePartition("device_partition", partition.n);
         Kokkos::parallel_for("initialize", mapping.old_n, KOKKOS_LAMBDA(const vertex_t u) {
             vertex_t new_v = mapping.mapping(u);
-            temp_device_partition(u) = partition.map(new_v);
+            partition.temp_map(u) = partition.map(new_v);
         });
         Kokkos::fence();
 
-        std::swap(partition.map, temp_device_partition);
+        std::swap(partition.map, partition.temp_map);
     }
 
     inline void recalculate_weights(Partition &partition,

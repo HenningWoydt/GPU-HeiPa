@@ -28,6 +28,7 @@
 #define GPU_HEIPA_HOST_GRAPH_H
 
 #include <iostream>
+#include <cstdlib>
 
 #include "../utility/definitions.h"
 #include "../utility/util.h"
@@ -55,7 +56,7 @@ namespace GPU_HeiPa {
         // mmap the whole file
         MMap mm = mmap_file_ro(file_path);
         char *p = mm.data;
-        const char *end = mm.data + mm.size; // (tiny fix: don't do -1)
+        const char *end = mm.data + mm.size;
 
         _t_allocate.stop();
         ScopedTimer _t_read_header("io", "CSRGraph", "read_header");
@@ -69,7 +70,7 @@ namespace GPU_HeiPa {
         // skip whitespace
         while (*p == ' ') { ++p; }
 
-        // read number of vertices
+        // read number of vertices - optimized parsing
         HostGraph g;
         g.n = 0;
         while (*p != ' ' && *p != '\n') {
@@ -80,7 +81,7 @@ namespace GPU_HeiPa {
         // skip whitespace
         while (*p == ' ') { ++p; }
 
-        // read number of edges
+        // read number of edges - optimized parsing  
         g.m = 0;
         while (*p != ' ' && *p != '\n') {
             g.m = g.m * 10 + (vertex_t) (*p - '0');
@@ -125,6 +126,13 @@ namespace GPU_HeiPa {
         ++p;
         vertex_t u = 0;
         size_t curr_m = 0;
+        
+        // Pre-fetch data pointers for better cache performance
+        vertex_t* edges_v_ptr = g.edges_v.data();
+        weight_t* edges_w_ptr = g.edges_w.data();
+        weight_t* weights_ptr = g.weights.data();
+        vertex_t* neighborhood_ptr = g.neighborhood.data();
+        
         while (p < end) {
             // skip comment lines
             while (*p == '%') {
@@ -135,7 +143,7 @@ namespace GPU_HeiPa {
             // skip whitespaces
             while (*p == ' ') { ++p; }
 
-            // read in vertex weight
+            // read in vertex weight - optimized
             weight_t vw = 1;
             if (has_v_weights) {
                 vw = 0;
@@ -143,18 +151,15 @@ namespace GPU_HeiPa {
                     vw = vw * 10 + (weight_t) (*p - '0');
                     ++p;
                 }
-
                 // skip whitespaces
                 while (*p == ' ') { ++p; }
             }
-            g.weights(u) = vw;
+            weights_ptr[u] = vw;
             g.g_weight += vw;
 
-            // read in edges
+            // read in edges - optimized inner loop
             while (*p != '\n' && p < end) {
                 vertex_t v = 0;
-                weight_t w = 1;
-
                 while (*p != ' ' && *p != '\n') {
                     v = v * 10 + (vertex_t) (*p - '0');
                     ++p;
@@ -163,22 +168,22 @@ namespace GPU_HeiPa {
                 // skip whitespaces
                 while (*p == ' ') { ++p; }
 
+                weight_t w = 1;
                 if (has_e_weights) {
                     w = 0;
                     while (*p != ' ' && *p != '\n') {
                         w = w * 10 + (weight_t) (*p - '0');
                         ++p;
                     }
-
                     // skip whitespaces
                     while (*p == ' ') { ++p; }
                 }
 
-                g.edges_v(curr_m) = v - 1;
-                g.edges_w(curr_m) = w;
+                edges_v_ptr[curr_m] = v - 1;
+                edges_w_ptr[curr_m] = w;
                 ++curr_m;
             }
-            g.neighborhood(u + 1) = (vertex_t) curr_m;
+            neighborhood_ptr[u + 1] = (vertex_t) curr_m;
             ++u;
             ++p;
         }

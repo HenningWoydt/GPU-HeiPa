@@ -37,11 +37,8 @@
 #include <cstdlib>
 #include <iomanip>
 
+#include "macros.h"
 #include "util.h"
-
-#ifndef ENABLE_PROFILER
-#define ENABLE_PROFILER 1
-#endif
 
 namespace GPU_HeiPa {
     // ===== Helpers (keep with your class or in an anon namespace) =====

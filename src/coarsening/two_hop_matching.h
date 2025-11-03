@@ -54,18 +54,16 @@ namespace GPU_HeiPa {
         weight_t lmax = 0;
         f64 threshold = 0.75;
 
-        DeviceF32 max_rating;
-        DeviceVertex preferred_neighbor;
-        DeviceU64 rating_vertex;
+        UnmanagedDeviceF32 max_rating;
+        UnmanagedDeviceVertex preferred_neighbor;
+        UnmanagedDeviceU64 rating_vertex;
 
-        DeviceU32 neighborhood_hash;
-        Kokkos::View<HashVertex *> hash_vertex_array;
-        DeviceU32 vertex_to_index; // index into hash_vertex_array
-        DeviceU32 index_to_group_id; // for each vertex, which hash group it belongs
-        DeviceU32 is_head;
-        u32 n_hash_groups = 0; // number of hash groups
-        DeviceU32 group_n_vertices; // sizes of each hash group
-        DeviceU32 group_begin; // start index of each hash group
+        Kokkos::View<HashVertex *, Kokkos::MemoryTraits<Kokkos::Unmanaged> > hash_vertex_array;
+        UnmanagedDeviceU32 vertex_to_index;   // index into hash_vertex_array
+        UnmanagedDeviceU32 index_to_group_id; // for each vertex, which hash group it belongs
+        UnmanagedDeviceU32 is_head;
+        UnmanagedDeviceU32 group_n_vertices; // sizes of each hash group
+        UnmanagedDeviceU32 group_begin;      // start index of each hash group
 
         u64 max_iterations_heavy = 3;
         u32 max_iterations_leaf = 3;
@@ -76,7 +74,8 @@ namespace GPU_HeiPa {
 
     inline TwoHopMatcher initialize_thm(const vertex_t t_n,
                                         const vertex_t t_m,
-                                        const weight_t t_lmax) {
+                                        const weight_t t_lmax,
+                                        KokkosMemoryStack &small_mem_stack) {
         ScopedTimer _t("coarsening", "TwoHopMatcher", "allocate");
 
         TwoHopMatcher thm;
@@ -84,19 +83,42 @@ namespace GPU_HeiPa {
         thm.m = t_m;
         thm.lmax = t_lmax;
 
-        thm.preferred_neighbor = DeviceVertex(Kokkos::view_alloc(Kokkos::WithoutInitializing, "preferred_neighbors"), t_n);
-        thm.max_rating = DeviceF32(Kokkos::view_alloc(Kokkos::WithoutInitializing, "max_rating"), t_n);
-        thm.rating_vertex = DeviceU64(Kokkos::view_alloc(Kokkos::WithoutInitializing, "rating_vertex"), t_n);
+        auto *preferred_neighbor_ptr = (vertex_t *) get_chunk(small_mem_stack, sizeof(vertex_t) * t_n);
+        auto *max_rating_ptr = (f32 *) get_chunk(small_mem_stack, sizeof(f32) * t_n);
+        auto *rating_vertex_ptr = (u64 *) get_chunk(small_mem_stack, sizeof(u64) * t_n);
+        thm.preferred_neighbor = UnmanagedDeviceVertex(preferred_neighbor_ptr, t_n);
+        thm.max_rating = UnmanagedDeviceF32(max_rating_ptr, t_n);
+        thm.rating_vertex = UnmanagedDeviceU64(rating_vertex_ptr, t_n);
 
-        thm.neighborhood_hash = DeviceU32(Kokkos::view_alloc(Kokkos::WithoutInitializing, "neighborhood_hash"), t_n);
-        thm.hash_vertex_array = Kokkos::View<HashVertex *>(Kokkos::view_alloc(Kokkos::WithoutInitializing, "hash_vertex_array"), t_n);
-        thm.vertex_to_index = DeviceU32(Kokkos::view_alloc(Kokkos::WithoutInitializing, "vertex_to_index"), t_n);
-        thm.index_to_group_id = DeviceU32(Kokkos::view_alloc(Kokkos::WithoutInitializing, "index_to_group_id"), t_n);
-        thm.is_head = DeviceU32(Kokkos::view_alloc(Kokkos::WithoutInitializing, "is_head"), t_n);
-        thm.group_n_vertices = DeviceU32(Kokkos::view_alloc(Kokkos::WithoutInitializing, "group_n_vertices"), t_n + 1);
-        thm.group_begin = DeviceU32(Kokkos::view_alloc(Kokkos::WithoutInitializing, "group_begin"), t_n + 2);
+        auto *neighborhood_hash_ptr = (u32 *) get_chunk(small_mem_stack, sizeof(u32) * t_n);
+        auto *hash_vertex_array_ptr = (HashVertex *) get_chunk(small_mem_stack, sizeof(HashVertex) * t_n);
+        auto *vertex_to_index_ptr = (u32 *) get_chunk(small_mem_stack, sizeof(u32) * t_n);
+        auto *index_to_group_id_ptr = (u32 *) get_chunk(small_mem_stack, sizeof(u32) * t_n);
+        auto *is_head_ptr = (u32 *) get_chunk(small_mem_stack, sizeof(u32) * t_n);
+        auto *group_n_vertices_ptr = (u32 *) get_chunk(small_mem_stack, sizeof(u32) * t_n);
+        auto *group_begin_ptr = (u32 *) get_chunk(small_mem_stack, sizeof(u32) * (t_n + 2));
+        thm.hash_vertex_array = Kokkos::View<HashVertex *, Kokkos::MemoryTraits<Kokkos::Unmanaged> >(hash_vertex_array_ptr, t_n);
+        thm.vertex_to_index = UnmanagedDeviceU32(vertex_to_index_ptr, t_n);
+        thm.index_to_group_id = UnmanagedDeviceU32(index_to_group_id_ptr, t_n);
+        thm.is_head = UnmanagedDeviceU32(is_head_ptr, t_n);
+        thm.group_n_vertices = UnmanagedDeviceU32(group_n_vertices_ptr, t_n);
+        thm.group_begin = UnmanagedDeviceU32(group_begin_ptr, t_n);
 
         return thm;
+    }
+
+    inline void free_thm(TwoHopMatcher &thm,
+                         KokkosMemoryStack &small_mem_stack) {
+        pop(small_mem_stack);
+        pop(small_mem_stack);
+        pop(small_mem_stack);
+        pop(small_mem_stack);
+        pop(small_mem_stack);
+        pop(small_mem_stack);
+        pop(small_mem_stack);
+        pop(small_mem_stack);
+        pop(small_mem_stack);
+        pop(small_mem_stack);
     }
 
     KOKKOS_INLINE_FUNCTION
@@ -124,8 +146,6 @@ namespace GPU_HeiPa {
 
     inline vertex_t n_matched_v(const DeviceVertex &matching,
                                 const vertex_t n) {
-        ScopedTimer _t("coarsening", "misc", "n_matched_v");
-
         vertex_t sum = 0;
 
         Kokkos::parallel_reduce("count_matches", n, KOKKOS_LAMBDA(const vertex_t u, vertex_t &local_count) {
@@ -141,405 +161,504 @@ namespace GPU_HeiPa {
 
     inline void build_hash_vertex_array(TwoHopMatcher &thm,
                                         const Graph &device_g) {
-        ScopedTimer _t("coarsening", "TwoHopMatcher", "build_hash_vertex_array");
-
-        Kokkos::deep_copy(thm.neighborhood_hash, 0);
-        Kokkos::fence();
-
-        Kokkos::parallel_for("hash", device_g.m, KOKKOS_LAMBDA(const u32 i) {
-            vertex_t u = device_g.edges_u(i);
-            vertex_t v = device_g.edges_v(i);
-
-            u32 h = v * 2654435761u; // 2654435761 = 2^32 / golden ratio
-
-            Kokkos::atomic_fetch_add(&thm.neighborhood_hash(u), h);
-        });
-        Kokkos::fence();
-
-        // build the hash array
-        Kokkos::parallel_for("fill_array", device_g.n, KOKKOS_LAMBDA(const vertex_t u) {
-            thm.hash_vertex_array(u).hash = thm.neighborhood_hash(u);
-            thm.hash_vertex_array(u).v = u;
-        });
-        Kokkos::fence();
+        // hash each neighborhood
+        {
+            ScopedTimer _t("coarsening", "build_hash_vertex_array", "hash");
+            Kokkos::parallel_for("hash_optimized", device_g.n, KOKKOS_LAMBDA(const vertex_t u) {
+                u32 hash_sum = 0;
+                for (u32 i = device_g.neighborhood(u); i < device_g.neighborhood(u + 1); ++i) {
+                    vertex_t v = device_g.edges_v(i);
+                    hash_sum ^= (v << 1) | (v >> 31);
+                }
+                thm.hash_vertex_array(u).hash = hash_sum;
+                thm.hash_vertex_array(u).v = u;
+            });
+            KOKKOS_PROFILE_FENCE();
+        }
 
         // sort the hash array
-        Kokkos::sort(thm.hash_vertex_array);
-        Kokkos::fence();
+        {
+            ScopedTimer _t("coarsening", "build_hash_vertex_array", "sort");
+            Kokkos::sort(thm.hash_vertex_array);
+            KOKKOS_PROFILE_FENCE();
+        }
 
-        // build index map
-        Kokkos::parallel_for("index_map", device_g.n, KOKKOS_LAMBDA(const u32 i) {
-            vertex_t u = thm.hash_vertex_array(i).v;
-            thm.vertex_to_index(u) = i;
-        });
-        Kokkos::fence();
+        // 1) One scan to build index map, head flags, group ids, and group begins.
+        u32 n_groups = 0; {
+            ScopedTimer _t("coarsening", "build_hash_vertex_array", "mark_map_scan");
+            Kokkos::parallel_scan("mark_map_scan", device_g.n, KOKKOS_LAMBDA(const u32 i, u32 &running, const bool final) {
+                                      const auto cur = thm.hash_vertex_array(i);
+                                      const bool head = (i == 0) || (cur.hash != thm.hash_vertex_array(i - 1).hash);
+                                      const u32 inc = head ? 1u : 0u;
 
-        // mark the start of each hash group
-        Kokkos::parallel_scan("mark_and_map_groups", device_g.n, KOKKOS_LAMBDA(u32 i, u32 &running, bool final) {
-                                  bool head = (i == 0 || thm.hash_vertex_array(i).hash != thm.hash_vertex_array(i - 1).hash);
-                                  u32 inc = head ? 1 : 0;
+                                      if (final) {
+                                          // index map
+                                          thm.vertex_to_index(cur.v) = i;
 
-                                  if (final) {
-                                      thm.is_head(i) = inc;
-                                      thm.index_to_group_id(i) = running;
-                                  }
+                                          // head flag & group id
+                                          thm.is_head(i) = inc;
+                                          thm.index_to_group_id(i) = running;
 
-                                  running += inc;
-                              },
-                              thm.n_hash_groups
-        );
-        Kokkos::fence();
-        thm.n_hash_groups += 1;
+                                          // write group begin at head positions
+                                          if (head) thm.group_begin(running) = i;
+                                      }
 
-        // set the size of each group
-        Kokkos::parallel_for("set_to_0", thm.n_hash_groups, KOKKOS_LAMBDA(u32 g) {
-            thm.group_n_vertices(g) = 0;
-        });
-        Kokkos::fence();
+                                      running += inc;
+                                  },
+                                  n_groups // host scalar receives total number of groups
+            );
+            KOKKOS_PROFILE_FENCE(); // only if you time this phase
+        }
 
-        Kokkos::parallel_for("count", device_g.n, KOKKOS_LAMBDA(u32 i) {
-            Kokkos::atomic_fetch_add(&thm.group_n_vertices(thm.index_to_group_id(i)), 1);
-        });
+        // 2) Set sentinel begin for the "end" (begin[n_groups] = N)
+        {
+            Kokkos::parallel_for("set_last_begin", 1u, KOKKOS_LAMBDA(const u32) {
+                thm.group_begin(n_groups) = device_g.n;
+            });
+            KOKKOS_PROFILE_FENCE(); // only for timing separation
+        }
 
-        // set the start of each group
-        Kokkos::parallel_scan("prefix_sum_groups", thm.n_hash_groups + 1, KOKKOS_LAMBDA(const u32 g, u32 &running, const bool final) {
-                                  // for g < n_groups use the count, else (the last slot) use 0
-                                  u32 cnt = (g < thm.n_hash_groups ? thm.group_n_vertices(g) : 0);
-                                  if (final) {
-                                      thm.group_begin(g) = running;
-                                  }
-                                  running += cnt;
-                              }
-        );
-        Kokkos::fence();
+        // 3) Compute group sizes from consecutive begins (no zeroing or atomics needed)
+        {
+            ScopedTimer _t("coarsening", "build_hash_vertex_array", "sizes_from_begins");
+            Kokkos::parallel_for("sizes_from_begins", n_groups, KOKKOS_LAMBDA(const u32 g) {
+                thm.group_n_vertices(g) = thm.group_begin(g + 1) - thm.group_begin(g);
+            });
+            // No fence needed for correctness unless host reads now
+        }
     }
 
-    inline Mapping determine_translation(const DeviceVertex &matching,
-                                         const vertex_t n) {
-        ScopedTimer _t("coarsening", "misc", "determine_mapping");
-
+    inline Mapping determine_mapping(const DeviceVertex &matching,
+                                     const vertex_t n,
+                                     KokkosMemoryStack &mem_stack,
+                                     KokkosMemoryStack &small_mem_stack) {
         Mapping mapping;
-        mapping.old_n = n;
-        mapping.mapping = DeviceVertex(
-            Kokkos::view_alloc(Kokkos::WithoutInitializing, "mapping"), n);
+        //
+        {
+            ScopedTimer _t("coarsening", "determine_mapping", "allocate_mapping");
+            mapping = initialize_mapping(n, 0, mem_stack);
+        }
 
-        DeviceU32 needs_id(Kokkos::view_alloc(Kokkos::WithoutInitializing, "needs_id"), n);
-        DeviceVertex assigned_id(Kokkos::view_alloc(Kokkos::WithoutInitializing, "assigned_id"), n);
-
-        // Mark which vertices need IDs (one per unmatched vertex or per matched pair)
-        Kokkos::parallel_for("mark_needs_id", n, KOKKOS_LAMBDA(const vertex_t u) {
-            const vertex_t v = matching(u);
-            // For a matched pair (u,v), only the smaller index assigns the ID.
-            // For an unmatched vertex, v == u => it assigns an ID to itself.
-            needs_id(u) = (v == u || u < v) ? 1u : 0u;
-        });
-        Kokkos::fence();
+        UnmanagedDeviceU32 needs_id;
+        UnmanagedDeviceVertex assigned_id;
+        //
+        {
+            ScopedTimer _t("coarsening", "determine_mapping", "allocate");
+            auto *needs_id_ptr = (u32 *) get_chunk(small_mem_stack, sizeof(u32) * n);
+            auto *assigned_id_ptr = (vertex_t *) get_chunk(small_mem_stack, sizeof(vertex_t) * n);
+            needs_id = UnmanagedDeviceU32(needs_id_ptr, n);
+            assigned_id = UnmanagedDeviceVertex(assigned_id_ptr, n);
+        }
+        //
+        {
+            ScopedTimer _t("coarsening", "determine_mapping", "mark_needs_id");
+            // Mark which vertices need IDs (one per unmatched vertex or per matched pair)
+            Kokkos::parallel_for("mark_needs_id", n, KOKKOS_LAMBDA(const vertex_t u) {
+                const vertex_t v = matching(u);
+                // For a matched pair (u,v), only the smaller index assigns the ID.
+                // For an unmatched vertex, v == u => it assigns an ID to itself.
+                needs_id(u) = (v == u || u < v) ? 1u : 0u;
+            });
+            KOKKOS_PROFILE_FENCE();
+        }
 
         // Count how many IDs will be assigned => coarse_n
         vertex_t coarse_n = 0;
-        Kokkos::parallel_reduce("count_ids", n, KOKKOS_LAMBDA(const vertex_t u, vertex_t &lsum) {
-                                    lsum += static_cast<vertex_t>(needs_id(u));
-                                },
-                                coarse_n
-        );
-        mapping.coarse_n = coarse_n;
-
-        // Exclusive scan to assign compact IDs [0, coarse_n)
-        Kokkos::parallel_scan("assign_ids", n, KOKKOS_LAMBDA(const vertex_t u, vertex_t &update, const bool final) {
-                                  if (needs_id(u)) {
-                                      if (final) assigned_id(u) = update; // write exclusive scan result
-                                      update += 1;
+        //
+        {
+            ScopedTimer _t("coarsening", "determine_mapping", "count_ids");
+            Kokkos::parallel_reduce("count_ids", n, KOKKOS_LAMBDA(const vertex_t u, vertex_t &lsum) {
+                                        lsum += static_cast<vertex_t>(needs_id(u));
+                                    },
+                                    coarse_n
+            );
+            mapping.coarse_n = coarse_n;
+        }
+        //
+        {
+            ScopedTimer _t("coarsening", "determine_mapping", "assign_ids");
+            // Exclusive scan to assign compact IDs [0, coarse_n)
+            Kokkos::parallel_scan("assign_ids", n, KOKKOS_LAMBDA(const vertex_t u, vertex_t &update, const bool final) {
+                                      if (needs_id(u)) {
+                                          if (final) assigned_id(u) = update; // write exclusive scan result
+                                          update += 1;
+                                      }
                                   }
-                              }
-        );
-        Kokkos::fence();
+            );
+            KOKKOS_PROFILE_FENCE();
+        }
+        //
+        {
+            ScopedTimer _t("coarsening", "determine_mapping", "assign_old_to_new");
+            // Build the translation mapping: old vertex -> new vertex
+            Kokkos::parallel_for("assign_old_to_new", n, KOKKOS_LAMBDA(const vertex_t u) {
+                const vertex_t v = matching(u);
+                if (v == u || u < v) {
+                    // This thread is responsible for the pair (u,v) or the singleton u
+                    const vertex_t id = assigned_id(u);
+                    mapping.mapping(u) = id;
+                    mapping.mapping(v) = id; // v gets same new ID (safe: partner thread won't write)
+                }
+                // If u > v, its partner's thread (the smaller index) sets mapping.mapping(u)
+            });
+            KOKKOS_PROFILE_FENCE();
+        }
 
-        // Build the translation mapping: old vertex -> new vertex
-        Kokkos::parallel_for("assign_old_to_new", n, KOKKOS_LAMBDA(const vertex_t u) {
-            const vertex_t v = matching(u);
-            if (v == u || u < v) {
-                // This thread is responsible for the pair (u,v) or the singleton u
-                const vertex_t id = assigned_id(u);
-                mapping.mapping(u) = id;
-                mapping.mapping(v) = id; // v gets same new ID (safe: partner thread won't write)
-            }
-            // If u > v, its partner's thread (the smaller index) sets mapping.mapping(u)
-        });
-        Kokkos::fence();
+        pop(small_mem_stack);
+        pop(small_mem_stack);
 
         return mapping;
     }
 
     inline void heavy_edge_matching(TwoHopMatcher &thm,
-                                    const Graph &device_g,
-                                    DeviceVertex &matching,
+                                    const Graph &g,
+                                    UnmanagedDeviceVertex &matching,
                                     const Partition &partition) {
-        ScopedTimer _t("coarsening", "TwoHopMatcher", "heavy_edge_matching");
-        vertex_t n = device_g.n;
-
         for (u32 iteration = 0; iteration < thm.max_iterations_heavy; ++iteration) {
-            if ((f64) n_matched_v(matching, n) >= thm.threshold * (f64) device_g.n) { return; }
+            vertex_t n_matched = 0;
+            //
+            {
+                ScopedTimer _t("coarsening", "thm_heavy_edge_matching", "n_matched_v");
+                n_matched = n_matched_v(matching, g.n);
+            }
 
-            Kokkos::parallel_for("reset", device_g.n, KOKKOS_LAMBDA(const vertex_t u) {
-                thm.rating_vertex(u) = pack_f32_vertex(0.0f, u);
-            });
-            Kokkos::fence();
+            if ((f64) n_matched >= thm.threshold * (f64) g.n) { return; }
+            //
+            {
+                ScopedTimer _t("coarsening", "thm_heavy_edge_matching", "reset");
+                Kokkos::parallel_for("reset", g.n, KOKKOS_LAMBDA(const vertex_t u) {
+                    thm.rating_vertex(u) = pack_f32_vertex(0.0f, u);
+                });
+                KOKKOS_PROFILE_FENCE();
+            }
+            //
+            {
+                ScopedTimer _t("coarsening", "thm_heavy_edge_matching", "pick_neighbor");
 
-            Kokkos::parallel_for("pick_neighbor", device_g.m, KOKKOS_LAMBDA(const u32 i) {
-                vertex_t u = device_g.edges_u(i);
-                vertex_t v = device_g.edges_v(i);
+                using RP = Kokkos::RangePolicy<
+                    Kokkos::DefaultExecutionSpace,
+                    Kokkos::Schedule<Kokkos::Static>,
+                    Kokkos::IndexType<u32>
+                >;
+                RP pol(0, g.m);
+                pol.set_chunk_size(1024);
 
-                if (partition.map(u) != partition.map(v)) { return; }
-                if (matching(u) != u || matching(v) != v) { return; }
-                if (device_g.weights(u) + device_g.weights(v) > thm.lmax / 2) { return; }
+                Kokkos::parallel_for("pick_neighbor", pol, KOKKOS_LAMBDA(const u32 i) {
+                    vertex_t u = g.edges_u(i);
+                    vertex_t v = g.edges_v(i);
 
-                weight_t w = device_g.edges_w(i);
-                // f32 rating = (f32) w;
-                // f32 rating = (f32) (w) / (f32) (device_g.weights(u) + device_g.weights(v));
-                f32 rating = (f32) (w * w) / (f32) (device_g.weights(u) * device_g.weights(v));
-                // f32 rating = (f32) (1) / (f32) (device_g.weights(u) * device_g.weights(v));
-                rating += edge_noise(u, v);
+                    // Early exit optimizations - check cheapest conditions first
+                    if (matching(u) != u || matching(v) != v) { return; }
+                    if (partition.map(u) != partition.map(v)) { return; }
 
-                Kokkos::atomic_max(&thm.rating_vertex(u), pack_f32_vertex(rating, v));
-            });
-            Kokkos::fence();
+                    // Cache weight lookups to reduce memory access
+                    weight_t u_weight = g.weights(u);
+                    weight_t v_weight = g.weights(v);
+                    if (u_weight + v_weight > thm.lmax / 2) { return; }
 
-            Kokkos::parallel_for("apply_matching", n, KOKKOS_LAMBDA(const vertex_t u) {
-                if (matching(u) != u) { return; }
+                    weight_t w = g.edges_w(i);
 
-                vertex_t v = unpack_vertex(thm.rating_vertex(u));
-                if (v >= device_g.n || v == u || matching(v) != v) { return; }
+                    // Optimized rating calculation - avoid expensive division when possible
+                    f32 weight_product = (f32) (u_weight * v_weight);
+                    f32 rating = (f32) (w * w) / weight_product;
+                    rating += edge_noise(u, v);
 
-                vertex_t pref_v = unpack_vertex(thm.rating_vertex(v));
+                    Kokkos::atomic_max(&thm.rating_vertex(u), pack_f32_vertex(rating, v));
+                });
+                KOKKOS_PROFILE_FENCE();
+            }
+            //
+            {
+                ScopedTimer _t("coarsening", "thm_heavy_edge_matching", "apply_matching");
+                Kokkos::parallel_for("apply_matching", g.n, KOKKOS_LAMBDA(const vertex_t u) {
+                    if (matching(u) != u) { return; }
 
-                if (pref_v == u && u < v) {
-                    matching(u) = v;
-                    matching(v) = u;
-                }
-            });
-            Kokkos::fence();
+                    vertex_t v = unpack_vertex(thm.rating_vertex(u));
+                    if (v >= g.n || v == u || matching(v) != v) { return; }
+
+                    vertex_t pref_v = unpack_vertex(thm.rating_vertex(v));
+
+                    if (pref_v == u && u < v) {
+                        matching(u) = v;
+                        matching(v) = u;
+                    }
+                });
+                KOKKOS_PROFILE_FENCE();
+            }
         }
     }
 
     inline void leaf_matching(TwoHopMatcher &thm,
                               const Graph &g,
-                              DeviceVertex &matching,
+                              UnmanagedDeviceVertex &matching,
                               const Partition &partition) {
-        ScopedTimer _t("coarsening", "TwoHopMatcher", "leaf_matching");
-
         for (u32 iteration = 0; iteration < thm.max_iterations_leaf; ++iteration) {
-            if ((f64) n_matched_v(matching, g.n) >= thm.threshold * (f64) g.n) { return; }
+            vertex_t n_matched = 0;
+            //
+            {
+                ScopedTimer _t("coarsening", "thm_leaf_matching", "n_matched_v");
+                n_matched = n_matched_v(matching, g.n);
+            }
 
-            Kokkos::parallel_for("reset", g.n, KOKKOS_LAMBDA(const vertex_t u) {
-                thm.preferred_neighbor(u) = u;
-            });
-            Kokkos::fence();
+            if ((f64) n_matched >= thm.threshold * (f64) g.n) { return; }
+            //
+            {
+                ScopedTimer _t("coarsening", "thm_leaf_matching", "reset");
+                Kokkos::parallel_for("reset", g.n, KOKKOS_LAMBDA(const vertex_t u) {
+                    thm.preferred_neighbor(u) = u;
+                });
+                KOKKOS_PROFILE_FENCE();
+            }
+            //
+            {
+                ScopedTimer _t("coarsening", "thm_leaf_matching", "pick_neighbor");
+                Kokkos::parallel_for("pick_neighbor", g.n, KOKKOS_LAMBDA(const vertex_t u) {
+                    if (matching(u) != u) { return; } // already matched
+                    if (g.neighborhood(u + 1) - g.neighborhood(u) != 1) { return; }
 
-            Kokkos::parallel_for("pick_neighbor", g.n, KOKKOS_LAMBDA(const vertex_t u) {
-                if (matching(u) != u) { return; } // already matched
-                if (g.neighborhood(u + 1) - g.neighborhood(u) != 1) { return; }
+                    // locate u’s bucket
+                    u32 idx = thm.vertex_to_index(u);
+                    u32 gid = thm.index_to_group_id(idx);
+                    u32 b = thm.group_begin(gid);
+                    u32 e = thm.group_begin(gid + 1);
 
-                // locate u’s bucket
-                u32 idx = thm.vertex_to_index(u);
-                u32 gid = thm.index_to_group_id(idx);
-                u32 b = thm.group_begin(gid);
-                u32 e = thm.group_begin(gid + 1);
-
-                constexpr u32 LIMIT = 1024;
-                if ((e - b) > LIMIT) {
-                    const u32 half = LIMIT >> 1;
-                    const u32 e_minus_LIMIT = e - LIMIT;
-                    u32 start = idx > half ? (idx - half) : b;
-                    if (start < b) start = b;
-                    if (start > e_minus_LIMIT) start = e_minus_LIMIT;
-                    b = start;
-                    e = start + LIMIT;
-                }
-
-                f32 best_rating = -max_sentinel<f32>();
-                vertex_t best_v = u;
-                for (u32 i = b; i < e; ++i) {
-                    vertex_t v = thm.hash_vertex_array(i).v;
-                    if (v == u) { continue ; }
-                    if (matching(v) != v) { continue ; }
-                    if (partition.map(u) != partition.map(v)) { continue ; }
-                    if (g.weights(u) + g.weights(v) > thm.lmax / 2) { continue ; }
-
-                    f32 rating = (f32) (1) / (f32) (g.weights(u) * g.weights(v));
-                    rating += edge_noise(u, v);
-                    if (rating > best_rating) {
-                        best_rating = rating;
-                        best_v = v;
+                    constexpr u32 LIMIT = 1024;
+                    if ((e - b) > LIMIT) {
+                        const u32 half = LIMIT >> 1;
+                        const u32 e_minus_LIMIT = e - LIMIT;
+                        u32 start = idx > half ? (idx - half) : b;
+                        if (start < b) start = b;
+                        if (start > e_minus_LIMIT) start = e_minus_LIMIT;
+                        b = start;
+                        e = start + LIMIT;
                     }
-                }
 
-                thm.preferred_neighbor(u) = best_v;
-            });
-            Kokkos::fence();
+                    f32 best_rating = -max_sentinel<f32>();
+                    vertex_t best_v = u;
+                    for (u32 i = b; i < e; ++i) {
+                        vertex_t v = thm.hash_vertex_array(i).v;
+                        if (v == u) { continue ; }
+                        if (matching(v) != v) { continue ; }
+                        if (partition.map(u) != partition.map(v)) { continue ; }
+                        if (g.weights(u) + g.weights(v) > thm.lmax / 2) { continue ; }
 
-            Kokkos::parallel_for("apply_matching", g.n, KOKKOS_LAMBDA(const vertex_t u) {
-                if (u == thm.preferred_neighbor(u)) { return; }
+                        f32 rating = (f32) (1) / (f32) (g.weights(u) * g.weights(v));
+                        rating += edge_noise(u, v);
+                        if (rating > best_rating) {
+                            best_rating = rating;
+                            best_v = v;
+                        }
+                    }
 
-                vertex_t v = thm.preferred_neighbor(u);
-                vertex_t preferred_v = thm.preferred_neighbor(v);
+                    thm.preferred_neighbor(u) = best_v;
+                });
+                KOKKOS_PROFILE_FENCE();
+            }
+            //
+            {
+                ScopedTimer _t("coarsening", "thm_leaf_matching", "apply_matching");
+                Kokkos::parallel_for("apply_matching", g.n, KOKKOS_LAMBDA(const vertex_t u) {
+                    if (u == thm.preferred_neighbor(u)) { return; }
 
-                if (matching(u) != u || matching(v) != v) { return; }
+                    vertex_t v = thm.preferred_neighbor(u);
+                    vertex_t preferred_v = thm.preferred_neighbor(v);
 
-                if (u == preferred_v && u < v) {
-                    matching(u) = v;
-                    matching(v) = u;
-                }
-            });
-            Kokkos::fence();
+                    if (matching(u) != u || matching(v) != v) { return; }
+
+                    if (u == preferred_v && u < v) {
+                        matching(u) = v;
+                        matching(v) = u;
+                    }
+                });
+                KOKKOS_PROFILE_FENCE();
+            }
         }
     }
 
     inline void twin_matching(TwoHopMatcher &thm,
                               const Graph &g,
-                              DeviceVertex &matching,
+                              UnmanagedDeviceVertex &matching,
                               const Partition &partition) {
-        ScopedTimer _t("coarsening", "TwoHopMatcher", "twin_matching");
-
         for (u32 iteration = 0; iteration < thm.max_iterations_twins; ++iteration) {
-            if ((f64) n_matched_v(matching, g.n) >= thm.threshold * (f64) g.n) { return; }
+            vertex_t n_matched = 0;
+            //
+            {
+                ScopedTimer _t("coarsening", "thm_twin_matching", "n_matched_v");
+                n_matched = n_matched_v(matching, g.n);
+            }
 
-            Kokkos::parallel_for("reset", g.n, KOKKOS_LAMBDA(const vertex_t u) {
-                thm.preferred_neighbor(u) = u;
-            });
-            Kokkos::fence();
+            if ((f64) n_matched >= thm.threshold * (f64) g.n) { return; }
+            //
+            {
+                ScopedTimer _t("coarsening", "thm_twin_matching", "reset");
+                Kokkos::parallel_for("reset", g.n, KOKKOS_LAMBDA(const vertex_t u) {
+                    thm.preferred_neighbor(u) = u;
+                });
+                KOKKOS_PROFILE_FENCE();
+            }
+            //
+            {
+                ScopedTimer _t("coarsening", "thm_twin_matching", "pick_neighbor");
+                Kokkos::parallel_for("pick_neighbor", g.n, KOKKOS_LAMBDA(const vertex_t u) {
+                    if (matching(u) != u) { return; } // already matched
 
-            Kokkos::parallel_for("pick_neighbor", g.n, KOKKOS_LAMBDA(const vertex_t u) {
-                if (matching(u) != u) { return; } // already matched
+                    // locate u’s bucket
+                    u32 idx = thm.vertex_to_index(u);
+                    u32 gid = thm.index_to_group_id(idx);
+                    u32 b = thm.group_begin(gid);
+                    u32 e = thm.group_begin(gid + 1);
 
-                // locate u’s bucket
-                u32 idx = thm.vertex_to_index(u);
-                u32 gid = thm.index_to_group_id(idx);
-                u32 b = thm.group_begin(gid);
-                u32 e = thm.group_begin(gid + 1);
-
-                constexpr u32 LIMIT = 1024;
-                if ((e - b) > LIMIT) {
-                    const u32 half = LIMIT >> 1;
-                    const u32 e_minus_LIMIT = e - LIMIT;
-                    u32 start = idx > half ? (idx - half) : b;
-                    if (start < b) start = b;
-                    if (start > e_minus_LIMIT) start = e_minus_LIMIT;
-                    b = start;
-                    e = start + LIMIT;
-                }
-
-                f32 best_rating = -max_sentinel<f32>();
-                vertex_t best_v = u;
-                for (u32 i = b; i < e; ++i) {
-                    vertex_t v = thm.hash_vertex_array(i).v;
-                    if (v == u) { continue ; }
-                    if (matching(v) != v) { continue ; }
-                    if (partition.map(u) != partition.map(v)) { continue ; }
-                    if (g.weights(u) + g.weights(v) > thm.lmax / 2) { continue ; }
-
-                    f32 rating = (f32) (1) / (f32) (g.weights(u) * g.weights(v));
-                    rating += edge_noise(u, v);
-                    if (rating > best_rating) {
-                        best_rating = rating;
-                        best_v = v;
+                    constexpr u32 LIMIT = 1024;
+                    if ((e - b) > LIMIT) {
+                        const u32 half = LIMIT >> 1;
+                        const u32 e_minus_LIMIT = e - LIMIT;
+                        u32 start = idx > half ? (idx - half) : b;
+                        if (start < b) start = b;
+                        if (start > e_minus_LIMIT) start = e_minus_LIMIT;
+                        b = start;
+                        e = start + LIMIT;
                     }
-                }
 
-                thm.preferred_neighbor(u) = best_v;
-            });
-            Kokkos::fence();
+                    f32 best_rating = -max_sentinel<f32>();
+                    vertex_t best_v = u;
+                    for (u32 i = b; i < e; ++i) {
+                        vertex_t v = thm.hash_vertex_array(i).v;
+                        if (v == u) { continue ; }
+                        if (matching(v) != v) { continue ; }
+                        if (partition.map(u) != partition.map(v)) { continue ; }
+                        if (g.weights(u) + g.weights(v) > thm.lmax / 2) { continue ; }
 
-            Kokkos::parallel_for("apply_matching", g.n, KOKKOS_LAMBDA(const vertex_t u) {
-                if (u == thm.preferred_neighbor(u)) { return; }
+                        f32 rating = (f32) (1) / (f32) (g.weights(u) * g.weights(v));
+                        rating += edge_noise(u, v);
+                        if (rating > best_rating) {
+                            best_rating = rating;
+                            best_v = v;
+                        }
+                    }
 
-                vertex_t v = thm.preferred_neighbor(u);
-                vertex_t preferred_v = thm.preferred_neighbor(v);
+                    thm.preferred_neighbor(u) = best_v;
+                });
+                KOKKOS_PROFILE_FENCE();
+            }
+            //
+            {
+                ScopedTimer _t("coarsening", "thm_twin_matching", "apply_matching");
+                Kokkos::parallel_for("apply_matching", g.n, KOKKOS_LAMBDA(const vertex_t u) {
+                    if (u == thm.preferred_neighbor(u)) { return; }
 
-                if (matching(u) != u || matching(v) != v) { return; }
+                    vertex_t v = thm.preferred_neighbor(u);
+                    vertex_t preferred_v = thm.preferred_neighbor(v);
 
-                if (u == preferred_v && u < v) {
-                    matching(u) = v;
-                    matching(v) = u;
-                }
-            });
-            Kokkos::fence();
+                    if (matching(u) != u || matching(v) != v) { return; }
+
+                    if (u == preferred_v && u < v) {
+                        matching(u) = v;
+                        matching(v) = u;
+                    }
+                });
+                KOKKOS_PROFILE_FENCE();
+            }
         }
     }
 
     inline void relative_matching(TwoHopMatcher &thm,
                                   const Graph &g,
-                                  DeviceVertex &matching,
+                                  UnmanagedDeviceVertex &matching,
                                   const Partition &partition) {
-        ScopedTimer _t("coarsening", "TwoHopMatcher", "relative_matching");
-
         for (u32 iteration = 0; iteration < thm.max_iterations_relatives; ++iteration) {
-            if ((f64) n_matched_v(matching, g.n) >= thm.threshold * (f64) g.n) { return; }
+            vertex_t n_matched = 0;
+            //
+            {
+                ScopedTimer _t("coarsening", "thm_relative_matching", "n_matched_v");
+                n_matched = n_matched_v(matching, g.n);
+            }
 
-            Kokkos::parallel_for("reset", g.n, KOKKOS_LAMBDA(const vertex_t u) {
-                thm.preferred_neighbor(u) = u;
-            });
-            Kokkos::fence();
+            if ((f64) n_matched >= thm.threshold * (f64) g.n) { return; }
+            //
+            {
+                ScopedTimer _t("coarsening", "thm_relative_matching", "reset");
+                Kokkos::parallel_for("reset", g.n, KOKKOS_LAMBDA(const vertex_t u) {
+                    thm.preferred_neighbor(u) = u;
+                });
+                KOKKOS_PROFILE_FENCE();
+            }
+            //
+            {
+                ScopedTimer _t("coarsening", "thm_relative_matching", "pick_neighbor");
+                Kokkos::parallel_for("pick_neighbor", g.n, KOKKOS_LAMBDA(const vertex_t u) {
+                    if (matching(u) != u) { return; } // ignore already matched
 
-            Kokkos::parallel_for("pick_neighbor", g.n, KOKKOS_LAMBDA(const vertex_t u) {
-                if (matching(u) != u) { return; } // ignore already matched
+                    vertex_t best_v = u;
+                    f32 best_rating = 0;
 
-                vertex_t best_v = u;
-                f32 best_rating = 0;
+                    for (u32 i = g.neighborhood(u); i < g.neighborhood(u + 1); ++i) {
+                        vertex_t mid_v = g.edges_v(i);
+                        weight_t mid_e_w = g.edges_w(i);
+                        vertex_t mid_deg = g.neighborhood(mid_v + 1) - g.neighborhood(mid_v);
+                        if (mid_deg > 10) { continue; } // avoid matchmaker with high degree
 
-                for (u32 i = g.neighborhood(u); i < g.neighborhood(u + 1); ++i) {
-                    vertex_t mid_v = g.edges_v(i);
-                    weight_t mid_e_w = g.edges_w(i);
-                    vertex_t mid_deg = g.neighborhood(mid_v + 1) - g.neighborhood(mid_v);
-                    if (mid_deg > 10) { continue; } // avoid matchmaker with high degree
+                        for (u32 j = g.neighborhood(mid_v); j < g.neighborhood(mid_v + 1); ++j) {
+                            vertex_t v = g.edges_v(j);
+                            weight_t v_e_w = g.edges_w(j);
 
-                    for (u32 j = g.neighborhood(mid_v); j < g.neighborhood(mid_v + 1); ++j) {
-                        vertex_t v = g.edges_v(j);
-                        weight_t v_e_w = g.edges_w(j);
+                            if (u == v) { continue; }
+                            if (matching(v) != v) { continue; } // ignore already matched
+                            if (partition.map(u) != partition.map(v)) { continue ; }
+                            if (g.weights(u) + g.weights(v) > thm.lmax / 2) { continue; } // resulting weight to large
 
-                        if (u == v) { continue; }
-                        if (matching(v) != v) { continue; } // ignore already matched
-                        if (partition.map(u) != partition.map(v)) { continue ; }
-                        if (g.weights(u) + g.weights(v) > thm.lmax / 2) { continue; } // resulting weight to large
+                            f32 rating = (f32) ((mid_e_w + v_e_w) * (mid_e_w + v_e_w)) / (f32) (g.weights(u) * g.weights(v));
+                            rating += edge_noise(u, v);
 
-                        f32 rating = (f32) ((mid_e_w + v_e_w) * (mid_e_w + v_e_w)) / (f32) (g.weights(u) * g.weights(v));
-                        rating += edge_noise(u, v);
-
-                        if (rating > best_rating) {
-                            best_v = v;
-                            best_rating = rating;
+                            if (rating > best_rating) {
+                                best_v = v;
+                                best_rating = rating;
+                            }
                         }
                     }
-                }
 
-                thm.preferred_neighbor(u) = best_v;
-            });
-            Kokkos::fence();
+                    thm.preferred_neighbor(u) = best_v;
+                });
+                KOKKOS_PROFILE_FENCE();
+            }
+            //
+            {
+                ScopedTimer _t("coarsening", "thm_relative_matching", "apply_matching");
+                Kokkos::parallel_for("apply_matching", g.n, KOKKOS_LAMBDA(const vertex_t u) {
+                    vertex_t v = thm.preferred_neighbor(u);
+                    vertex_t preferred_v = thm.preferred_neighbor(v);
 
-            Kokkos::parallel_for("apply_matching", g.n, KOKKOS_LAMBDA(const vertex_t u) {
-                vertex_t v = thm.preferred_neighbor(u);
-                vertex_t preferred_v = thm.preferred_neighbor(v);
+                    if (matching(u) != u || matching(v) != v) { return; }
 
-                if (matching(u) != u || matching(v) != v) { return; }
-
-                if (u == preferred_v && u < v) {
-                    matching(u) = v;
-                    matching(v) = u;
-                }
-            });
-            Kokkos::fence();
+                    if (u == preferred_v && u < v) {
+                        matching(u) = v;
+                        matching(v) = u;
+                    }
+                });
+                KOKKOS_PROFILE_FENCE();
+            }
         }
     }
 
-    inline Mapping two_hop_matcher_get_mapping(TwoHopMatcher &thm,
-                                               const Graph &g,
-                                               const Partition &partition) {
-        ScopedTimer _t_allocate("coarsening", "misc", "allocate_matching");
+    inline Mapping two_hop_matcher_get_mapping(const Graph &g,
+                                               const Partition &partition,
+                                               const weight_t &lmax,
+                                               KokkosMemoryStack &mem_stack,
+                                               KokkosMemoryStack &small_mem_stack) {
+        assert_is_empty(small_mem_stack);
 
-        DeviceVertex matching = DeviceVertex(Kokkos::view_alloc(Kokkos::WithoutInitializing, "preferred_neighbors"), g.n);
-        Kokkos::parallel_for("set_matching", g.n, KOKKOS_LAMBDA(const vertex_t u) { matching(u) = u; });
-        Kokkos::fence();
+        TwoHopMatcher thm = initialize_thm(g.n, g.m, lmax, small_mem_stack);
 
-        _t_allocate.stop();
+        UnmanagedDeviceVertex matching;
+        //
+        {
+            ScopedTimer _t("coarsening", "TwoHopMatcher", "allocate_matching");
+            auto *matching_ptr = (vertex_t *) get_chunk(small_mem_stack, sizeof(vertex_t) * g.n);
+            matching = UnmanagedDeviceVertex(matching_ptr, g.n);
+            Kokkos::parallel_for("set_matching", g.n, KOKKOS_LAMBDA(const vertex_t u) {
+                matching(u) = u;
+            });
+            KOKKOS_PROFILE_FENCE();
+        }
 
         heavy_edge_matching(thm, g, matching, partition);
         vertex_t n_matched = n_matched_v(matching, g.n);
@@ -560,7 +679,13 @@ namespace GPU_HeiPa {
             relative_matching(thm, g, matching, partition);
         }
 
-        return determine_translation(matching, g.n);
+        pop(small_mem_stack); // pop the matching vec
+        free_thm(thm, small_mem_stack);
+
+        Mapping mapping = determine_mapping(matching, g.n, mem_stack, small_mem_stack);
+
+        assert_is_empty(small_mem_stack);
+        return mapping;
     }
 }
 

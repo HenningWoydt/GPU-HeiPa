@@ -28,6 +28,7 @@
 #define GPU_HEIPA_GRAPH_H
 
 #include "host_graph.h"
+#include "kokkos_memory_stack.h"
 #include "mapping.h"
 #include "../utility/definitions.h"
 #include "../utility/util.h"
@@ -39,14 +40,15 @@ namespace GPU_HeiPa {
         vertex_t m = 0;
         weight_t g_weight = 0;
 
-        DeviceWeight weights;
-        DeviceVertex neighborhood;
-        DeviceVertex edges_u;
-        DeviceVertex edges_v;
-        DeviceWeight edges_w;
+        UnmanagedDeviceWeight weights;
+        UnmanagedDeviceVertex neighborhood;
+        UnmanagedDeviceVertex edges_u;
+        UnmanagedDeviceVertex edges_v;
+        UnmanagedDeviceWeight edges_w;
     };
 
-    inline Graph from_HostGraph(const HostGraph &host_g) {
+    inline Graph from_HostGraph(const HostGraph &host_g,
+                                KokkosMemoryStack &mem_stack) {
         ScopedTimer t_init{"io", "from_HostGraph", "initialize"};
         Graph g;
 
@@ -54,11 +56,17 @@ namespace GPU_HeiPa {
         g.m = host_g.m;
         g.g_weight = host_g.g_weight;
 
-        g.weights = DeviceWeight(Kokkos::view_alloc(Kokkos::WithoutInitializing, "vertex_weights"), host_g.n);
-        g.neighborhood = DeviceVertex(Kokkos::view_alloc(Kokkos::WithoutInitializing, "neighborhood"), host_g.n + 1);
-        g.edges_u = DeviceVertex(Kokkos::view_alloc(Kokkos::WithoutInitializing, "edges_u"), host_g.m);
-        g.edges_v = DeviceVertex(Kokkos::view_alloc(Kokkos::WithoutInitializing, "edges_v"), host_g.m);
-        g.edges_w = DeviceWeight(Kokkos::view_alloc(Kokkos::WithoutInitializing, "edges_w"), host_g.m);
+        auto *w_ptr = (weight_t *) get_chunk(mem_stack, sizeof(weight_t) * host_g.n);
+        auto *nb_ptr = (vertex_t *) get_chunk(mem_stack, sizeof(vertex_t) * (host_g.n + 1));
+        auto *eu_ptr = (vertex_t *) get_chunk(mem_stack, sizeof(vertex_t) * host_g.m);
+        auto *ev_ptr = (vertex_t *) get_chunk(mem_stack, sizeof(vertex_t) * host_g.m);
+        auto *ew_ptr = (weight_t *) get_chunk(mem_stack, sizeof(weight_t) * host_g.m);
+
+        g.weights = UnmanagedDeviceWeight(w_ptr, host_g.n);
+        g.neighborhood = UnmanagedDeviceVertex(nb_ptr, host_g.n + 1);
+        g.edges_u = UnmanagedDeviceVertex(eu_ptr, host_g.m);
+        g.edges_v = UnmanagedDeviceVertex(ev_ptr, host_g.m);
+        g.edges_w = UnmanagedDeviceWeight(ew_ptr, host_g.m);
         t_init.stop();
 
         ScopedTimer t_copy{"io", "from_HostGraph", "copy"};
@@ -66,7 +74,7 @@ namespace GPU_HeiPa {
         Kokkos::deep_copy(g.neighborhood, host_g.neighborhood);
         Kokkos::deep_copy(g.edges_v, host_g.edges_v);
         Kokkos::deep_copy(g.edges_w, host_g.edges_w);
-        Kokkos::fence();
+        KOKKOS_PROFILE_FENCE();
         t_copy.stop();
 
         ScopedTimer t_fill_edges_u{"io", "from_HostGraph", "fill_edges_u"};
@@ -77,14 +85,18 @@ namespace GPU_HeiPa {
                 g.edges_u(i) = u;
             }
         });
-        Kokkos::fence();
+        KOKKOS_PROFILE_FENCE();
         t_fill_edges_u.stop();
 
         return g;
     }
 
     inline Graph from_Graph_Mapping(const Graph &old_g,
-                                    const Mapping &mapping) {
+                                    const Mapping &mapping,
+                                    KokkosMemoryStack &mem_stack,
+                                    KokkosMemoryStack &small_mem_stack) {
+        assert_is_empty(small_mem_stack);
+
         // initialize vars and allocate memory
         ScopedTimer t_initialize{"contraction", "from_Graph_Mapping", "initialize"};
         Graph coarse_g;
@@ -92,25 +104,36 @@ namespace GPU_HeiPa {
         coarse_g.n = mapping.coarse_n;
         coarse_g.g_weight = old_g.g_weight;
 
-        coarse_g.weights = DeviceWeight(Kokkos::view_alloc(Kokkos::WithoutInitializing, "vertex_weights"), mapping.coarse_n);
-        coarse_g.neighborhood = DeviceVertex(Kokkos::view_alloc(Kokkos::WithoutInitializing, "neighborhood"), mapping.coarse_n + 1);
+        auto *w_ptr = (weight_t *) get_chunk(mem_stack, sizeof(weight_t) * coarse_g.n);
+        auto *nb_ptr = (vertex_t *) get_chunk(mem_stack, sizeof(vertex_t) * (coarse_g.n + 1));
+        coarse_g.weights = UnmanagedDeviceWeight(w_ptr, coarse_g.n);
+        coarse_g.neighborhood = UnmanagedDeviceVertex(nb_ptr, coarse_g.n + 1);
 
-        DeviceVertex degrees = DeviceVertex(Kokkos::view_alloc(Kokkos::WithoutInitializing, "degrees"), mapping.coarse_n);
-        DeviceVertex max_degrees = DeviceVertex(Kokkos::view_alloc(Kokkos::WithoutInitializing, "max_degrees"), mapping.coarse_n);
+        auto *degrees_ptr = (vertex_t *) get_chunk(small_mem_stack, sizeof(vertex_t) * mapping.coarse_n);
+        auto *max_degrees_ptr = (vertex_t *) get_chunk(small_mem_stack, sizeof(vertex_t) * mapping.coarse_n);
+        UnmanagedDeviceVertex degrees = UnmanagedDeviceVertex(degrees_ptr, mapping.coarse_n);
+        UnmanagedDeviceVertex max_degrees = UnmanagedDeviceVertex(max_degrees_ptr, mapping.coarse_n);
 
-        DeviceU32 hash_offsets = DeviceU32(Kokkos::view_alloc(Kokkos::WithoutInitializing, "hash_offsets"), coarse_g.n + 1);
-        DeviceVertex hash_keys("hash_keys", old_g.m);
-        DeviceWeight hash_vals("hash_vals", old_g.m);
+        auto *hash_offsets_ptr = (u32 *) get_chunk(small_mem_stack, sizeof(u32) * (coarse_g.n + 1));
+        auto *hash_keys_ptr = (vertex_t *) get_chunk(small_mem_stack, sizeof(vertex_t) * old_g.m);
+        auto *hash_vals_ptr = (weight_t *) get_chunk(small_mem_stack, sizeof(weight_t) * old_g.m);
+        UnmanagedDeviceU32 hash_offsets = UnmanagedDeviceU32(hash_offsets_ptr, coarse_g.n + 1);
+        UnmanagedDeviceVertex hash_keys = UnmanagedDeviceVertex(hash_keys_ptr, old_g.m);
+        UnmanagedDeviceWeight hash_vals = UnmanagedDeviceWeight(hash_vals_ptr, old_g.m);
+
         t_initialize.stop();
 
         // set memory to 0
         ScopedTimer t_initialize_set_0{"contraction", "from_Graph_Mapping", "initialize_set_0"};
-        Kokkos::deep_copy(coarse_g.weights, 0);
-        Kokkos::deep_copy(degrees, 0);
-        Kokkos::deep_copy(max_degrees, 0);
-        Kokkos::deep_copy(hash_offsets, 0);
-        Kokkos::deep_copy(hash_keys, coarse_g.n);
-        Kokkos::deep_copy(hash_vals, 0);
+        Kokkos::parallel_for("init_graph_state", old_g.m, KOKKOS_LAMBDA(const size_t i) {
+            if (i < coarse_g.weights.extent(0)) coarse_g.weights(i) = 0;
+            if (i < degrees.extent(0)) degrees(i) = 0;
+            if (i < max_degrees.extent(0)) max_degrees(i) = 0;
+            if (i < hash_offsets.extent(0)) hash_offsets(i) = 0;
+            if (i < hash_vals.extent(0)) hash_vals(i) = 0;
+            if (i < hash_keys.extent(0)) hash_keys(i) = coarse_g.n;
+        });
+        KOKKOS_PROFILE_FENCE();
         t_initialize_set_0.stop();
 
         // determine weight of new vertices and maximum degree
@@ -123,7 +146,7 @@ namespace GPU_HeiPa {
             Kokkos::atomic_add(&max_degrees(v), deg);
             Kokkos::atomic_add(&coarse_g.weights(v), u_w);
         });
-        Kokkos::fence();
+        KOKKOS_PROFILE_FENCE();
         t_max_degrees.stop();
 
         // prefix sum over all degrees
@@ -133,7 +156,7 @@ namespace GPU_HeiPa {
             if (final) hash_offsets(i) = running;
             running += cnt;
         });
-        Kokkos::fence();
+        KOKKOS_PROFILE_FENCE();
         t_max_degrees_prefix_sum.stop();
 
         ScopedTimer t_hash_edges{"contraction", "from_Graph_Mapping", "hash_edges"};
@@ -152,15 +175,7 @@ namespace GPU_HeiPa {
             u32 len = end - beg;
             if (len == 0) { return; }
 
-            // 32-bit multiplicative mix on v_new; keep in range [0,size)
-            u32 x = v_new;
-            x ^= x >> 16;
-            x *= 0x7feb352dU;
-            x ^= x >> 15;
-            x *= 0x846ca68bU;
-            x ^= x >> 16;
-
-            uint32_t idx = beg + x % len;
+            uint32_t idx = beg + v_new % len;
             for (u32 j = 0; j < len; ++j) {
                 if (idx == end) { idx = beg; }
                 vertex_t old = Kokkos::atomic_compare_exchange(&hash_keys(idx), coarse_g.n, v_new);
@@ -172,7 +187,7 @@ namespace GPU_HeiPa {
                 idx += 1;
             }
         });
-        Kokkos::fence();
+        KOKKOS_PROFILE_FENCE();
         t_hash_edges.stop();
 
         ScopedTimer t_build_offsets{"contraction", "from_Graph_Mapping", "build_offsets"};
@@ -181,16 +196,18 @@ namespace GPU_HeiPa {
             if (final) coarse_g.neighborhood(i) = running;
             running += cnt;
         });
-        Kokkos::fence();
         Kokkos::deep_copy(coarse_g.m, Kokkos::subview(coarse_g.neighborhood, coarse_g.n)); // copy final number of edges m
         Kokkos::fence();
 
         t_build_offsets.stop();
         ScopedTimer t_allocate_edges{"contraction", "from_Graph_Mapping", "allocate_edges"};
 
-        coarse_g.edges_u = DeviceVertex(Kokkos::view_alloc(Kokkos::WithoutInitializing, "edges_u"), coarse_g.m);
-        coarse_g.edges_v = DeviceVertex(Kokkos::view_alloc(Kokkos::WithoutInitializing, "edges_v"), coarse_g.m);
-        coarse_g.edges_w = DeviceWeight(Kokkos::view_alloc(Kokkos::WithoutInitializing, "edges_w"), coarse_g.m);
+        auto *eu_ptr = (vertex_t *) get_chunk(mem_stack, sizeof(vertex_t) * coarse_g.m);
+        auto *ev_ptr = (vertex_t *) get_chunk(mem_stack, sizeof(vertex_t) * coarse_g.m);
+        auto *ew_ptr = (weight_t *) get_chunk(mem_stack, sizeof(weight_t) * coarse_g.m);
+        coarse_g.edges_u = UnmanagedDeviceVertex(eu_ptr, coarse_g.m);
+        coarse_g.edges_v = UnmanagedDeviceVertex(ev_ptr, coarse_g.m);
+        coarse_g.edges_w = UnmanagedDeviceWeight(ew_ptr, coarse_g.m);
 
         t_allocate_edges.stop();
         ScopedTimer t_fill_coarse_graph{"contraction", "from_Graph_Mapping", "fill_coarse_graph"};
@@ -212,7 +229,7 @@ namespace GPU_HeiPa {
                 }
             }
         });
-        Kokkos::fence();
+        KOKKOS_PROFILE_FENCE();
 
         t_fill_coarse_graph.stop();
         ScopedTimer t_fill_coarse_u{"contraction", "from_Graph_Mapping", "fill_coarse_u"};
@@ -224,7 +241,15 @@ namespace GPU_HeiPa {
                 coarse_g.edges_u(i) = u;
             }
         });
-        Kokkos::fence();
+        KOKKOS_PROFILE_FENCE();
+        t_fill_coarse_u.stop();
+
+        pop(small_mem_stack);
+        pop(small_mem_stack);
+        pop(small_mem_stack);
+        pop(small_mem_stack);
+        pop(small_mem_stack);
+        assert_is_empty(small_mem_stack);
 
         return coarse_g;
     }
@@ -248,6 +273,15 @@ namespace GPU_HeiPa {
         Kokkos::fence();
 
         return host_g;
+    }
+
+    inline void free_graph(Graph &g,
+                           KokkosMemoryStack &mem_stack) {
+        pop(mem_stack);
+        pop(mem_stack);
+        pop(mem_stack);
+        pop(mem_stack);
+        pop(mem_stack);
     }
 }
 

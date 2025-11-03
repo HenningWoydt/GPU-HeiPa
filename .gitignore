@@ -9,7 +9,4 @@ build/
 
 data/
 
-extern/kokkos-4.7.00
-extern/kokkos-kernels-4.7.00
-extern/local
-extern/KaHIP
+extern/

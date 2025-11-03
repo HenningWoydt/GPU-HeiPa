@@ -24,8 +24,8 @@
  * SOFTWARE.
  ******************************************************************************/
 
-#ifndef GPU_HEIPA_JET_LABEL_PROPAGATION_H
-#define GPU_HEIPA_JET_LABEL_PROPAGATION_H
+#ifndef GPU_HEIPA_JET_LABEL_PROPAGATION_LIST_H
+#define GPU_HEIPA_JET_LABEL_PROPAGATION_LIST_H
 
 #include "../utility/definitions.h"
 #include "../utility/kokkos_util.h"
@@ -34,10 +34,10 @@
 #include "../datastructures/block_connectivity.h"
 
 namespace GPU_HeiPa {
-    constexpr u32 MAX_SLOTS = 10;
-    constexpr u32 RHO = 4;
+    // constexpr u32 MAX_SLOTS = 10;
+    // constexpr u32 RHO = 4;
 
-    struct JetLabelPropagation {
+    struct JetLabelPropagationList {
         vertex_t n = 0;
         vertex_t m = 0;
         partition_t k = 0;
@@ -66,14 +66,14 @@ namespace GPU_HeiPa {
         DeviceVertex flat_buckets;
     };
 
-    inline JetLabelPropagation initialize_lp(const vertex_t t_n,
-                                             const vertex_t t_m,
-                                             const partition_t t_k,
-                                             const weight_t t_lmax,
-                                             KokkosMemoryStack &small_mem_stack) {
-        ScopedTimer _t("io", "JetLabelPropagation", "allocate");
+    inline JetLabelPropagationList initialize_lp_list(const vertex_t t_n,
+                                                      const vertex_t t_m,
+                                                      const partition_t t_k,
+                                                      const weight_t t_lmax,
+                                                      KokkosMemoryStack &small_mem_stack) {
+        ScopedTimer _t("io", "JetLabelPropagationList", "allocate");
 
-        JetLabelPropagation lp;
+        JetLabelPropagationList lp;
 
         lp.n = t_n;
         lp.m = t_m;
@@ -97,13 +97,8 @@ namespace GPU_HeiPa {
         return lp;
     }
 
-    inline void free_lp(JetLabelPropagation &lp,
-                        KokkosMemoryStack &small_mem_stack) {
-        free_partition(lp.partition, small_mem_stack);
-    }
-
     KOKKOS_INLINE_FUNCTION
-    u32 loss_slot(const weight_t gain, const JetLabelPropagation &lp) {
+    u32 loss_slot(const weight_t gain, const JetLabelPropagationList &lp) {
         if (gain > 0) return 0;  // best: positive gain
         if (gain == 0) return 1; // tie
 
@@ -112,17 +107,17 @@ namespace GPU_HeiPa {
     }
 
     KOKKOS_INLINE_FUNCTION
-    u32 idx_psm(partition_t p, u32 s, u32 m, const JetLabelPropagation &lp) {
+    u32 idx_psm(partition_t p, u32 s, u32 m, const JetLabelPropagationList &lp) {
         return (p * MAX_SLOTS + s) * RHO + m;
     }
 
     KOKKOS_INLINE_FUNCTION
-    u32 idx_dsm(partition_t d, u32 s, u32 m, const JetLabelPropagation &lp) {
+    u32 idx_dsm(partition_t d, u32 s, u32 m, const JetLabelPropagationList &lp) {
         return (d * MAX_SLOTS + s) * RHO + m;
     }
 
     KOKKOS_INLINE_FUNCTION
-    bool ord_smaller(const JetLabelPropagation &lp, vertex_t u, vertex_t v) {
+    bool ord_smaller(const JetLabelPropagationList &lp, vertex_t u, vertex_t v) {
         weight_t gain_u = unpack_score(lp.weight_id(u));
         weight_t gain_v = unpack_score(lp.weight_id(v));
 
@@ -131,7 +126,7 @@ namespace GPU_HeiPa {
         return false;
     }
 
-    inline void apply_moves(JetLabelPropagation &lp,
+    inline void apply_moves(JetLabelPropagationList &lp,
                             Graph &g,
                             BlockConnectivity &bc) {
         move(bc, g, lp.partition, lp.to_move, lp.weight_id);
@@ -150,7 +145,7 @@ namespace GPU_HeiPa {
         Kokkos::fence();
     }
 
-    inline void jetlp(JetLabelPropagation &lp,
+    inline void jetlp(JetLabelPropagationList &lp,
                       Graph &g,
                       BlockConnectivity &bc) {
         ScopedTimer _t_allocate("refine", "jetlp", "allocate");
@@ -252,7 +247,7 @@ namespace GPU_HeiPa {
         apply_moves(lp, g, bc);
     }
 
-    inline void jetrw(JetLabelPropagation &lp,
+    inline void jetrw(JetLabelPropagationList &lp,
                       Graph &g,
                       BlockConnectivity &bc) {
         ScopedTimer _t_allocate("rebalance", "jetrw", "allocate");
@@ -380,7 +375,7 @@ namespace GPU_HeiPa {
         apply_moves(lp, g, bc);
     }
 
-    inline void jetrs(JetLabelPropagation &lp,
+    inline void jetrs(JetLabelPropagationList &lp,
                       Graph &g,
                       BlockConnectivity &bc) {
         ScopedTimer _t_allocate("rebalance", "jetrs", "allocate");
@@ -512,14 +507,14 @@ namespace GPU_HeiPa {
         apply_moves(lp, g, bc);
     }
 
-    inline void refine(Graph &g,
-                       Partition &partition,
-                       partition_t k,
-                       weight_t lmax,
-                       u32 max_level,
-                       u32 level,
-                       KokkosMemoryStack &small_mem_stack) {
-        JetLabelPropagation lp = initialize_lp(g.n, g.m, k, lmax, small_mem_stack);
+    inline void refine_list(Graph &g,
+                            Partition &partition,
+                            partition_t k,
+                            weight_t lmax,
+                            u32 max_level,
+                            u32 level,
+                            KokkosMemoryStack &small_mem_stack) {
+        JetLabelPropagationList lp = initialize_lp_list(g.n, g.m, k, lmax, small_mem_stack);
 
         if (level == 0) { lp.conn_c = 0.25; }
 
@@ -606,8 +601,8 @@ namespace GPU_HeiPa {
             iteration += 1;
         }
 
-        free_lp(lp, small_mem_stack);
+        free_partition(lp.partition, small_mem_stack);
     }
 }
 
-#endif //GPU_HEIPA_JET_LABEL_PROPAGATION_H
+#endif //GPU_HEIPA_JET_LABEL_PROPAGATION_LIST_H

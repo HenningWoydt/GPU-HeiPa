@@ -31,6 +31,41 @@ find_path(KAHIP_INCLUDE_DIR
 message(STATUS "Found KaHIP: ${KAHIP_LIBRARY}")
 include_directories(${KAHIP_INCLUDE_DIR})
 
+# --- GKlib library ---
+set(GKLIB_ROOT "${CMAKE_CURRENT_SOURCE_DIR}/extern/local/GKlib")
+find_library(GKLIB_LIBRARY
+        NAMES GKlib libGKlib gklib libgklib
+        PATHS ${GKLIB_ROOT}/lib
+        NO_DEFAULT_PATH
+)
+
+find_path(GKLIB_INCLUDE_DIR
+        NAMES gk_types.h GKlib.h
+        PATHS ${GKLIB_ROOT}/include
+        NO_DEFAULT_PATH
+)
+
+message(STATUS "Found GKlib: ${GKLIB_LIBRARY}")
+include_directories(${GKLIB_INCLUDE_DIR})
+
+# --- METIS library ---
+set(METIS_ROOT "${CMAKE_CURRENT_SOURCE_DIR}/extern/local/METIS")
+find_library(METIS_LIBRARY
+        NAMES metis libmetis
+        PATHS ${METIS_ROOT}/lib
+        NO_DEFAULT_PATH
+)
+
+find_path(METIS_INCLUDE_DIR
+        NAMES metis.h
+        PATHS ${METIS_ROOT}/include
+        NO_DEFAULT_PATH
+)
+
+message(STATUS "Found METIS: ${METIS_LIBRARY}")
+include_directories(${METIS_INCLUDE_DIR})
+
+
 # --- Kokkos Setup ---
 set(KokkosKernels_DIR "${CMAKE_CURRENT_SOURCE_DIR}/extern/local/kokkos-kernels/lib/cmake/KokkosKernels")
 find_package(KokkosKernels CONFIG REQUIRED)
@@ -49,10 +84,13 @@ set(CMAKE_CXX_FLAGS_DEBUG "-g -march=native -pipe -Wall -Wextra -Wno-unused-vari
 file(GLOB_RECURSE SOURCES CONFIGURE_DEPENDS "src/*.cpp")
 file(GLOB_RECURSE HEADERS CONFIGURE_DEPENDS "src/*.h")
 
-add_executable(GPU-HeiPa main.cpp ${SOURCES} ${HEADERS})
+add_executable(GPU-HeiPa main.cpp ${SOURCES} ${HEADERS}
+        src/initial_partitioning/metis_initial_partitioning.h)
 
 target_link_libraries(GPU-HeiPa
         PRIVATE
         ${KAHIP_LIBRARY}
+        ${GKLIB_LIBRARY}
+        ${METIS_LIBRARY}
         Kokkos::kokkos
 )

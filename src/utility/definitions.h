@@ -76,6 +76,20 @@ namespace GPU_HeiPa {
     using DeviceS64 = Kokkos::View<s64 *, DeviceMemorySpace>;
     using DeviceF32 = Kokkos::View<f32 *, DeviceMemorySpace>;
     using DeviceF64 = Kokkos::View<f64 *, DeviceMemorySpace>;
+
+    using UnmanagedDeviceVertex = Kokkos::View<vertex_t *, DeviceMemorySpace, Kokkos::MemoryTraits<Kokkos::Unmanaged> >;
+    using UnmanagedDeviceWeight = Kokkos::View<weight_t *, DeviceMemorySpace, Kokkos::MemoryTraits<Kokkos::Unmanaged> >;
+    using UnmanagedDevicePartition = Kokkos::View<partition_t *, DeviceMemorySpace, Kokkos::MemoryTraits<Kokkos::Unmanaged> >;
+    using UnmanagedDeviceU8 = Kokkos::View<u8 *, DeviceMemorySpace, Kokkos::MemoryTraits<Kokkos::Unmanaged> >;
+    using UnmanagedDeviceU16 = Kokkos::View<u16 *, DeviceMemorySpace, Kokkos::MemoryTraits<Kokkos::Unmanaged> >;
+    using UnmanagedDeviceU32 = Kokkos::View<u32 *, DeviceMemorySpace, Kokkos::MemoryTraits<Kokkos::Unmanaged> >;
+    using UnmanagedDeviceU64 = Kokkos::View<u64 *, DeviceMemorySpace, Kokkos::MemoryTraits<Kokkos::Unmanaged> >;
+    using UnmanagedDeviceS8 = Kokkos::View<s8 *, DeviceMemorySpace, Kokkos::MemoryTraits<Kokkos::Unmanaged> >;
+    using UnmanagedDeviceS16 = Kokkos::View<s16 *, DeviceMemorySpace, Kokkos::MemoryTraits<Kokkos::Unmanaged> >;
+    using UnmanagedDeviceS32 = Kokkos::View<s32 *, DeviceMemorySpace, Kokkos::MemoryTraits<Kokkos::Unmanaged> >;
+    using UnmanagedDeviceS64 = Kokkos::View<s64 *, DeviceMemorySpace, Kokkos::MemoryTraits<Kokkos::Unmanaged> >;
+    using UnmanagedDeviceF32 = Kokkos::View<f32 *, DeviceMemorySpace, Kokkos::MemoryTraits<Kokkos::Unmanaged> >;
+    using UnmanagedDeviceF64 = Kokkos::View<f64 *, DeviceMemorySpace, Kokkos::MemoryTraits<Kokkos::Unmanaged> >;
 }
 
 #endif //GPU_HEIPA_DEFINITIONS_H
