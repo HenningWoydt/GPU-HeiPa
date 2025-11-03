@@ -62,6 +62,8 @@ namespace GPU_HeiPa {
         // Set default options and configure
         METIS_SetDefaultOptions(options);
         options[METIS_OPTION_SEED] = (idx_t) seed;
+        options[METIS_OPTION_NCUTS] = 1;      // Single cut for determinism
+        options[METIS_OPTION_NUMBERING] = 0;  // C-style numbering
         
         // Set imbalance constraint
         for (int i = 0; i < ncon; i++) {

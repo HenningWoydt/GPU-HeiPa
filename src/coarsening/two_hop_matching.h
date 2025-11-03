@@ -444,7 +444,7 @@ namespace GPU_HeiPa {
 
                         f32 rating = (f32) (1) / (f32) (g.weights(u) * g.weights(v));
                         rating += edge_noise(u, v);
-                        if (rating > best_rating) {
+                        if (rating > best_rating || (rating == best_rating && u < best_v)) {
                             best_rating = rating;
                             best_v = v;
                         }
@@ -530,7 +530,7 @@ namespace GPU_HeiPa {
 
                         f32 rating = (f32) (1) / (f32) (g.weights(u) * g.weights(v));
                         rating += edge_noise(u, v);
-                        if (rating > best_rating) {
+                        if (rating > best_rating || (rating == best_rating && u < best_v)) {
                             best_rating = rating;
                             best_v = v;
                         }
@@ -676,7 +676,7 @@ namespace GPU_HeiPa {
         }
 
         if ((f64) n_matched < thm.threshold * (f64) g.n) {
-            relative_matching(thm, g, matching, partition);
+            // relative_matching(thm, g, matching, partition);
         }
 
         pop(small_mem_stack); // pop the matching vec

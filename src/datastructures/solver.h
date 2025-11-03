@@ -216,8 +216,16 @@ namespace GPU_HeiPa {
         void initial_partitioning() {
             auto p = get_time_point();
 
-            // kaffpa_initial_partition(graphs.back(), (int) k, config.imbalance, (u32) config.seed, partition);
-            metis_initial_partition(graphs.back(), (int) k, config.imbalance, (u32) config.seed, partition);
+            // Deterministic hash-based initial partitioning
+            vertex_t current_n = graphs.back().n;
+            HostPartition host_partition = HostPartition(Kokkos::view_alloc(Kokkos::WithoutInitializing, "host_partition"), current_n);
+            for (vertex_t u = 0; u < current_n; ++u) {
+                u32 hash = (u * 2654435761u) ^ config.seed;
+                host_partition(u) = hash % k;
+            }
+            auto partition_subview = Kokkos::subview(partition.map, Kokkos::make_pair(vertex_t(0), current_n));
+            Kokkos::deep_copy(partition_subview, host_partition);
+            
             recalculate_weights(partition, graphs.back());
 
             initial_edge_cut = edge_cut(graphs.back(), partition);
