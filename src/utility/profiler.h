@@ -91,12 +91,12 @@ namespace GPU_HeiPa {
 
     struct KTKernels {
         std::unordered_map<std::string, KTStat> kernels; // kernel name -> stat
-        KTStat agg; // aggregate of kernels
+        KTStat agg;                                      // aggregate of kernels
     };
 
     struct KTGroup {
         std::unordered_map<std::string, KTKernels> functions; // function name -> kernels
-        KTStat agg; // aggregate of functions
+        KTStat agg;                                           // aggregate of functions
     };
 
     // ========== Profiler (hierarchical) ==========
@@ -124,16 +124,16 @@ namespace GPU_HeiPa {
                                        unsigned int name_width = 48,
                                        bool force_color = false,
                                        bool use_basic_colors = false) const {
-#if !ENABLE_PROFILER
+            #if !ENABLE_PROFILER
             os << "Profiler disabled (ENABLE_PROFILER=0).\n";
             return;
-#endif
+            #endif
             if (total_.total_ms <= 0.0) {
                 os << "Profiler: no samples recorded.\n";
                 return;
             }
 
-            // Color gating
+            // Color gating (unchanged) ...
             const bool no_color_env = std::getenv("NO_COLOR") != nullptr;
             bool color_ok = !no_color_env && (force_color || true);
 
@@ -141,7 +141,6 @@ namespace GPU_HeiPa {
             auto apply_bg = [&](const std::string &s, bool header, bool even)-> std::string {
                 if (!color_ok) return s + '\n';
                 const char *bg = header ? theme.header_bg : (even ? theme.even_bg : theme.odd_bg);
-                // Paint the whole line with bg + foreground text color, then reset.
                 return std::string(bg) + theme.text_fg + s + theme.reset + '\n';
             };
             auto apply_rule = [&](const std::string &s)-> std::string {
@@ -167,6 +166,16 @@ namespace GPU_HeiPa {
             };
             auto pct_of_total = [&](double ms) { return total_.total_ms > 0.0 ? (ms * 100.0 / total_.total_ms) : 0.0; };
 
+            // --- New: IO-less baseline
+            double io_ms = 0.0; {
+                auto it = groups_.find("io"); // your group is named "io"
+                if (it != groups_.end()) io_ms = it->second.agg.total_ms;
+            }
+            const double denom_no_io = std::max(0.0, total_.total_ms - io_ms);
+            auto pct_no_io = [&](double ms) {
+                return denom_no_io > 0.0 ? (ms * 100.0 / denom_no_io) : 0.0;
+            };
+
             // Sort groups
             std::vector<std::pair<std::string, KTGroup const *> > gs;
             gs.reserve(groups_.size());
@@ -174,32 +183,32 @@ namespace GPU_HeiPa {
             std::sort(gs.begin(), gs.end(),
                       [](auto &a, auto &b) { return a.second->agg.total_ms > b.second->agg.total_ms; });
 
-            const int W_CALL = 8, W_TOT = 12, W_AVG = 10, W_PCT = 7;
+            const int W_CALL = 8, W_TOT = 12, W_AVG = 10, W_PCT = 7, W_PCT2 = 7; // new width
             auto make_rule = [&]() {
-                return std::string(name_width + 3u + W_CALL + 3 + W_TOT + 3 + W_AVG + 3 + W_PCT, '-');
+                return std::string(name_width + 3u + W_CALL + 3 + W_TOT + 3 + W_AVG + 3 + W_PCT + 3 + W_PCT2, '-');
             };
 
-            // Build and write lines with zebra
-            size_t row_index = 0; // for zebra striping (header counts separately)
+            size_t row_index = 0;
 
-            // Header rule
+            // Header
             os << apply_rule(make_rule()); {
                 std::string hdr;
-                hdr.reserve(120);
-                // Optional bold for header
                 if (color_ok) hdr += theme.bold_on;
                 hdr += pad_cell("Scope", name_width);
                 hdr += "   " + pad_cell("Calls", W_CALL);
                 hdr += "   " + pad_cell("Total ms", W_TOT);
                 hdr += "   " + pad_cell("Avg ms", W_AVG);
                 hdr += "   " + pad_cell("%Tot", W_PCT);
+                hdr += "   " + pad_cell("%NoIO", W_PCT2); // new column
                 if (color_ok) hdr += theme.bold_off;
                 os << apply_bg(hdr, /*header=*/true, /*even=*/true);
             }
             os << apply_rule(make_rule());
 
+            // Row emitter (now takes two pct strings)
             auto emit_row = [&](const std::string &scope, const std::string &calls,
-                                const std::string &tot, const std::string &avg, const std::string &pct) {
+                                const std::string &tot, const std::string &avg,
+                                const std::string &pct, const std::string &pct_noio) {
                 std::string line;
                 line.reserve(128 + scope.size());
                 line += pad_cell(scope, name_width);
@@ -207,19 +216,22 @@ namespace GPU_HeiPa {
                 line += "   " + pad_cell(tot, W_TOT);
                 line += "   " + pad_cell(avg, W_AVG);
                 line += "   " + pad_cell(pct, W_PCT);
+                line += "   " + pad_cell(pct_noio, W_PCT2);
                 const bool even = (row_index++ % 2 == 0);
                 os << apply_bg(line, /*header=*/false, even);
             };
 
-            // TOTAL
-            emit_row("TOTAL", "-", fmt_ms(total_.total_ms), "-", fmt_pct(100.0));
+            // TOTAL row: %NoIO is 100.0 if we have any non-IO time
+            emit_row("TOTAL", "-", fmt_ms(total_.total_ms), "-", fmt_pct(100.0),
+                     fmt_pct(denom_no_io > 0.0 ? 100.0 : 0.0));
 
             // Groups
             for (size_t gi = 0; gi < gs.size(); ++gi) {
                 const auto &gname = gs[gi].first;
                 const auto *gptr = gs[gi].second;
+                const bool is_io_group = (gname == "io");
 
-                // Sort functions
+                // Functions sort
                 std::vector<std::pair<std::string, KTKernels const *> > fs;
                 for (auto &fk: gptr->functions) fs.emplace_back(fk.first, &fk.second);
                 std::sort(fs.begin(), fs.end(),
@@ -227,14 +239,17 @@ namespace GPU_HeiPa {
                 if (max_funcs_per_group >= 0 && (int) fs.size() > max_funcs_per_group)
                     fs.resize((size_t) max_funcs_per_group);
 
-                emit_row("+-- [G] " + gname, "-", fmt_ms(gptr->agg.total_ms), "-", fmt_pct(pct_of_total(gptr->agg.total_ms)));
+                emit_row("+-- [G] " + gname, "-",
+                         fmt_ms(gptr->agg.total_ms), "-",
+                         fmt_pct(pct_of_total(gptr->agg.total_ms)),
+                         fmt_pct(is_io_group ? 0.0 : pct_no_io(gptr->agg.total_ms)));
 
                 // Functions
                 for (size_t fi = 0; fi < fs.size(); ++fi) {
                     const auto &fname = fs[fi].first;
                     const auto *fptr = fs[fi].second;
 
-                    // Sort kernels
+                    // Kernels sort
                     std::vector<std::pair<std::string, KTStat const *> > ks;
                     for (auto &kk: fptr->kernels) ks.emplace_back(kk.first, &kk.second);
                     std::sort(ks.begin(), ks.end(),
@@ -242,7 +257,10 @@ namespace GPU_HeiPa {
                     if (max_kernels_per_func >= 0 && (int) ks.size() > max_kernels_per_func)
                         ks.resize((size_t) max_kernels_per_func);
 
-                    emit_row("|   +-- [F] " + fname, "-", fmt_ms(fptr->agg.total_ms), "-", fmt_pct(pct_of_total(fptr->agg.total_ms)));
+                    emit_row("|   +-- [F] " + fname, "-",
+                             fmt_ms(fptr->agg.total_ms), "-",
+                             fmt_pct(pct_of_total(fptr->agg.total_ms)),
+                             fmt_pct(is_io_group ? 0.0 : pct_no_io(fptr->agg.total_ms)));
 
                     for (size_t ki = 0; ki < ks.size(); ++ki) {
                         const auto &kname = ks[ki].first;
@@ -251,20 +269,25 @@ namespace GPU_HeiPa {
                                  std::to_string(kstat->calls),
                                  fmt_ms(kstat->total_ms),
                                  fmt_ms(kstat->avg()),
-                                 fmt_pct(pct_of_total(kstat->total_ms)));
+                                 fmt_pct(pct_of_total(kstat->total_ms)),
+                                 fmt_pct(is_io_group ? 0.0 : pct_no_io(kstat->total_ms)));
                     }
                 }
             }
 
-            // Footer rule
+            // Footer
             os << apply_rule(make_rule());
+
+            // Optional legend line (non-colored):
+            os << "(* %NoIO = share of time if IO group were removed from the total)\n";
         }
+
 
         // --------- Pretty print (sorted by total time desc at each level) ----------
         void print(FILE *out = stderr) const {
-#if !ENABLE_PROFILER
+            #if !ENABLE_PROFILER
             return;
-#endif
+            #endif
             auto pct = [](double part, double whole) -> double {
                 return (whole > 0.0) ? (part * 100.0 / whole) : 0.0;
             };
@@ -328,9 +351,9 @@ namespace GPU_HeiPa {
 
         // --------- JSON export (nested, pretty-printed) ----------
         std::string to_JSON() const {
-#if !ENABLE_PROFILER
+            #if !ENABLE_PROFILER
             return "{}";
-#endif
+            #endif
 
             auto esc = [](const std::string &s) {
                 std::ostringstream e;
@@ -471,34 +494,34 @@ namespace GPU_HeiPa {
     };
 
     struct ScopedTimer {
-#if ENABLE_PROFILER
+        #if ENABLE_PROFILER
         const char *group;
         const char *function;
         const char *kernel;
         std::chrono::time_point<std::chrono::system_clock> t0;
         bool stopped = false;
-#endif
+        #endif
 
-#if ENABLE_PROFILER
+        #if ENABLE_PROFILER
         ScopedTimer(const char *g, const char *f, const char *k)
             : group(g), function(f), kernel(k), t0(get_time_point()) {
         }
-#else
+        #else
         ScopedTimer(const char *g, const char *f, const char *k) {
         }
-#endif
+        #endif
 
         void stop() {
-#if !ENABLE_PROFILER
+            #if !ENABLE_PROFILER
             return;
-#else
+            #else
             if (!stopped) {
                 Profiler::instance().add(
                     group, function, kernel,
                     get_milli_seconds(t0, get_time_point()));
                 stopped = true;
             }
-#endif
+            #endif
         }
 
         ~ScopedTimer() { stop(); }
