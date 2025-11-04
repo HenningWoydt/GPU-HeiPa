@@ -71,6 +71,12 @@ set(KokkosKernels_DIR "${CMAKE_CURRENT_SOURCE_DIR}/extern/local/kokkos-kernels/l
 find_package(KokkosKernels CONFIG REQUIRED)
 find_package(Kokkos REQUIRED)
 
+# --- OpenMP Setup ---
+find_package(OpenMP REQUIRED)
+if(OpenMP_CXX_FOUND)
+    message(STATUS "Found OpenMP: ${OpenMP_CXX_VERSION}")
+endif()
+
 # --- Compiler Flags ---
 set(CMAKE_CXX_STANDARD 17)
 set(CMAKE_CXX_STANDARD_REQUIRED ON)
@@ -84,13 +90,13 @@ set(CMAKE_CXX_FLAGS_DEBUG "-g -march=native -pipe -Wall -Wextra -Wno-unused-vari
 file(GLOB_RECURSE SOURCES CONFIGURE_DEPENDS "src/*.cpp")
 file(GLOB_RECURSE HEADERS CONFIGURE_DEPENDS "src/*.h")
 
-add_executable(GPU-HeiPa main.cpp ${SOURCES} ${HEADERS}
-        src/initial_partitioning/metis_initial_partitioning.h)
+add_executable(GPU-HeiPa main.cpp ${SOURCES} ${HEADERS})
 
 target_link_libraries(GPU-HeiPa
         PRIVATE
         ${KAHIP_LIBRARY}
-        ${GKLIB_LIBRARY}
         ${METIS_LIBRARY}
+        ${GKLIB_LIBRARY}
         Kokkos::kokkos
+        OpenMP::OpenMP_CXX
 )
