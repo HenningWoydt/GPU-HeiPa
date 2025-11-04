@@ -226,6 +226,38 @@ namespace GPU_HeiPa {
             });
             // No fence needed for correctness unless host reads now
         }
+
+        // Analyze bucket distribution
+        /*
+        {
+            Kokkos::fence();
+            auto host_group_sizes = Kokkos::create_mirror_view_and_copy(Kokkos::HostSpace(), 
+                Kokkos::subview(thm.group_n_vertices, Kokkos::make_pair(0u, n_groups)));
+            
+            u32 min_size = UINT32_MAX, max_size = 0, total_vertices = 0;
+            u32 large_buckets = 0, empty_buckets = 0;
+            
+            for (u32 i = 0; i < n_groups; ++i) {
+                u32 size = host_group_sizes(i);
+                min_size = std::min(min_size, size);
+                max_size = std::max(max_size, size);
+                total_vertices += size;
+                if (size > 1024) large_buckets++;
+                if (size == 0) empty_buckets++;
+            }
+            
+            f64 avg_size = (f64)total_vertices / n_groups;
+            
+            std::cout << "Hash Bucket Analysis:" << std::endl;
+            std::cout << "  Total groups: " << n_groups << std::endl;
+            std::cout << "  Total vertices: " << total_vertices << std::endl;
+            std::cout << "  Min bucket size: " << min_size << std::endl;
+            std::cout << "  Max bucket size: " << max_size << std::endl;
+            std::cout << "  Avg bucket size: " << avg_size << std::endl;
+            std::cout << "  Large buckets (>1024): " << large_buckets << std::endl;
+            std::cout << "  Empty buckets: " << empty_buckets << std::endl;
+        }
+        */
     }
 
     inline Mapping determine_mapping(const DeviceVertex &matching,
@@ -403,54 +435,38 @@ namespace GPU_HeiPa {
             if ((f64) n_matched >= thm.threshold * (f64) g.n) { return; }
             //
             {
-                ScopedTimer _t("coarsening", "thm_leaf_matching", "reset");
-                Kokkos::parallel_for("reset", g.n, KOKKOS_LAMBDA(const vertex_t u) {
-                    thm.preferred_neighbor(u) = u;
-                });
-                KOKKOS_PROFILE_FENCE();
-            }
-            //
-            {
                 ScopedTimer _t("coarsening", "thm_leaf_matching", "pick_neighbor");
                 Kokkos::parallel_for("pick_neighbor", g.n, KOKKOS_LAMBDA(const vertex_t u) {
-                    if (matching(u) != u) { return; } // already matched
-                    if (g.neighborhood(u + 1) - g.neighborhood(u) != 1) { return; }
-
-                    // locate u’s bucket
-                    u32 idx = thm.vertex_to_index(u);
-                    u32 gid = thm.index_to_group_id(idx);
-                    u32 b = thm.group_begin(gid);
-                    u32 e = thm.group_begin(gid + 1);
-
-                    constexpr u32 LIMIT = 1024;
-                    if ((e - b) > LIMIT) {
-                        const u32 half = LIMIT >> 1;
-                        const u32 e_minus_LIMIT = e - LIMIT;
-                        u32 start = idx > half ? (idx - half) : b;
-                        if (start < b) start = b;
-                        if (start > e_minus_LIMIT) start = e_minus_LIMIT;
-                        b = start;
-                        e = start + LIMIT;
+                    if (matching(u) != u || g.neighborhood(u + 1) - g.neighborhood(u) != 1) {
+                        // already matched or not degree 1
+                        thm.preferred_neighbor(u) = u;
+                        return;
                     }
 
-                    f32 best_rating = -max_sentinel<f32>();
-                    vertex_t best_v = u;
-                    for (u32 i = b; i < e; ++i) {
-                        vertex_t v = thm.hash_vertex_array(i).v;
-                        if (v == u) { continue ; }
-                        if (matching(v) != v) { continue ; }
-                        if (partition.map(u) != partition.map(v)) { continue ; }
-                        if (g.weights(u) + g.weights(v) > thm.lmax / 2) { continue ; }
+                    // Position of u in group
+                    const u32 idx = thm.vertex_to_index(u);
+                    const u32 gid = thm.index_to_group_id(idx);
+                    const u32 b = thm.group_begin(gid);
+                    const u32 e = thm.group_begin(gid + 1);
 
-                        f32 rating = (f32) (1) / (f32) (g.weights(u) * g.weights(v));
-                        rating += edge_noise(u, v);
-                        if (rating > best_rating || (rating == best_rating && u < best_v)) {
-                            best_rating = rating;
-                            best_v = v;
+                    // Default: no match
+                    vertex_t best = u;
+
+                    // Pick direction based on parity (even → -1, odd → +1)
+                    const bool is_even = ((idx - b) & 1u) == 0u;
+                    const int dir = is_even ? -1 : +1;
+                    const u32 ni = idx + dir;
+
+                    if (ni >= b && ni < e) {
+                        // neighbor exists
+                        const vertex_t v = thm.hash_vertex_array(ni).v;
+                        // Compact eligibility check
+                        if (matching(v) == v && partition.map(u) == partition.map(v) && g.weights(u) + g.weights(v) <= thm.lmax / 2) {
+                            best = v;
                         }
                     }
 
-                    thm.preferred_neighbor(u) = best_v;
+                    thm.preferred_neighbor(u) = best;
                 });
                 KOKKOS_PROFILE_FENCE();
             }
@@ -490,54 +506,40 @@ namespace GPU_HeiPa {
             if ((f64) n_matched >= thm.threshold * (f64) g.n) { return; }
             //
             {
-                ScopedTimer _t("coarsening", "thm_twin_matching", "reset");
-                Kokkos::parallel_for("reset", g.n, KOKKOS_LAMBDA(const vertex_t u) {
-                    thm.preferred_neighbor(u) = u;
-                });
-                KOKKOS_PROFILE_FENCE();
-            }
-            //
-            {
                 ScopedTimer _t("coarsening", "thm_twin_matching", "pick_neighbor");
+
                 Kokkos::parallel_for("pick_neighbor", g.n, KOKKOS_LAMBDA(const vertex_t u) {
-                    if (matching(u) != u) { return; } // already matched
-
-                    // locate u’s bucket
-                    u32 idx = thm.vertex_to_index(u);
-                    u32 gid = thm.index_to_group_id(idx);
-                    u32 b = thm.group_begin(gid);
-                    u32 e = thm.group_begin(gid + 1);
-
-                    constexpr u32 LIMIT = 1024;
-                    if ((e - b) > LIMIT) {
-                        const u32 half = LIMIT >> 1;
-                        const u32 e_minus_LIMIT = e - LIMIT;
-                        u32 start = idx > half ? (idx - half) : b;
-                        if (start < b) start = b;
-                        if (start > e_minus_LIMIT) start = e_minus_LIMIT;
-                        b = start;
-                        e = start + LIMIT;
+                    if (matching(u) != u) {
+                        thm.preferred_neighbor(u) = u;
+                        return;
                     }
 
-                    f32 best_rating = -max_sentinel<f32>();
-                    vertex_t best_v = u;
-                    for (u32 i = b; i < e; ++i) {
-                        vertex_t v = thm.hash_vertex_array(i).v;
-                        if (v == u) { continue ; }
-                        if (matching(v) != v) { continue ; }
-                        if (partition.map(u) != partition.map(v)) { continue ; }
-                        if (g.weights(u) + g.weights(v) > thm.lmax / 2) { continue ; }
+                    // Position of u in group
+                    const u32 idx = thm.vertex_to_index(u);
+                    const u32 gid = thm.index_to_group_id(idx);
+                    const u32 b = thm.group_begin(gid);
+                    const u32 e = thm.group_begin(gid + 1);
 
-                        f32 rating = (f32) (1) / (f32) (g.weights(u) * g.weights(v));
-                        rating += edge_noise(u, v);
-                        if (rating > best_rating || (rating == best_rating && u < best_v)) {
-                            best_rating = rating;
-                            best_v = v;
+                    // Default: no match
+                    vertex_t best = u;
+
+                    // Pick direction based on parity (even → -1, odd → +1)
+                    const bool is_even = ((idx - b) & 1u) == 0u;
+                    const int dir = is_even ? -1 : +1;
+                    const u32 ni = idx + dir;
+
+                    if (ni >= b && ni < e) {
+                        // neighbor exists
+                        const vertex_t v = thm.hash_vertex_array(ni).v;
+                        // Compact eligibility check
+                        if (matching(v) == v && partition.map(u) == partition.map(v) && g.weights(u) + g.weights(v) <= thm.lmax / 2) {
+                            best = v;
                         }
                     }
 
-                    thm.preferred_neighbor(u) = best_v;
+                    thm.preferred_neighbor(u) = best;
                 });
+
                 KOKKOS_PROFILE_FENCE();
             }
             //
@@ -609,7 +611,7 @@ namespace GPU_HeiPa {
                             f32 rating = (f32) ((mid_e_w + v_e_w) * (mid_e_w + v_e_w)) / (f32) (g.weights(u) * g.weights(v));
                             rating += edge_noise(u, v);
 
-                            if (rating > best_rating) {
+                            if (rating > best_rating || (rating == best_rating && v < best_v)) {
                                 best_v = v;
                                 best_rating = rating;
                             }
@@ -676,7 +678,7 @@ namespace GPU_HeiPa {
         }
 
         if ((f64) n_matched < thm.threshold * (f64) g.n) {
-            // relative_matching(thm, g, matching, partition);
+            relative_matching(thm, g, matching, partition);
         }
 
         pop(small_mem_stack); // pop the matching vec

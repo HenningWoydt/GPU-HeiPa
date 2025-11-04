@@ -32,12 +32,14 @@
 #include "../utility/definitions.h"
 #include "../datastructures/graph.h"
 #include "../datastructures/partition.h"
+#include <vector>
+#include <algorithm>
 
 namespace GPU_HeiPa {
     inline void kaffpa_initial_partition(Graph &g,
                                          int k,
                                          f64 imbalance,
-                                         u32 seed,
+                                         u64 seed,
                                          Partition &partition) {
         ScopedTimer _t_copy("initial_partitioning", "KaFFPa", "copy");
 
@@ -59,16 +61,27 @@ namespace GPU_HeiPa {
         int edge_cut = std::numeric_limits<int>::max();
         int *part = (int *) malloc((u64) n * sizeof(int));
 
+        std::vector<std::pair<vertex_t, weight_t>> edges;
+        edges.reserve(m);
         for (vertex_t old_u = 0; old_u < host_g.n; ++old_u) {
             vwgt[old_u] = (int) host_g.weights(old_u);
             xadj[old_u + 1] = xadj[old_u];
 
+            // Collect edges for this vertex
+            edges.clear();
             for (u32 i = host_g.neighborhood(old_u); i < host_g.neighborhood(old_u + 1); ++i) {
                 vertex_t v = host_g.edges_v(i);
                 weight_t w = host_g.edges_w(i);
+                edges.emplace_back(v, w);
+            }
 
-                adjcwgt[xadj[old_u + 1]] = (int) w;
-                adjncy[xadj[old_u + 1]] = (int) v;
+            // Sort edges by vertex ID for deterministic ordering
+            std::sort(edges.begin(), edges.end());
+
+            // Add sorted edges to arrays
+            for (const auto& edge : edges) {
+                adjncy[xadj[old_u + 1]] = (int) edge.first;
+                adjcwgt[xadj[old_u + 1]] = (int) edge.second;
                 xadj[old_u + 1] += 1;
             }
         }

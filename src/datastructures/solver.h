@@ -37,7 +37,7 @@
 #include "../coarsening/two_hop_matching.h"
 #include "../refinement/jet_label_propagation.h"
 #include "../refinement/jet_label_propagation_list.h"
-#include "../initial_partitioning/kaffpa_initial_partitioning.h"
+// #include "../initial_partitioning/kaffpa_initial_partitioning.h"
 #include "../initial_partitioning/metis_initial_partitioning.h"
 #include "../utility/definitions.h"
 #include "../utility/configuration.h"
@@ -164,8 +164,8 @@ namespace GPU_HeiPa {
             host_g = from_file(config.graph_in);
             // Main stack: Graph + coarsening overhead
             mem_stack = initialize_kokkos_memory_stack(
-                8 * host_g.n * sizeof(vertex_t) + // 20% buffer for vertices
-                9 * host_g.m * sizeof(vertex_t),  // Graph + coarsening overhead
+                20 * host_g.n * sizeof(vertex_t) + // 20% buffer for vertices
+                10 * host_g.m * sizeof(vertex_t),  // Graph + coarsening overhead
                 "Stack"
             );
 
@@ -216,15 +216,8 @@ namespace GPU_HeiPa {
         void initial_partitioning() {
             auto p = get_time_point();
 
-            // Deterministic hash-based initial partitioning
-            vertex_t current_n = graphs.back().n;
-            HostPartition host_partition = HostPartition(Kokkos::view_alloc(Kokkos::WithoutInitializing, "host_partition"), current_n);
-            for (vertex_t u = 0; u < current_n; ++u) {
-                u32 hash = (u * 2654435761u) ^ config.seed;
-                host_partition(u) = hash % k;
-            }
-            auto partition_subview = Kokkos::subview(partition.map, Kokkos::make_pair(vertex_t(0), current_n));
-            Kokkos::deep_copy(partition_subview, host_partition);
+            // Use METIS for initial partitioning
+            metis_initial_partition(graphs.back(), (int) k, config.imbalance, config.seed, partition);
             
             recalculate_weights(partition, graphs.back());
 
