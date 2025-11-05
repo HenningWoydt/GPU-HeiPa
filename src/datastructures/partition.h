@@ -48,7 +48,6 @@ namespace GPU_HeiPa {
                                           const partition_t t_k,
                                           const weight_t t_lmax,
                                           KokkosMemoryStack &mem_stack) {
-        ScopedTimer t{"io", "partition", "initialize"};
         Partition partition;
 
         partition.n = t_n;
@@ -64,7 +63,6 @@ namespace GPU_HeiPa {
 
         Kokkos::deep_copy(partition.map, 0);
         Kokkos::deep_copy(partition.bweights, 0);
-        Kokkos::fence();
 
         return partition;
     }
@@ -84,9 +82,10 @@ namespace GPU_HeiPa {
             vertex_t u_new = mapping.mapping(u);
             partition.temp_map(u_new) = partition.map(u);
         });
-        Kokkos::fence();
 
         std::swap(partition.map, partition.temp_map);
+
+        KOKKOS_PROFILE_FENCE();
     }
 
     inline void uncontract(Partition &partition,
@@ -98,9 +97,9 @@ namespace GPU_HeiPa {
             vertex_t new_v = mapping.mapping(u);
             partition.temp_map(u) = partition.map(new_v);
         });
-        Kokkos::fence();
-
         std::swap(partition.map, partition.temp_map);
+
+        KOKKOS_PROFILE_FENCE();
     }
 
     inline void recalculate_weights(Partition &partition,
@@ -109,17 +108,16 @@ namespace GPU_HeiPa {
 
         // reset weights
         Kokkos::deep_copy(partition.bweights, 0);
-        Kokkos::fence();
 
         // set weights
         Kokkos::parallel_for("set_block_weights", g.n, KOKKOS_LAMBDA(const vertex_t u) {
             partition_t u_id = partition.map(u);
             Kokkos::atomic_add(&partition.bweights(u_id), g.weights(u));
         });
-        Kokkos::fence();
+        KOKKOS_PROFILE_FENCE();
     }
 
-    inline weight_t max_weight(Partition &partition) {
+    inline weight_t max_weight(const Partition &partition) {
         weight_t max_val = 0;
 
         Kokkos::parallel_reduce("compute_max_weight", partition.k, KOKKOS_LAMBDA(const partition_t i, weight_t &local_max) {
@@ -129,14 +127,11 @@ namespace GPU_HeiPa {
                                 },
                                 Kokkos::Max<weight_t>(max_val)
         );
-        Kokkos::fence();
 
         return max_val;
     }
 
     inline void copy_into(Partition &dst, const Partition &src, u32 n) {
-        ScopedTimer _t("refine", "PartitionManager", "copy_into");
-
         dst.n = src.n;
         dst.k = src.k;
         dst.lmax = src.lmax;
@@ -144,8 +139,6 @@ namespace GPU_HeiPa {
         auto rN = std::make_pair<size_t, size_t>(0, n);
         Kokkos::deep_copy(Kokkos::subview(dst.map, rN), Kokkos::subview(src.map, rN));
         Kokkos::deep_copy(dst.bweights, src.bweights);
-
-        Kokkos::fence();
     }
 
     struct PartitionHost {

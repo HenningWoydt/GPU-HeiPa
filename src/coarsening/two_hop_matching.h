@@ -60,15 +60,11 @@ namespace GPU_HeiPa {
         UnmanagedDeviceU64 rating_vertex;
 
         Kokkos::View<HashVertex *, Kokkos::MemoryTraits<Kokkos::Unmanaged> > hash_vertex_array;
-        UnmanagedDeviceU32 vertex_to_index;   // index into hash_vertex_array
-        UnmanagedDeviceU32 index_to_group_id; // for each vertex, which hash group it belongs
-        UnmanagedDeviceU32 is_head;
-        UnmanagedDeviceU32 group_n_vertices; // sizes of each hash group
-        UnmanagedDeviceU32 group_begin;      // start index of each hash group
+        UnmanagedDeviceU32 vertex_to_index; // index into hash_vertex_array
 
         u64 max_iterations_heavy = 3;
-        u32 max_iterations_leaf = 3;
-        u32 max_iterations_twins = 3;
+        u32 max_iterations_leaf = 1;
+        u32 max_iterations_twins = 1;
         u32 max_iterations_relatives = 3;
         u32 max_iterations_zero_deg = 3;
     };
@@ -94,26 +90,14 @@ namespace GPU_HeiPa {
 
         auto *hash_vertex_array_ptr = (HashVertex *) get_chunk(small_mem_stack, sizeof(HashVertex) * t_n);
         auto *vertex_to_index_ptr = (u32 *) get_chunk(small_mem_stack, sizeof(u32) * t_n);
-        auto *index_to_group_id_ptr = (u32 *) get_chunk(small_mem_stack, sizeof(u32) * t_n);
-        auto *is_head_ptr = (u32 *) get_chunk(small_mem_stack, sizeof(u32) * t_n);
-        auto *group_n_vertices_ptr = (u32 *) get_chunk(small_mem_stack, sizeof(u32) * t_n);
-        auto *group_begin_ptr = (u32 *) get_chunk(small_mem_stack, sizeof(u32) * (t_n + 2));
         thm.hash_vertex_array = Kokkos::View<HashVertex *, Kokkos::MemoryTraits<Kokkos::Unmanaged> >(hash_vertex_array_ptr, t_n);
         thm.vertex_to_index = UnmanagedDeviceU32(vertex_to_index_ptr, t_n);
-        thm.index_to_group_id = UnmanagedDeviceU32(index_to_group_id_ptr, t_n);
-        thm.is_head = UnmanagedDeviceU32(is_head_ptr, t_n);
-        thm.group_n_vertices = UnmanagedDeviceU32(group_n_vertices_ptr, t_n);
-        thm.group_begin = UnmanagedDeviceU32(group_begin_ptr, t_n);
 
         return thm;
     }
 
     inline void free_thm(TwoHopMatcher &thm,
                          KokkosMemoryStack &small_mem_stack) {
-        pop(small_mem_stack);
-        pop(small_mem_stack);
-        pop(small_mem_stack);
-        pop(small_mem_stack);
         pop(small_mem_stack);
         pop(small_mem_stack);
         pop(small_mem_stack);
@@ -167,51 +151,14 @@ namespace GPU_HeiPa {
             Kokkos::sort(thm.hash_vertex_array);
             KOKKOS_PROFILE_FENCE();
         }
-
-        // 1) One scan to build index map, head flags, group ids, and group begins.
-        u32 n_groups = 0;
         //
         {
-            ScopedTimer _t("coarsening", "build_hash_vertex_array", "mark_map_scan");
-            Kokkos::parallel_scan("mark_map_scan", device_g.n, KOKKOS_LAMBDA(const u32 i, u32 &running, const bool final) {
-                                      const auto cur = thm.hash_vertex_array(i);
-                                      const bool head = (i == 0) || (cur.hash != thm.hash_vertex_array(i - 1).hash);
-                                      const u32 inc = head ? 1u : 0u;
-
-                                      if (final) {
-                                          // index map
-                                          thm.vertex_to_index(cur.v) = i;
-
-                                          // head flag & group id
-                                          thm.is_head(i) = inc;
-                                          thm.index_to_group_id(i) = running;
-
-                                          // write group begin at head positions
-                                          if (head) thm.group_begin(running) = i;
-                                      }
-
-                                      running += inc;
-                                  },
-                                  n_groups // host scalar receives total number of groups
-            );
-            KOKKOS_PROFILE_FENCE(); // only if you time this phase
-        }
-
-        // 2) Set sentinel begin for the "end" (begin[n_groups] = N)
-        {
-            Kokkos::parallel_for("set_last_begin", 1u, KOKKOS_LAMBDA(const u32) {
-                thm.group_begin(n_groups) = device_g.n;
+            ScopedTimer _t("coarsening", "build_hash_vertex_array", "inverse");
+            Kokkos::parallel_for("inverse", device_g.n, KOKKOS_LAMBDA(const u32 i) {
+                const auto hv = thm.hash_vertex_array(i);
+                thm.vertex_to_index(hv.v) = i;
             });
-            KOKKOS_PROFILE_FENCE(); // only for timing separation
-        }
-
-        // 3) Compute group sizes from consecutive begins (no zeroing or atomics needed)
-        {
-            ScopedTimer _t("coarsening", "build_hash_vertex_array", "sizes_from_begins");
-            Kokkos::parallel_for("sizes_from_begins", n_groups, KOKKOS_LAMBDA(const u32 g) {
-                thm.group_n_vertices(g) = thm.group_begin(g + 1) - thm.group_begin(g);
-            });
-            // No fence needed for correctness unless host reads now
+            KOKKOS_PROFILE_FENCE();
         }
     }
 
@@ -238,33 +185,20 @@ namespace GPU_HeiPa {
         }
         //
         {
-            ScopedTimer _t("coarsening", "determine_mapping", "mark_needs_id");
-            // Mark which vertices need IDs (one per unmatched vertex or per matched pair)
-            Kokkos::parallel_for("mark_needs_id", n, KOKKOS_LAMBDA(const vertex_t u) {
-                const vertex_t v = matching(u);
-                // For a matched pair (u,v), only the smaller index assigns the ID.
-                // For an unmatched vertex, v == u => it assigns an ID to itself.
-                needs_id(u) = (v == u || u < v) ? 1u : 0u;
-            });
+            ScopedTimer _t("coarsening", "determine_mapping", "mark_and_count");
+            Kokkos::parallel_reduce("mark_and_count", n, KOKKOS_LAMBDA(const vertex_t u, vertex_t &lsum) {
+                                        vertex_t v = matching(u);
+                                        u32 need = (v == u || u < v) ? 1 : 0;
+                                        needs_id(u) = need; // side-effect: mark array
+                                        lsum += need;       // accumulate count
+                                    },
+                                    mapping.coarse_n
+            );
             KOKKOS_PROFILE_FENCE();
         }
-
-        // Count how many IDs will be assigned => coarse_n
-        vertex_t coarse_n = 0;
-        //
-        {
-            ScopedTimer _t("coarsening", "determine_mapping", "count_ids");
-            Kokkos::parallel_reduce("count_ids", n, KOKKOS_LAMBDA(const vertex_t u, vertex_t &lsum) {
-                                        lsum += static_cast<vertex_t>(needs_id(u));
-                                    },
-                                    coarse_n
-            );
-            mapping.coarse_n = coarse_n;
-        }
-        //
+        // Exclusive scan to assign compact IDs [0, coarse_n)
         {
             ScopedTimer _t("coarsening", "determine_mapping", "assign_ids");
-            // Exclusive scan to assign compact IDs [0, coarse_n)
             Kokkos::parallel_scan("assign_ids", n, KOKKOS_LAMBDA(const vertex_t u, vertex_t &update, const bool final) {
                                       if (needs_id(u)) {
                                           if (final) assigned_id(u) = update; // write exclusive scan result
@@ -274,19 +208,13 @@ namespace GPU_HeiPa {
             );
             KOKKOS_PROFILE_FENCE();
         }
-        //
+        // Build the translation mapping: old vertex -> new vertex
         {
             ScopedTimer _t("coarsening", "determine_mapping", "assign_old_to_new");
-            // Build the translation mapping: old vertex -> new vertex
             Kokkos::parallel_for("assign_old_to_new", n, KOKKOS_LAMBDA(const vertex_t u) {
-                const vertex_t v = matching(u);
-                if (v == u || u < v) {
-                    // This thread is responsible for the pair (u,v) or the singleton u
-                    const vertex_t id = assigned_id(u);
-                    mapping.mapping(u) = id;
-                    mapping.mapping(v) = id; // v gets same new ID (safe: partner thread won't write)
-                }
-                // If u > v, its partner's thread (the smaller index) sets mapping.mapping(u)
+                vertex_t v = matching(u);
+                vertex_t id = u > v ? assigned_id(v) : assigned_id(u);
+                mapping.mapping(u) = id;
             });
             KOKKOS_PROFILE_FENCE();
         }
@@ -314,7 +242,6 @@ namespace GPU_HeiPa {
             //
             {
                 ScopedTimer _t("coarsening", "thm_heavy_edge_matching", "pick_neighbor");
-
                 using RP = Kokkos::RangePolicy<
                     Kokkos::DefaultExecutionSpace,
                     Kokkos::Schedule<Kokkos::Static>,
@@ -322,7 +249,6 @@ namespace GPU_HeiPa {
                 >;
                 RP pol(0, g.m);
                 pol.set_chunk_size(1024);
-
 
                 Kokkos::parallel_for("pick_neighbor", pol, KOKKOS_LAMBDA(const u32 i) {
                     vertex_t u = g.edges_u(i);
@@ -354,10 +280,10 @@ namespace GPU_HeiPa {
             {
                 ScopedTimer _t("coarsening", "thm_heavy_edge_matching", "apply_matching");
                 Kokkos::parallel_reduce("apply_matching", g.n, KOKKOS_LAMBDA(const vertex_t u, u32 &local) {
-                    if (matching(u) != u) return;
+                    if (matching(u) != u) { return; }
 
                     vertex_t v = unpack_vertex(thm.rating_vertex(u));
-                    if (v >= g.n || v == u || matching(v) != v) return;
+                    if (v == u || matching(v) != v) return;
 
                     vertex_t pref_v = unpack_vertex(thm.rating_vertex(v));
                     if (pref_v == u && u < v) {
@@ -371,7 +297,9 @@ namespace GPU_HeiPa {
                 KOKKOS_PROFILE_FENCE();
             }
 
-            if (made_pairs == 0) return;
+            if (made_pairs == 0) {
+                return;
+            }
         }
     }
 
@@ -392,24 +320,22 @@ namespace GPU_HeiPa {
                     }
 
                     // Position of u in group
-                    const u32 idx = thm.vertex_to_index(u);
-                    const u32 gid = thm.index_to_group_id(idx);
-                    const u32 b = thm.group_begin(gid);
-                    const u32 e = thm.group_begin(gid + 1);
+                    u32 idx = thm.vertex_to_index(u);
+                    u32 hash = thm.hash_vertex_array(idx).hash;
+
+                    // Pick direction based on parity (even → +1, odd → -1)
+                    bool is_even = (idx & 1u) == 0u;
+                    u32 n_idx = is_even ? idx + 1 : idx - 1;
 
                     // Default: no match
                     vertex_t best = u;
 
-                    // Pick direction based on parity (even → -1, odd → +1)
-                    const bool is_even = ((idx - b) & 1u) == 0u;
-                    const u32 ni = is_even ? idx - 1 : idx + 1;
-
-                    if (ni >= b && ni < e) {
-                        // neighbor exists
-                        const vertex_t v = thm.hash_vertex_array(ni).v;
+                    if (n_idx < g.n) {
+                        u32 n_v = thm.hash_vertex_array(n_idx).v;
+                        u32 n_hash = thm.hash_vertex_array(n_idx).hash;
                         // Compact eligibility check
-                        if (matching(v) == v && partition.map(u) == partition.map(v) && g.weights(u) + g.weights(v) <= thm.lmax / 2) {
-                            best = v;
+                        if (hash == n_hash && matching(n_v) == n_v && partition.map(u) == partition.map(n_v) && g.weights(u) + g.weights(n_v) <= thm.lmax / 2) {
+                            best = n_v;
                         }
                     }
 
@@ -461,24 +387,22 @@ namespace GPU_HeiPa {
                     }
 
                     // Position of u in group
-                    const u32 idx = thm.vertex_to_index(u);
-                    const u32 gid = thm.index_to_group_id(idx);
-                    const u32 b = thm.group_begin(gid);
-                    const u32 e = thm.group_begin(gid + 1);
+                    u32 idx = thm.vertex_to_index(u);
+                    u32 hash = thm.hash_vertex_array(idx).hash;
+
+                    // Pick direction based on parity (even → +1, odd → -1)
+                    bool is_even = (idx & 1u) == 0u;
+                    u32 n_idx = is_even ? idx + 1 : idx - 1;
 
                     // Default: no match
                     vertex_t best = u;
 
-                    // Pick direction based on parity (even → -1, odd → +1)
-                    const bool is_even = ((idx - b) & 1u) == 0u;
-                    const u32 ni = is_even ? idx - 1 : idx + 1;
-
-                    if (ni >= b && ni < e) {
-                        // neighbor exists
-                        const vertex_t v = thm.hash_vertex_array(ni).v;
+                    if (n_idx < g.n) {
+                        u32 n_v = thm.hash_vertex_array(n_idx).v;
+                        u32 n_hash = thm.hash_vertex_array(n_idx).hash;
                         // Compact eligibility check
-                        if (matching(v) == v && partition.map(u) == partition.map(v) && g.weights(u) + g.weights(v) <= thm.lmax / 2) {
-                            best = v;
+                        if (hash == n_hash && matching(n_v) == n_v && partition.map(u) == partition.map(n_v) && g.weights(u) + g.weights(n_v) <= thm.lmax / 2) {
+                            best = n_v;
                         }
                     }
 
@@ -510,6 +434,8 @@ namespace GPU_HeiPa {
                 thm.n_matched += 2 * made_pairs; // host scalar
                 KOKKOS_PROFILE_FENCE();
             }
+
+            std::cout << "Twin Matching: " << made_pairs << std::endl;
 
             if (made_pairs == 0) return;
         }
@@ -620,11 +546,11 @@ namespace GPU_HeiPa {
         }
 
         if ((f64) thm.n_matched < thm.threshold * (f64) g.n) {
-            twin_matching(thm, g, matching, partition);
+            // twin_matching(thm, g, matching, partition);
         }
 
         if ((f64) thm.n_matched < thm.threshold * (f64) g.n) {
-            relative_matching(thm, g, matching, partition);
+            // relative_matching(thm, g, matching, partition);
         }
 
         pop(small_mem_stack); // pop the matching vec

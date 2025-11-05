@@ -49,6 +49,8 @@ namespace GPU_HeiPa {
     inline KokkosMemoryStack initialize_kokkos_memory_stack(size_t n_bytes, std::string t_name) {
         ScopedTimer _t("io", "KokkosMemoryStack", "allocate");
 
+        std::cout << t_name << std::endl;
+
         KokkosMemoryStack stack;
         stack.name = t_name;
         stack.n_bytes_allocated = align64(n_bytes);

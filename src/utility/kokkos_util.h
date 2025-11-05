@@ -249,6 +249,18 @@ partition_t random_partition(vertex_t u, u32 seed, u32 prime, u32 xor_const, par
 
         return key % k;
     }
+
+    // 32/64-bit friendly xorshift hash
+    template <class UInt>
+    KOKKOS_INLINE_FUNCTION
+    typename std::enable_if<std::is_unsigned<UInt>::value, UInt>::type
+    xorshiftHash(UInt x) {
+        x ^= x << 13;
+        x ^= x >> 17;
+        x ^= x << 5;
+        return x;
+    }
+
 }
 
 #endif //GPU_HEIPA_KOKKOS_UTIL_H

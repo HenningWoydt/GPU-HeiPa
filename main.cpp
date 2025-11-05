@@ -49,9 +49,12 @@ int main(int argc, char *argv[]) {
         {
             ScopedTimer _t_parse("io", "main", "parse_args");
             std::vector<std::pair<std::string, std::string> > input = {
-                {"--graph", "../../graph_collection/mapping/rgg24.graph"},
-                {"--mapping", "../data/out/partition/rgg24.txt"},
-                {"--statistics", "../data/out/statistics/rgg24.JSON"},
+                // {"--graph", "../../graph_collection/mapping/rgg24.graph"},
+                // {"--mapping", "../data/out/partition/rgg24.txt"},
+                // {"--statistics", "../data/out/statistics/rgg24.JSON"},
+                {"--graph", "../../graph_collection/mapping/rgg23.graph"},
+                {"--mapping", "../data/out/partition/rgg23.txt"},
+                {"--statistics", "../data/out/statistics/rgg23.JSON"},
                 // {"--graph", "../../graph_collection/mapping/2cubes_sphere.mtx.graph"},
                 // {"--mapping", "../data/out/partition/2cubes_sphere.mtx.txt"},
                 // {"--statistics", "../data/out/statistics/2cubes_sphere.mtx.JSON"},

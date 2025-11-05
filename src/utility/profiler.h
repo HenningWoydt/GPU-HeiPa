@@ -505,6 +505,7 @@ namespace GPU_HeiPa {
         #if ENABLE_PROFILER
         ScopedTimer(const char *g, const char *f, const char *k)
             : group(g), function(f), kernel(k), t0(get_time_point()) {
+            // std::cout << group << " " << function << " " << kernel << " " << std::flush;
         }
         #else
         ScopedTimer(const char *g, const char *f, const char *k) {
@@ -516,9 +517,8 @@ namespace GPU_HeiPa {
             return;
             #else
             if (!stopped) {
-                Profiler::instance().add(
-                    group, function, kernel,
-                    get_milli_seconds(t0, get_time_point()));
+                Profiler::instance().add(group, function, kernel, get_milli_seconds(t0, get_time_point()));
+                // std::cout << "took " << get_milli_seconds(t0, get_time_point()) << " ms" << std::endl;
                 stopped = true;
             }
             #endif

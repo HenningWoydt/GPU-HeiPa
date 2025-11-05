@@ -36,8 +36,7 @@
 #include "partition.h"
 #include "../coarsening/two_hop_matching.h"
 #include "../refinement/jet_label_propagation.h"
-#include "../refinement/jet_label_propagation_list.h"
-// #include "../initial_partitioning/kaffpa_initial_partitioning.h"
+#include "../initial_partitioning/kaffpa_initial_partitioning.h"
 #include "../initial_partitioning/metis_initial_partitioning.h"
 #include "../utility/definitions.h"
 #include "../utility/configuration.h"
@@ -138,7 +137,7 @@ namespace GPU_HeiPa {
         void internal_solve() {
             initialize();
 
-            const partition_t c = 8;
+            const partition_t c = 4;
 
             u32 level = 0;
             while (graphs.back().n > c * k) {
@@ -171,8 +170,8 @@ namespace GPU_HeiPa {
 
             // Small stack: Partitioning + temporary arrays
             small_mem_stack = initialize_kokkos_memory_stack(
-                20 * host_g.n * sizeof(vertex_t) + // 33% buffer for partitioning
-                2 * host_g.m * sizeof(vertex_t),
+                14 * host_g.n * sizeof(vertex_t) + // 33% buffer for partitioning
+                4 * host_g.m * sizeof(vertex_t),
                 "SmallStack"
             );
 
@@ -183,7 +182,10 @@ namespace GPU_HeiPa {
 
             graphs.emplace_back(from_HostGraph(host_g, mem_stack));
 
-            partition = initialize_partition(n, k, lmax, mem_stack);
+            {
+                ScopedTimer t{"io", "partition", "initialize"};
+                partition = initialize_partition(n, k, lmax, mem_stack);
+            }
 
             io_ms += get_milli_seconds(p, get_time_point());
 
@@ -235,7 +237,7 @@ namespace GPU_HeiPa {
 
             weight_t temp_lmax = (weight_t) std::ceil((1.0 + config.imbalance + (config.imbalance * ((f64) level / (f64) max_level))) * ((f64) host_g.g_weight / (f64) config.k));
 
-            // refine(graphs.back(), partition, k, temp_lmax, max_level, level);
+            refine(graphs.back(), partition, k, temp_lmax, max_level, level, mem_stack, small_mem_stack);
             // refine_list(graphs.back(), partition, k, temp_lmax, max_level, level);
 
             Kokkos::fence();

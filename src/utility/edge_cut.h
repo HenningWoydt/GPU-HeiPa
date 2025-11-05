@@ -68,7 +68,6 @@ namespace GPU_HeiPa {
                                     }
                                 },
                                 total_edge_cut);
-        Kokkos::fence();
 
         return total_edge_cut;
     }

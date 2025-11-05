@@ -32,6 +32,7 @@
 #include "mapping.h"
 #include "../utility/definitions.h"
 #include "../utility/util.h"
+#include "../utility/kokkos_util.h"
 #include "../utility/profiler.h"
 
 namespace GPU_HeiPa {
@@ -175,7 +176,7 @@ namespace GPU_HeiPa {
             u32 len = end - beg;
             if (len == 0) { return; }
 
-            uint32_t idx = beg + v_new % len;
+            u32 idx = beg + hash32(v_new) % len;
             for (u32 j = 0; j < len; ++j) {
                 if (idx == end) { idx = beg; }
                 vertex_t old = Kokkos::atomic_compare_exchange(&hash_keys(idx), coarse_g.n, v_new);
