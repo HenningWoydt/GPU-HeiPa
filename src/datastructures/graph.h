@@ -57,11 +57,11 @@ namespace GPU_HeiPa {
         g.m = host_g.m;
         g.g_weight = host_g.g_weight;
 
-        auto *w_ptr = (weight_t *) get_chunk(mem_stack, sizeof(weight_t) * host_g.n);
-        auto *nb_ptr = (vertex_t *) get_chunk(mem_stack, sizeof(vertex_t) * (host_g.n + 1));
-        auto *eu_ptr = (vertex_t *) get_chunk(mem_stack, sizeof(vertex_t) * host_g.m);
-        auto *ev_ptr = (vertex_t *) get_chunk(mem_stack, sizeof(vertex_t) * host_g.m);
-        auto *ew_ptr = (weight_t *) get_chunk(mem_stack, sizeof(weight_t) * host_g.m);
+        auto *w_ptr = (weight_t *) get_chunk_front(mem_stack, sizeof(weight_t) * host_g.n);
+        auto *nb_ptr = (vertex_t *) get_chunk_front(mem_stack, sizeof(vertex_t) * (host_g.n + 1));
+        auto *eu_ptr = (vertex_t *) get_chunk_front(mem_stack, sizeof(vertex_t) * host_g.m);
+        auto *ev_ptr = (vertex_t *) get_chunk_front(mem_stack, sizeof(vertex_t) * host_g.m);
+        auto *ew_ptr = (weight_t *) get_chunk_front(mem_stack, sizeof(weight_t) * host_g.m);
 
         g.weights = UnmanagedDeviceWeight(w_ptr, host_g.n);
         g.neighborhood = UnmanagedDeviceVertex(nb_ptr, host_g.n + 1);
@@ -94,9 +94,8 @@ namespace GPU_HeiPa {
 
     inline Graph from_Graph_Mapping(const Graph &old_g,
                                     const Mapping &mapping,
-                                    KokkosMemoryStack &mem_stack,
-                                    KokkosMemoryStack &small_mem_stack) {
-        assert_is_empty(small_mem_stack);
+                                    KokkosMemoryStack &mem_stack) {
+        assert_back_is_empty(mem_stack);
 
         // initialize vars and allocate memory
         ScopedTimer t_initialize{"contraction", "from_Graph_Mapping", "initialize"};
@@ -105,19 +104,19 @@ namespace GPU_HeiPa {
         coarse_g.n = mapping.coarse_n;
         coarse_g.g_weight = old_g.g_weight;
 
-        auto *w_ptr = (weight_t *) get_chunk(mem_stack, sizeof(weight_t) * coarse_g.n);
-        auto *nb_ptr = (vertex_t *) get_chunk(mem_stack, sizeof(vertex_t) * (coarse_g.n + 1));
+        auto *w_ptr = (weight_t *) get_chunk_front(mem_stack, sizeof(weight_t) * coarse_g.n);
+        auto *nb_ptr = (vertex_t *) get_chunk_front(mem_stack, sizeof(vertex_t) * (coarse_g.n + 1));
         coarse_g.weights = UnmanagedDeviceWeight(w_ptr, coarse_g.n);
         coarse_g.neighborhood = UnmanagedDeviceVertex(nb_ptr, coarse_g.n + 1);
 
-        auto *degrees_ptr = (vertex_t *) get_chunk(small_mem_stack, sizeof(vertex_t) * mapping.coarse_n);
-        auto *max_degrees_ptr = (vertex_t *) get_chunk(small_mem_stack, sizeof(vertex_t) * mapping.coarse_n);
+        auto *degrees_ptr = (vertex_t *) get_chunk_back(mem_stack, sizeof(vertex_t) * mapping.coarse_n);
+        auto *max_degrees_ptr = (vertex_t *) get_chunk_back(mem_stack, sizeof(vertex_t) * mapping.coarse_n);
         UnmanagedDeviceVertex degrees = UnmanagedDeviceVertex(degrees_ptr, mapping.coarse_n);
         UnmanagedDeviceVertex max_degrees = UnmanagedDeviceVertex(max_degrees_ptr, mapping.coarse_n);
 
-        auto *hash_offsets_ptr = (u32 *) get_chunk(small_mem_stack, sizeof(u32) * (coarse_g.n + 1));
-        auto *hash_keys_ptr = (vertex_t *) get_chunk(small_mem_stack, sizeof(vertex_t) * old_g.m);
-        auto *hash_vals_ptr = (weight_t *) get_chunk(small_mem_stack, sizeof(weight_t) * old_g.m);
+        auto *hash_offsets_ptr = (u32 *) get_chunk_back(mem_stack, sizeof(u32) * (coarse_g.n + 1));
+        auto *hash_keys_ptr = (vertex_t *) get_chunk_back(mem_stack, sizeof(vertex_t) * old_g.m);
+        auto *hash_vals_ptr = (weight_t *) get_chunk_back(mem_stack, sizeof(weight_t) * old_g.m);
         UnmanagedDeviceU32 hash_offsets = UnmanagedDeviceU32(hash_offsets_ptr, coarse_g.n + 1);
         UnmanagedDeviceVertex hash_keys = UnmanagedDeviceVertex(hash_keys_ptr, old_g.m);
         UnmanagedDeviceWeight hash_vals = UnmanagedDeviceWeight(hash_vals_ptr, old_g.m);
@@ -203,9 +202,9 @@ namespace GPU_HeiPa {
         t_build_offsets.stop();
         ScopedTimer t_allocate_edges{"contraction", "from_Graph_Mapping", "allocate_edges"};
 
-        auto *eu_ptr = (vertex_t *) get_chunk(mem_stack, sizeof(vertex_t) * coarse_g.m);
-        auto *ev_ptr = (vertex_t *) get_chunk(mem_stack, sizeof(vertex_t) * coarse_g.m);
-        auto *ew_ptr = (weight_t *) get_chunk(mem_stack, sizeof(weight_t) * coarse_g.m);
+        auto *eu_ptr = (vertex_t *) get_chunk_front(mem_stack, sizeof(vertex_t) * coarse_g.m);
+        auto *ev_ptr = (vertex_t *) get_chunk_front(mem_stack, sizeof(vertex_t) * coarse_g.m);
+        auto *ew_ptr = (weight_t *) get_chunk_front(mem_stack, sizeof(weight_t) * coarse_g.m);
         coarse_g.edges_u = UnmanagedDeviceVertex(eu_ptr, coarse_g.m);
         coarse_g.edges_v = UnmanagedDeviceVertex(ev_ptr, coarse_g.m);
         coarse_g.edges_w = UnmanagedDeviceWeight(ew_ptr, coarse_g.m);
@@ -245,12 +244,12 @@ namespace GPU_HeiPa {
         KOKKOS_PROFILE_FENCE();
         t_fill_coarse_u.stop();
 
-        pop(small_mem_stack);
-        pop(small_mem_stack);
-        pop(small_mem_stack);
-        pop(small_mem_stack);
-        pop(small_mem_stack);
-        assert_is_empty(small_mem_stack);
+        pop_back(mem_stack);
+        pop_back(mem_stack);
+        pop_back(mem_stack);
+        pop_back(mem_stack);
+        pop_back(mem_stack);
+        assert_back_is_empty(mem_stack);
 
         return coarse_g;
     }
@@ -278,11 +277,11 @@ namespace GPU_HeiPa {
 
     inline void free_graph(Graph &g,
                            KokkosMemoryStack &mem_stack) {
-        pop(mem_stack);
-        pop(mem_stack);
-        pop(mem_stack);
-        pop(mem_stack);
-        pop(mem_stack);
+        pop_front(mem_stack);
+        pop_front(mem_stack);
+        pop_front(mem_stack);
+        pop_front(mem_stack);
+        pop_front(mem_stack);
     }
 }
 

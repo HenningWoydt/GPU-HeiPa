@@ -54,9 +54,9 @@ namespace GPU_HeiPa {
         partition.k = t_k;
         partition.lmax = t_lmax;
 
-        auto *map_ptr = (partition_t *) get_chunk(mem_stack, sizeof(partition_t) * t_n);
-        auto *temp_map_ptr = (partition_t *) get_chunk(mem_stack, sizeof(partition_t) * t_n);
-        auto *bweights_ptr = (weight_t *) get_chunk(mem_stack, sizeof(weight_t) * t_k);
+        auto *map_ptr = (partition_t *) get_chunk_front(mem_stack, sizeof(partition_t) * t_n);
+        auto *temp_map_ptr = (partition_t *) get_chunk_front(mem_stack, sizeof(partition_t) * t_n);
+        auto *bweights_ptr = (weight_t *) get_chunk_front(mem_stack, sizeof(weight_t) * t_k);
         partition.map = UnmanagedDevicePartition(map_ptr, t_n);
         partition.temp_map = UnmanagedDevicePartition(temp_map_ptr, t_n);
         partition.bweights = UnmanagedDeviceWeight(bweights_ptr, t_k);
@@ -69,9 +69,9 @@ namespace GPU_HeiPa {
 
     inline void free_partition(const Partition &partition,
                                KokkosMemoryStack &mem_stack) {
-        pop(mem_stack);
-        pop(mem_stack);
-        pop(mem_stack);
+        pop_front(mem_stack);
+        pop_front(mem_stack);
+        pop_front(mem_stack);
     }
 
     inline void contract(Partition &partition,
@@ -129,6 +129,48 @@ namespace GPU_HeiPa {
         );
 
         return max_val;
+    }
+
+    inline partition_t n_empty_blocks(const Partition &partition) {
+        partition_t s = 0;
+
+        Kokkos::parallel_reduce("compute_max_weight", partition.k, KOKKOS_LAMBDA(const partition_t i, partition_t &local_s) {
+                                    if (partition.bweights(i) == 0) {
+                                        local_s += 1;
+                                    }
+                                },
+                                Kokkos::Sum<partition_t>(s)
+        );
+
+        return s;
+    }
+
+    inline partition_t n_oload_blocks(const Partition &partition) {
+        partition_t s = 0;
+
+        Kokkos::parallel_reduce("compute_max_weight", partition.k, KOKKOS_LAMBDA(const partition_t i, partition_t &local_s) {
+                                    if (partition.bweights(i) > partition.lmax) {
+                                        local_s += 1;
+                                    }
+                                },
+                                Kokkos::Sum<partition_t>(s)
+        );
+
+        return s;
+    }
+
+    inline weight_t sum_oload_weight(const Partition &partition) {
+        weight_t s = 0;
+
+        Kokkos::parallel_reduce("compute_max_weight", partition.k, KOKKOS_LAMBDA(const partition_t i, weight_t &local_s) {
+                                    if (partition.bweights(i) > partition.lmax) {
+                                        local_s += partition.bweights(i) - partition.lmax;
+                                    }
+                                },
+                                Kokkos::Sum<weight_t>(s)
+        );
+
+        return s;
     }
 
     inline void copy_into(Partition &dst, const Partition &src, u32 n) {

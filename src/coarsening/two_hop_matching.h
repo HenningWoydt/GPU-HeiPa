@@ -72,7 +72,7 @@ namespace GPU_HeiPa {
     inline TwoHopMatcher initialize_thm(const vertex_t t_n,
                                         const vertex_t t_m,
                                         const weight_t t_lmax,
-                                        KokkosMemoryStack &small_mem_stack) {
+                                        KokkosMemoryStack &mem_stack) {
         ScopedTimer _t("coarsening", "TwoHopMatcher", "allocate");
 
         TwoHopMatcher thm;
@@ -81,15 +81,15 @@ namespace GPU_HeiPa {
         thm.lmax = t_lmax;
 
         thm.n_matched = 0;
-        auto *preferred_neighbor_ptr = (vertex_t *) get_chunk(small_mem_stack, sizeof(vertex_t) * t_n);
-        auto *max_rating_ptr = (f32 *) get_chunk(small_mem_stack, sizeof(f32) * t_n);
-        auto *rating_vertex_ptr = (u64 *) get_chunk(small_mem_stack, sizeof(u64) * t_n);
+        auto *preferred_neighbor_ptr = (vertex_t *) get_chunk_back(mem_stack, sizeof(vertex_t) * t_n);
+        auto *max_rating_ptr = (f32 *) get_chunk_back(mem_stack, sizeof(f32) * t_n);
+        auto *rating_vertex_ptr = (u64 *) get_chunk_back(mem_stack, sizeof(u64) * t_n);
         thm.preferred_neighbor = UnmanagedDeviceVertex(preferred_neighbor_ptr, t_n);
         thm.max_rating = UnmanagedDeviceF32(max_rating_ptr, t_n);
         thm.rating_vertex = UnmanagedDeviceU64(rating_vertex_ptr, t_n);
 
-        auto *hash_vertex_array_ptr = (HashVertex *) get_chunk(small_mem_stack, sizeof(HashVertex) * t_n);
-        auto *vertex_to_index_ptr = (u32 *) get_chunk(small_mem_stack, sizeof(u32) * t_n);
+        auto *hash_vertex_array_ptr = (HashVertex *) get_chunk_back(mem_stack, sizeof(HashVertex) * t_n);
+        auto *vertex_to_index_ptr = (u32 *) get_chunk_back(mem_stack, sizeof(u32) * t_n);
         thm.hash_vertex_array = Kokkos::View<HashVertex *, Kokkos::MemoryTraits<Kokkos::Unmanaged> >(hash_vertex_array_ptr, t_n);
         thm.vertex_to_index = UnmanagedDeviceU32(vertex_to_index_ptr, t_n);
 
@@ -97,12 +97,12 @@ namespace GPU_HeiPa {
     }
 
     inline void free_thm(TwoHopMatcher &thm,
-                         KokkosMemoryStack &small_mem_stack) {
-        pop(small_mem_stack);
-        pop(small_mem_stack);
-        pop(small_mem_stack);
-        pop(small_mem_stack);
-        pop(small_mem_stack);
+                         KokkosMemoryStack &mem_stack) {
+        pop_back(mem_stack);
+        pop_back(mem_stack);
+        pop_back(mem_stack);
+        pop_back(mem_stack);
+        pop_back(mem_stack);
     }
 
     KOKKOS_INLINE_FUNCTION
@@ -164,8 +164,7 @@ namespace GPU_HeiPa {
 
     inline Mapping determine_mapping(const DeviceVertex &matching,
                                      const vertex_t n,
-                                     KokkosMemoryStack &mem_stack,
-                                     KokkosMemoryStack &small_mem_stack) {
+                                     KokkosMemoryStack &mem_stack) {
         Mapping mapping;
         //
         {
@@ -178,8 +177,8 @@ namespace GPU_HeiPa {
         //
         {
             ScopedTimer _t("coarsening", "determine_mapping", "allocate");
-            auto *needs_id_ptr = (u32 *) get_chunk(small_mem_stack, sizeof(u32) * n);
-            auto *assigned_id_ptr = (vertex_t *) get_chunk(small_mem_stack, sizeof(vertex_t) * n);
+            auto *needs_id_ptr = (u32 *) get_chunk_back(mem_stack, sizeof(u32) * n);
+            auto *assigned_id_ptr = (vertex_t *) get_chunk_back(mem_stack, sizeof(vertex_t) * n);
             needs_id = UnmanagedDeviceU32(needs_id_ptr, n);
             assigned_id = UnmanagedDeviceVertex(assigned_id_ptr, n);
         }
@@ -219,8 +218,8 @@ namespace GPU_HeiPa {
             KOKKOS_PROFILE_FENCE();
         }
 
-        pop(small_mem_stack);
-        pop(small_mem_stack);
+        pop_back(mem_stack);
+        pop_back(mem_stack);
 
         return mapping;
     }
@@ -519,17 +518,16 @@ namespace GPU_HeiPa {
     inline Mapping two_hop_matcher_get_mapping(const Graph &g,
                                                const Partition &partition,
                                                const weight_t &lmax,
-                                               KokkosMemoryStack &mem_stack,
-                                               KokkosMemoryStack &small_mem_stack) {
-        assert_is_empty(small_mem_stack);
+                                               KokkosMemoryStack &mem_stack) {
+        assert_back_is_empty(mem_stack);
 
-        TwoHopMatcher thm = initialize_thm(g.n, g.m, lmax, small_mem_stack);
+        TwoHopMatcher thm = initialize_thm(g.n, g.m, lmax, mem_stack);
 
         UnmanagedDeviceVertex matching;
         //
         {
             ScopedTimer _t("coarsening", "TwoHopMatcher", "allocate_matching");
-            auto *matching_ptr = (vertex_t *) get_chunk(small_mem_stack, sizeof(vertex_t) * g.n);
+            auto *matching_ptr = (vertex_t *) get_chunk_back(mem_stack, sizeof(vertex_t) * g.n);
             matching = UnmanagedDeviceVertex(matching_ptr, g.n);
             Kokkos::parallel_for("set_matching", g.n, KOKKOS_LAMBDA(const vertex_t u) {
                 matching(u) = u;
@@ -553,12 +551,12 @@ namespace GPU_HeiPa {
             // relative_matching(thm, g, matching, partition);
         }
 
-        pop(small_mem_stack); // pop the matching vec
-        free_thm(thm, small_mem_stack);
+        pop_back(mem_stack); // pop the matching vec
+        free_thm(thm, mem_stack);
 
-        Mapping mapping = determine_mapping(matching, g.n, mem_stack, small_mem_stack);
+        Mapping mapping = determine_mapping(matching, g.n, mem_stack);
 
-        assert_is_empty(small_mem_stack);
+        assert_back_is_empty(mem_stack);
         return mapping;
     }
 }

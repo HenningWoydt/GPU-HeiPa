@@ -54,7 +54,7 @@ namespace GPU_HeiPa {
         f64 sigma_percent_min = 0.005;
         weight_t sigma = 10;
         f64 conn_c = 0.75;
-        u32 sections = 1; // adaptive minibuckets per (part,bucket)
+        u32 sections = 1; // adaptive mini buckets per (part,bucket)
         Partition partition;
 
         UnmanagedDeviceWeight conn;
@@ -63,6 +63,8 @@ namespace GPU_HeiPa {
         UnmanagedDeviceU32 locked;
         UnmanagedDeviceU32 in_X;
         UnmanagedDeviceU32 to_move;
+
+        UnmanagedDeviceVertex to_move_list;
 
         UnmanagedDeviceU32 bucket_counts;
         UnmanagedDeviceU32 bucket_offsets;
@@ -74,7 +76,7 @@ namespace GPU_HeiPa {
                                              const vertex_t t_m,
                                              const partition_t t_k,
                                              const weight_t t_lmax,
-                                             KokkosMemoryStack &small_mem_stack) {
+                                             KokkosMemoryStack &mem_stack) {
         ScopedTimer _t("refine", "JetLabelPropagation", "allocate");
 
         JetLabelPropagation lp;
@@ -85,20 +87,22 @@ namespace GPU_HeiPa {
         lp.lmax = t_lmax;
         lp.sigma = lp.lmax - (weight_t) ((f64) lp.lmax * lp.sigma_percent);
 
-        lp.partition = initialize_partition(t_n, t_k, t_lmax, small_mem_stack);
+        lp.partition = initialize_partition(t_n, t_k, t_lmax, mem_stack);
 
-        auto *conn_ptr = (weight_t *) get_chunk(small_mem_stack, sizeof(weight_t) * t_n);
-        auto *weight_id_ptr = (u64 *) get_chunk(small_mem_stack, sizeof(u64) * t_n);
-        auto *gain2_ptr = (weight_t *) get_chunk(small_mem_stack, sizeof(weight_t) * t_n);
-        auto *locked_ptr = (u32 *) get_chunk(small_mem_stack, sizeof(u32) * t_n);
-        auto *in_X_ptr = (u32 *) get_chunk(small_mem_stack, sizeof(u32) * t_n);
-        auto *to_move_ptr = (u32 *) get_chunk(small_mem_stack, sizeof(u32) * t_n);
+        auto *conn_ptr = (weight_t *) get_chunk_back(mem_stack, sizeof(weight_t) * t_n);
+        auto *weight_id_ptr = (u64 *) get_chunk_back(mem_stack, sizeof(u64) * t_n);
+        auto *gain2_ptr = (weight_t *) get_chunk_back(mem_stack, sizeof(weight_t) * t_n);
+        auto *locked_ptr = (u32 *) get_chunk_back(mem_stack, sizeof(u32) * t_n);
+        auto *in_X_ptr = (u32 *) get_chunk_back(mem_stack, sizeof(u32) * t_n);
+        auto *to_move_ptr = (u32 *) get_chunk_back(mem_stack, sizeof(u32) * t_n);
+        auto *to_move_list_ptr = (vertex_t *) get_chunk_back(mem_stack, sizeof(vertex_t) * t_n);
         lp.conn = UnmanagedDeviceWeight(conn_ptr, t_n);
         lp.weight_id = UnmanagedDeviceU64(weight_id_ptr, t_n);
         lp.gain2 = UnmanagedDeviceWeight(gain2_ptr, t_n);
         lp.locked = UnmanagedDeviceU32(locked_ptr, t_n);
         lp.in_X = UnmanagedDeviceU32(in_X_ptr, t_n);
         lp.to_move = UnmanagedDeviceU32(to_move_ptr, t_n);
+        lp.to_move_list = UnmanagedDeviceVertex(to_move_list_ptr, t_n);
 
         // compute sections so that k * MAX_BUCKETS * sections ≈ n / TARGET_PER_SHARD
         u64 shards = (t_n + TARGET_PER_SHARD - 1) / TARGET_PER_SHARD;
@@ -108,10 +112,10 @@ namespace GPU_HeiPa {
 
         auto total_shards = (size_t) t_k * MAX_BUCKETS * lp.sections;
 
-        auto *bucket_counts_ptr = (u32 *) get_chunk(small_mem_stack, sizeof(u32) * total_shards);
-        auto *bucket_offsets_ptr = (u32 *) get_chunk(small_mem_stack, sizeof(u32) * total_shards);
-        auto *bucket_cursor_ptr = (u32 *) get_chunk(small_mem_stack, sizeof(u32) * total_shards);
-        auto *flat_buckets_ptr = (vertex_t *) get_chunk(small_mem_stack, sizeof(vertex_t) * lp.n);
+        auto *bucket_counts_ptr = (u32 *) get_chunk_back(mem_stack, sizeof(u32) * total_shards);
+        auto *bucket_offsets_ptr = (u32 *) get_chunk_back(mem_stack, sizeof(u32) * total_shards);
+        auto *bucket_cursor_ptr = (u32 *) get_chunk_back(mem_stack, sizeof(u32) * total_shards);
+        auto *flat_buckets_ptr = (vertex_t *) get_chunk_back(mem_stack, sizeof(vertex_t) * lp.n);
         lp.bucket_counts = UnmanagedDeviceU32(bucket_counts_ptr, total_shards);
         lp.bucket_offsets = UnmanagedDeviceU32(bucket_offsets_ptr, total_shards);
         lp.bucket_cursor = UnmanagedDeviceU32(bucket_cursor_ptr, total_shards);
@@ -121,21 +125,22 @@ namespace GPU_HeiPa {
     }
 
     inline void free_lp(JetLabelPropagation &lp,
-                        KokkosMemoryStack &small_mem_stack) {
-        free_partition(lp.partition, small_mem_stack);
+                        KokkosMemoryStack &mem_stack) {
+        free_partition(lp.partition, mem_stack);
 
         ScopedTimer _t("refine", "JetLabelPropagation", "free");
 
-        pop(small_mem_stack);
-        pop(small_mem_stack);
-        pop(small_mem_stack);
-        pop(small_mem_stack);
-        pop(small_mem_stack);
-        pop(small_mem_stack);
-        pop(small_mem_stack);
-        pop(small_mem_stack);
-        pop(small_mem_stack);
-        pop(small_mem_stack);
+        pop_back(mem_stack);
+        pop_back(mem_stack);
+        pop_back(mem_stack);
+        pop_back(mem_stack);
+        pop_back(mem_stack);
+        pop_back(mem_stack);
+        pop_back(mem_stack);
+        pop_back(mem_stack);
+        pop_back(mem_stack);
+        pop_back(mem_stack);
+        pop_back(mem_stack);
     }
 
     KOKKOS_INLINE_FUNCTION
@@ -213,8 +218,7 @@ namespace GPU_HeiPa {
     inline void jetlp(JetLabelPropagation &lp,
                       Graph &g,
                       BlockConnectivity &bc,
-                      KokkosMemoryStack &mem_stack,
-                      KokkosMemoryStack &small_mem_stack) {
+                      KokkosMemoryStack &mem_stack) {
         // reset all arrays
         {
             ScopedTimer _t("refine", "jetlp", "reset");
@@ -319,7 +323,7 @@ namespace GPU_HeiPa {
             KOKKOS_PROFILE_FENCE();
         }
         // move in block connectivity
-        move(bc, g, lp.partition, lp.to_move, lp.weight_id, mem_stack, small_mem_stack);
+        move(bc, g, lp.partition, lp.to_move, lp.weight_id, mem_stack);
         // moves in partition
         {
             ScopedTimer _t("refine", "jetlp", "apply_moves");
@@ -343,8 +347,7 @@ namespace GPU_HeiPa {
     inline void jetrw(JetLabelPropagation &lp,
                       Graph &g,
                       BlockConnectivity &bc,
-                      KokkosMemoryStack &mem_stack,
-                      KokkosMemoryStack &small_mem_stack) {
+                      KokkosMemoryStack &mem_stack) {
         // reset arrays
         {
             ScopedTimer _t("rebalance", "jetrw", "reset");
@@ -480,7 +483,7 @@ namespace GPU_HeiPa {
             KOKKOS_PROFILE_FENCE();
         }
         // move in block connectivity
-        move(bc, g, lp.partition, lp.to_move, lp.weight_id, mem_stack, small_mem_stack);
+        move(bc, g, lp.partition, lp.to_move, lp.weight_id, mem_stack);
         // moves in partition
         {
             ScopedTimer _t("rebalance", "jetrw", "apply_moves");
@@ -504,8 +507,7 @@ namespace GPU_HeiPa {
     inline void jetrs(JetLabelPropagation &lp,
                       Graph &g,
                       BlockConnectivity &bc,
-                      KokkosMemoryStack &mem_stack,
-                      KokkosMemoryStack &small_mem_stack) {
+                      KokkosMemoryStack &mem_stack) {
         // reset arrays
         {
             ScopedTimer _t("rebalance", "jetrs", "reset");
@@ -645,7 +647,7 @@ namespace GPU_HeiPa {
             KOKKOS_PROFILE_FENCE();
         }
         // move in block connectivity
-        move(bc, g, lp.partition, lp.to_move, lp.weight_id, mem_stack, small_mem_stack);
+        move(bc, g, lp.partition, lp.to_move, lp.weight_id, mem_stack);
         // moves in partition
         {
             ScopedTimer _t("rebalance", "jetrs", "apply_moves");
@@ -672,9 +674,8 @@ namespace GPU_HeiPa {
                        weight_t lmax,
                        u32 max_level,
                        u32 level,
-                       KokkosMemoryStack &mem_stack,
-                       KokkosMemoryStack &small_mem_stack) {
-        JetLabelPropagation lp = initialize_lp(g.n, g.m, k, lmax, small_mem_stack);
+                       KokkosMemoryStack &mem_stack) {
+        JetLabelPropagation lp = initialize_lp(g.n, g.m, k, lmax, mem_stack);
 
         if (level == 0) { lp.conn_c = 0.25; }
 
@@ -688,7 +689,7 @@ namespace GPU_HeiPa {
         }
 
         // initial build of block connectivity
-        BlockConnectivity bc = from_scratch(g, lp.partition, small_mem_stack);
+        BlockConnectivity bc = from_scratch(g, lp.partition, mem_stack);
 
         weight_t best_edge_cut = 0;
         // initial edge cut
@@ -724,7 +725,7 @@ namespace GPU_HeiPa {
         while (iteration < lp.n_max_iterations) {
             executed_rw = false;
             if (curr_weight <= lp.lmax) {
-                jetlp(lp, g, bc, mem_stack, small_mem_stack);
+                jetlp(lp, g, bc, mem_stack);
                 weak_iterations = 0;
             } else {
                 // open locks
@@ -734,11 +735,11 @@ namespace GPU_HeiPa {
                     KOKKOS_PROFILE_FENCE();
                 }
                 if (weak_iterations < lp.max_weak_iterations) {
-                    jetrw(lp, g, bc, mem_stack, small_mem_stack);
+                    jetrw(lp, g, bc, mem_stack);
                     weak_iterations++;
                     executed_rw = true;
                 } else {
-                    jetrs(lp, g, bc, mem_stack, small_mem_stack);
+                    jetrs(lp, g, bc, mem_stack);
                     weak_iterations = 0;
                 }
             }
@@ -796,10 +797,10 @@ namespace GPU_HeiPa {
             iteration += 1;
         }
 
-        free_bc(bc, small_mem_stack);
-        free_lp(lp, small_mem_stack);
+        free_bc(bc, mem_stack);
+        free_lp(lp, mem_stack);
 
-        std::cout << level << " " << mem_stack.n_bytes_in_use << " " << small_mem_stack.n_bytes_in_use << std::endl;
+        std::cout << level << " " << mem_stack.n_bytes_in_use << " " << mem_stack.n_bytes_in_use_back << std::endl;
     }
 }
 

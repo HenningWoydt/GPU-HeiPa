@@ -45,7 +45,7 @@ namespace GPU_HeiPa {
     };
 
     inline void free_bc(BlockConnectivity &bc,
-                        KokkosMemoryStack &small_mem_stack) {
+                        KokkosMemoryStack &mem_stack) {
         ScopedTimer _t("refine", "BlockConnectivity", "free");
 
         bc.n = 0;
@@ -55,20 +55,20 @@ namespace GPU_HeiPa {
         bc.ids = UnmanagedDevicePartition(nullptr, 0);
         bc.weights = UnmanagedDeviceWeight(nullptr, 0);
 
-        pop(small_mem_stack);
-        pop(small_mem_stack);
-        pop(small_mem_stack);
-        pop(small_mem_stack);
+        pop_back(mem_stack);
+        pop_back(mem_stack);
+        pop_back(mem_stack);
+        pop_back(mem_stack);
     }
 
     inline BlockConnectivity from_scratch(const Graph &g,
                                           const Partition &partition,
-                                          KokkosMemoryStack &small_mem_stack) {
+                                          KokkosMemoryStack &mem_stack) {
         BlockConnectivity bc;
         // allocate rows
         {
             ScopedTimer _t("refine", "BlockConnectivity_fs", "allocate_rows");
-            auto *row_ptr = (u32 *) get_chunk(small_mem_stack, sizeof(u32) * (g.n + 1));
+            auto *row_ptr = (u32 *) get_chunk_back(mem_stack, sizeof(u32) * (g.n + 1));
             bc.row = UnmanagedDeviceU32(row_ptr, g.n + 1);
             bc.n = g.n;
         }
@@ -97,9 +97,9 @@ namespace GPU_HeiPa {
         // allocate rest
         {
             ScopedTimer _t("refine", "BlockConnectivity_fs", "allocate");
-            auto *us_ptr = (vertex_t *) get_chunk(small_mem_stack, sizeof(vertex_t) * bc.size);
-            auto *ids_ptr = (partition_t *) get_chunk(small_mem_stack, sizeof(partition_t) * bc.size);
-            auto *weights_ptr = (weight_t *) get_chunk(small_mem_stack, sizeof(weight_t) * bc.size);
+            auto *us_ptr = (vertex_t *) get_chunk_back(mem_stack, sizeof(vertex_t) * bc.size);
+            auto *ids_ptr = (partition_t *) get_chunk_back(mem_stack, sizeof(partition_t) * bc.size);
+            auto *weights_ptr = (weight_t *) get_chunk_back(mem_stack, sizeof(weight_t) * bc.size);
             bc.us = UnmanagedDeviceVertex(us_ptr, bc.size);
             bc.ids = UnmanagedDevicePartition(ids_ptr, bc.size);
             bc.weights = UnmanagedDeviceWeight(weights_ptr, bc.size);
@@ -154,14 +154,13 @@ namespace GPU_HeiPa {
                                      const Partition &partition,
                                      const UnmanagedDeviceU32 &to_move,
                                      const UnmanagedDeviceU64 &weight_id,
-                                     KokkosMemoryStack &mem_stack,
-                                     KokkosMemoryStack &small_mem_stack) {
-        // we first build it on the mem stack and afterwards copy it over
+                                     KokkosMemoryStack &mem_stack) {
+        // we first build it on the mem stack and afterward copy it over
         BlockConnectivity bc;
         // allocate rows
         {
             ScopedTimer _t("refine", "BlockConnectivity_re", "allocate_rows");
-            auto *row_ptr = (u32 *) get_chunk(mem_stack, sizeof(u32) * (g.n + 1));
+            auto *row_ptr = (u32 *) get_chunk_front(mem_stack, sizeof(u32) * (g.n + 1));
             bc.row = UnmanagedDeviceU32(row_ptr, g.n + 1);
             bc.n = g.n;
         }
@@ -194,9 +193,9 @@ namespace GPU_HeiPa {
         // allocate rest
         {
             ScopedTimer _t("refine", "BlockConnectivity_re", "allocate");
-            auto *us_ptr = (vertex_t *) get_chunk(mem_stack, sizeof(vertex_t) * bc.size);
-            auto *ids_ptr = (partition_t *) get_chunk(mem_stack, sizeof(partition_t) * bc.size);
-            auto *weights_ptr = (weight_t *) get_chunk(mem_stack, sizeof(weight_t) * bc.size);
+            auto *us_ptr = (vertex_t *) get_chunk_front(mem_stack, sizeof(vertex_t) * bc.size);
+            auto *ids_ptr = (partition_t *) get_chunk_front(mem_stack, sizeof(partition_t) * bc.size);
+            auto *weights_ptr = (weight_t *) get_chunk_front(mem_stack, sizeof(weight_t) * bc.size);
             bc.us = UnmanagedDeviceVertex(us_ptr, bc.size);
             bc.ids = UnmanagedDevicePartition(ids_ptr, bc.size);
             bc.weights = UnmanagedDeviceWeight(weights_ptr, bc.size);
@@ -262,17 +261,17 @@ namespace GPU_HeiPa {
         }
         // release old block connectivity
         {
-            free_bc(old_bc, small_mem_stack);
+            free_bc(old_bc, mem_stack);
         }
         BlockConnectivity true_bc;
         // allocate new on small mem stack
         {
             ScopedTimer _t("refine", "BlockConnectivity_re", "allocate_new_copy");
 
-            auto *row_ptr = (u32 *) get_chunk(small_mem_stack, sizeof(u32) * (g.n + 1));
-            auto *us_ptr = (vertex_t *) get_chunk(small_mem_stack, sizeof(vertex_t) * bc.size);
-            auto *ids_ptr = (partition_t *) get_chunk(small_mem_stack, sizeof(partition_t) * bc.size);
-            auto *weights_ptr = (weight_t *) get_chunk(small_mem_stack, sizeof(weight_t) * bc.size);
+            auto *row_ptr = (u32 *) get_chunk_back(mem_stack, sizeof(u32) * (g.n + 1));
+            auto *us_ptr = (vertex_t *) get_chunk_back(mem_stack, sizeof(vertex_t) * bc.size);
+            auto *ids_ptr = (partition_t *) get_chunk_back(mem_stack, sizeof(partition_t) * bc.size);
+            auto *weights_ptr = (weight_t *) get_chunk_back(mem_stack, sizeof(weight_t) * bc.size);
             true_bc.row = UnmanagedDeviceU32(row_ptr, g.n + 1);
             true_bc.us = UnmanagedDeviceVertex(us_ptr, bc.size);
             true_bc.ids = UnmanagedDevicePartition(ids_ptr, bc.size);
@@ -290,10 +289,10 @@ namespace GPU_HeiPa {
         // free on mem stack
         {
             ScopedTimer _t("refine", "BlockConnectivity_re", "free_copy");
-            pop(mem_stack);
-            pop(mem_stack);
-            pop(mem_stack);
-            pop(mem_stack);
+            pop_front(mem_stack);
+            pop_front(mem_stack);
+            pop_front(mem_stack);
+            pop_front(mem_stack);
         }
 
         return true_bc;
@@ -304,8 +303,7 @@ namespace GPU_HeiPa {
                      const Partition &partition,
                      const UnmanagedDeviceU32 &to_move,
                      const UnmanagedDeviceU64 &weight_id,
-                     KokkosMemoryStack &mem_stack,
-                     KokkosMemoryStack &small_mem_stack) {
+                     KokkosMemoryStack &mem_stack) {
         // remove_weight
         {
             ScopedTimer _t("refine", "BlockConnectivity_move", "remove_weight");
@@ -343,7 +341,7 @@ namespace GPU_HeiPa {
         // temp array to count
         {
             ScopedTimer _t("refine", "BlockConnectivity_move", "allocate_temp");
-            auto *needs_more_ptr = (u32 *) get_chunk(mem_stack, sizeof(u32) * g.n); // on mem stack
+            auto *needs_more_ptr = (u32 *) get_chunk_front(mem_stack, sizeof(u32) * g.n); // on mem stack
             needs_more = UnmanagedDeviceU32(needs_more_ptr, g.n);
             Kokkos::deep_copy(needs_more, 0);
             KOKKOS_PROFILE_FENCE();
@@ -409,10 +407,10 @@ namespace GPU_HeiPa {
 
         if (sum > 0) {
             // not enough space, we need to rebuild
-            bc = rebuild(bc, needs_more, g, partition, to_move, weight_id, mem_stack, small_mem_stack);
+            bc = rebuild(bc, needs_more, g, partition, to_move, weight_id, mem_stack);
         }
 
-        pop(mem_stack); // the needs_more array
+        pop_front(mem_stack); // the needs_more array
     }
 
     struct HostBlockConnectivity {

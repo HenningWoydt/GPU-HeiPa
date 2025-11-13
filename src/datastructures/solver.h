@@ -57,7 +57,6 @@ namespace GPU_HeiPa {
 
         HostGraph host_g;
         KokkosMemoryStack mem_stack;
-        KokkosMemoryStack small_mem_stack;
 
         std::vector<Graph> graphs;
         std::vector<Mapping> mappings;
@@ -73,6 +72,64 @@ namespace GPU_HeiPa {
         f64 initial_partitioning_ms = 0.0;
         f64 uncontraction_ms = 0.0;
         f64 refinement_ms = 0.0;
+
+        struct level_info {
+            u32 level;
+            vertex_t n;
+            vertex_t m;
+
+            weight_t edge_cut;
+            weight_t max_b_weight;
+            partition_t empty_partitions;
+            partition_t oload_partitions;
+            weight_t sum_oload_weights;
+
+            f64 t_coarsening;
+            f64 t_contraction;
+            f64 t_uncontraction;
+            f64 t_refinement;
+        };
+
+        std::vector<level_info> level_infos;
+
+        inline void print_level_row(const level_info &L) {
+            std::cout
+                    << std::setw(3) << L.level << " | "
+                    << std::setw(8) << L.n << " | "
+                    << std::setw(11) << L.m << " | "
+                    << std::setw(6) << L.edge_cut << " | "
+                    << std::setw(5) << L.max_b_weight << " | "
+                    << std::setw(6) << (u32) L.empty_partitions << " | "
+                    << std::setw(6) << (u32) L.oload_partitions << " | "
+                    << std::setw(8) << L.sum_oload_weights << " | "
+                    << std::setw(10) << L.t_coarsening << " | "
+                    << std::setw(10) << L.t_contraction << " | "
+                    << std::setw(10) << L.t_uncontraction << " | "
+                    << std::setw(10) << L.t_refinement
+                    << "\n";
+        }
+
+        inline void print_all_levels(const std::vector<level_info> &infos) {
+            std::cout
+                    << std::setw(3) << "Lvl" << " | "
+                    << std::setw(8) << "n" << " | "
+                    << std::setw(11) << "m" << " | "
+                    << std::setw(6) << "cut" << " | "
+                    << std::setw(5) << "maxW" << " | "
+                    << std::setw(6) << "empty" << " | "
+                    << std::setw(6) << "oload" << " | "
+                    << std::setw(8) << "w_oload" << " | "
+                    << std::setw(10) << "t_c" << " | "
+                    << std::setw(10) << "t_con" << " | "
+                    << std::setw(10) << "t_unc" << " | "
+                    << std::setw(10) << "t_ref"
+                    << "\n";
+
+            std::cout << std::string(100, '-') << "\n";
+            for (const auto &L: infos) {
+                print_level_row(L);
+            }
+        }
 
         explicit Solver(Configuration t_config) : config(std::move(t_config)) {
             sp = get_time_point();
@@ -120,6 +177,8 @@ namespace GPU_HeiPa {
             std::cout << "Uncontraction : " << uncontraction_ms << std::endl;
             std::cout << "Refinement    : " << refinement_ms << std::endl;
 
+            print_all_levels(level_infos);
+
             free_partition(partition, mem_stack);
 
             free_graph(graphs.back(), mem_stack);
@@ -127,8 +186,6 @@ namespace GPU_HeiPa {
 
             assert_is_empty(mem_stack);
             destroy(mem_stack);
-            assert_is_empty(small_mem_stack);
-            destroy(small_mem_stack);
 
             return {};
         }
@@ -138,11 +195,17 @@ namespace GPU_HeiPa {
             initialize();
 
             const partition_t c = 4;
+            const partition_t max_n = c * k;
 
             u32 level = 0;
-            while (graphs.back().n > c * k) {
-                coarsening();
-                contraction();
+            while (graphs.back().n > max_n) {
+                level_infos.emplace_back();
+                level_infos[level].level = level;
+                level_infos[level].n = graphs.back().n;
+                level_infos[level].m = graphs.back().m;
+
+                coarsening(level);
+                contraction(level);
 
                 level += 1;
             }
@@ -153,8 +216,14 @@ namespace GPU_HeiPa {
             while (!mappings.empty()) {
                 level -= 1;
 
-                uncontraction();
+                uncontraction(level);
                 refinement(max_level, level);
+
+                level_infos[level].max_b_weight = max_weight(partition);
+                level_infos[level].edge_cut = edge_cut(graphs.back(), partition);
+                level_infos[level].empty_partitions = n_empty_blocks(partition);
+                level_infos[level].oload_partitions = n_oload_blocks(partition);
+                level_infos[level].sum_oload_weights = sum_oload_weight(partition);
             }
         }
 
@@ -163,16 +232,9 @@ namespace GPU_HeiPa {
             host_g = from_file(config.graph_in);
             // Main stack: Graph + coarsening overhead
             mem_stack = initialize_kokkos_memory_stack(
-                20 * host_g.n * sizeof(vertex_t) + // 20% buffer for vertices
-                10 * host_g.m * sizeof(vertex_t),  // Graph + coarsening overhead
+                34 * host_g.n * sizeof(vertex_t) + // 20% buffer for vertices
+                14 * host_g.m * sizeof(vertex_t),  // Graph + coarsening overhead
                 "Stack"
-            );
-
-            // Small stack: Partitioning + temporary arrays
-            small_mem_stack = initialize_kokkos_memory_stack(
-                14 * host_g.n * sizeof(vertex_t) + // 33% buffer for partitioning
-                4 * host_g.m * sizeof(vertex_t),
-                "SmallStack"
             );
 
             n = host_g.n;
@@ -180,9 +242,7 @@ namespace GPU_HeiPa {
             k = config.k;
             lmax = (weight_t) std::ceil((1.0 + config.imbalance) * ((f64) host_g.g_weight / (f64) config.k));
 
-            graphs.emplace_back(from_HostGraph(host_g, mem_stack));
-
-            {
+            graphs.emplace_back(from_HostGraph(host_g, mem_stack)); {
                 ScopedTimer t{"io", "partition", "initialize"};
                 partition = initialize_partition(n, k, lmax, mem_stack);
             }
@@ -192,25 +252,27 @@ namespace GPU_HeiPa {
             assert_state_pre_partition(graphs.back());
         }
 
-        void coarsening() {
+        void coarsening(u32 level) {
             auto p = get_time_point();
 
-            mappings.emplace_back(two_hop_matcher_get_mapping(graphs.back(), partition, lmax, mem_stack, small_mem_stack));
+            mappings.emplace_back(two_hop_matcher_get_mapping(graphs.back(), partition, lmax, mem_stack));
 
             Kokkos::fence();
             coarsening_ms += get_milli_seconds(p, get_time_point());
+            level_infos[level].t_coarsening = get_milli_seconds(p, get_time_point());
 
             assert_state_pre_partition(graphs.back());
         }
 
-        void contraction() {
+        void contraction(u32 level) {
             auto p = get_time_point();
 
-            graphs.emplace_back(from_Graph_Mapping(graphs.back(), mappings.back(), mem_stack, small_mem_stack));
+            graphs.emplace_back(from_Graph_Mapping(graphs.back(), mappings.back(), mem_stack));
             contract(partition, mappings.back());
 
             Kokkos::fence();
             contraction_ms += get_milli_seconds(p, get_time_point());
+            level_infos[level].t_contraction = get_milli_seconds(p, get_time_point());
 
             assert_state_pre_partition(graphs.back());
         }
@@ -220,7 +282,7 @@ namespace GPU_HeiPa {
 
             // Use METIS for initial partitioning
             metis_initial_partition(graphs.back(), (int) k, config.imbalance, config.seed, partition);
-            
+
             recalculate_weights(partition, graphs.back());
 
             initial_edge_cut = edge_cut(graphs.back(), partition);
@@ -237,16 +299,16 @@ namespace GPU_HeiPa {
 
             weight_t temp_lmax = (weight_t) std::ceil((1.0 + config.imbalance + (config.imbalance * ((f64) level / (f64) max_level))) * ((f64) host_g.g_weight / (f64) config.k));
 
-            refine(graphs.back(), partition, k, temp_lmax, max_level, level, mem_stack, small_mem_stack);
-            // refine_list(graphs.back(), partition, k, temp_lmax, max_level, level);
+            refine(graphs.back(), partition, k, temp_lmax, max_level, level, mem_stack);
 
             Kokkos::fence();
             refinement_ms += get_milli_seconds(p, get_time_point());
+            level_infos[level].t_refinement = get_milli_seconds(p, get_time_point());
 
             assert_state_after_partition(graphs.back(), partition, config.k);
         }
 
-        void uncontraction() {
+        void uncontraction(u32 level) {
             auto p = get_time_point();
 
             uncontract(partition, mappings.back());
@@ -259,6 +321,7 @@ namespace GPU_HeiPa {
 
             Kokkos::fence();
             uncontraction_ms += get_milli_seconds(p, get_time_point());
+            level_infos[level].t_uncontraction = get_milli_seconds(p, get_time_point());
 
             assert_state_after_partition(graphs.back(), partition, config.k);
         }
