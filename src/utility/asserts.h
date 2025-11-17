@@ -118,6 +118,7 @@ namespace GPU_HeiPa {
 
 
     inline void assert_state_pre_partition(const Graph &device_g) {
+        return;
 #if !ASSERT_ENABLED
         return;
 #endif

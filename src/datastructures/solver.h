@@ -97,7 +97,7 @@ namespace GPU_HeiPa {
                     << std::setw(3) << L.level << " | "
                     << std::setw(8) << L.n << " | "
                     << std::setw(11) << L.m << " | "
-                    << std::setw(6) << L.edge_cut << " | "
+                    << std::setw(8) << L.edge_cut << " | "
                     << std::setw(5) << L.max_b_weight << " | "
                     << std::setw(6) << (u32) L.empty_partitions << " | "
                     << std::setw(6) << (u32) L.oload_partitions << " | "
@@ -114,7 +114,7 @@ namespace GPU_HeiPa {
                     << std::setw(3) << "Lvl" << " | "
                     << std::setw(8) << "n" << " | "
                     << std::setw(11) << "m" << " | "
-                    << std::setw(6) << "cut" << " | "
+                    << std::setw(8) << "cut" << " | "
                     << std::setw(5) << "maxW" << " | "
                     << std::setw(6) << "empty" << " | "
                     << std::setw(6) << "oload" << " | "
@@ -297,9 +297,7 @@ namespace GPU_HeiPa {
         void refinement(u32 max_level, u32 level) {
             auto p = get_time_point();
 
-            weight_t temp_lmax = (weight_t) std::ceil((1.0 + config.imbalance + (config.imbalance * ((f64) level / (f64) max_level))) * ((f64) host_g.g_weight / (f64) config.k));
-
-            refine(graphs.back(), partition, k, temp_lmax, max_level, level, mem_stack);
+            refine(graphs.back(), partition, k, lmax, max_level, level, mem_stack);
 
             Kokkos::fence();
             refinement_ms += get_milli_seconds(p, get_time_point());

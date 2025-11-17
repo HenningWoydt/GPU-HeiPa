@@ -63,9 +63,10 @@ namespace GPU_HeiPa {
                                     partition_t id = bc.ids(j);
                                     weight_t w = bc.weights(j);
 
-                                    if (id != u_id && id != partition.k) {
-                                        local_edge_cut += w;
-                                    }
+                                    bool not_self = u_id != id;
+                                    bool not_sentinel = id != partition.k;
+
+                                    local_edge_cut += (not_self * not_sentinel) * w;
                                 },
                                 total_edge_cut);
 
