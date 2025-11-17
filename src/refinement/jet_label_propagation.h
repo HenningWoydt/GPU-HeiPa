@@ -131,6 +131,7 @@ namespace GPU_HeiPa {
         Kokkos::View<u32, DeviceMemorySpace> to_move_idx;
         UnmanagedDeviceMove to_move_list;
         Kokkos::View<u32, DeviceMemorySpace> to_move_idx_2;
+        u32 list_size_2 = 0;
         UnmanagedDeviceMove to_move_list_2;
 
         UnmanagedDeviceWeight bucket_counts;
@@ -239,6 +240,7 @@ namespace GPU_HeiPa {
                 if (lp.to_move(u) != 0) { return; } // already moved
 
                 partition_t u_id = lp.partition.map(u);
+                weight_t u_w = g.weights(u);
                 weight_t own_conn = 0;
 
                 partition_t best_id = u_id;
@@ -270,7 +272,7 @@ namespace GPU_HeiPa {
 
                     if (non_neg || conn_filter) {
                         u32 idx = Kokkos::atomic_fetch_add(&lp.to_move_idx(), 1);
-                        lp.to_move_list(idx) = {u, best_id, gain};
+                        lp.to_move_list(idx) = {u, u_w, u_id, best_id, gain};
                         lp.id(u) = best_id;
                         lp.gain(u) = gain;
                         lp.in_X(u) = lp.round;
@@ -287,51 +289,49 @@ namespace GPU_HeiPa {
             Kokkos::deep_copy(lp.to_move_idx_2, 0);
 
             Kokkos::parallel_for("afterburner", list_size, KOKKOS_LAMBDA(const u32 i) {
-                                     Move m = lp.to_move_list(i);
-                                     vertex_t u = m.u;
+                Move m = lp.to_move_list(i);
+                vertex_t u = m.u;
+                weight_t u_w = m.w;
+                partition_t old_u_id = m.old_id;
+                partition_t new_u_id = m.new_id;
 
-                                     partition_t old_id = lp.partition.map(u);
-                                     partition_t new_id = m.id;
+                weight_t gain = 0;
+                for (u32 j = g.neighborhood(u); j < g.neighborhood(u + 1); ++j) {
+                    vertex_t v = g.edges_v(j);
+                    weight_t w = g.edges_w(j);
 
-                                     weight_t gain = 0;
-                                     for (u32 j = g.neighborhood(u); j < g.neighborhood(u + 1); ++j) {
-                                         vertex_t v = g.edges_v(j);
-                                         weight_t w = g.edges_w(j);
+                    bool high_priority = lp.in_X(v) == lp.round && ord_smaller(u, v, lp.gain(u), lp.gain(v));
 
-                                         bool high_priority = lp.in_X(v) == lp.round && ord_smaller(u, v, lp.gain(u), lp.gain(v));
+                    partition_t v_id = high_priority ? lp.id(v) : lp.partition.map(v);
 
-                                         partition_t v_id = high_priority ? lp.id(v) : lp.partition.map(v);
+                    gain += w * ((old_u_id != v_id) - (new_u_id != v_id));
+                }
 
-                                         gain += w * ((old_id != v_id) - (new_id != v_id));
-                                     }
-
-                                     if (gain >= 0) {
-                                         u32 idx = Kokkos::atomic_fetch_add(&lp.to_move_idx_2(), 1);
-                                         lp.to_move_list_2(idx) = {u, new_id, gain};
-                                         lp.to_move(u) = lp.round;
-                                     }
-                                 }
-            );
+                if (gain >= 0) {
+                    u32 idx = Kokkos::atomic_fetch_add(&lp.to_move_idx_2(), 1);
+                    lp.to_move_list_2(idx) = {u, u_w, old_u_id, new_u_id, gain};
+                    lp.to_move(u) = lp.round;
+                }
+            });
             KOKKOS_PROFILE_FENCE();
         }
-        u32 list_size_2;
-        Kokkos::deep_copy(list_size_2, lp.to_move_idx_2);
+        Kokkos::deep_copy(lp.list_size_2, lp.to_move_idx_2);
         // move in block connectivity
-        move_bc(bc, g, lp.partition, lp.to_move_list_2, list_size_2);
+        move_bc(bc, g, lp.partition, lp.to_move_list_2, lp.list_size_2);
         // moves in partition
         {
             ScopedTimer _t("refine", "jetlp", "apply_moves");
 
-            Kokkos::parallel_for("move", list_size_2, KOKKOS_LAMBDA(const u32 i) {
+            Kokkos::parallel_for("move", lp.list_size_2, KOKKOS_LAMBDA(const u32 i) {
                                      Move m = lp.to_move_list_2(i);
                                      vertex_t u = m.u;
-                                     weight_t u_w = g.weights(u);
-                                     partition_t u_id = lp.partition.map(u);
-                                     partition_t v_id = m.id;
+                                     weight_t u_w = m.w;
+                                     partition_t u_old_id = m.old_id;
+                                     partition_t u_new_id = m.new_id;
 
-                                     lp.partition.map(u) = v_id;
-                                     Kokkos::atomic_add(&lp.partition.bweights(u_id), -u_w);
-                                     Kokkos::atomic_add(&lp.partition.bweights(v_id), u_w);
+                                     lp.partition.map(u) = u_new_id;
+                                     Kokkos::atomic_add(&lp.partition.bweights(u_old_id), -u_w);
+                                     Kokkos::atomic_add(&lp.partition.bweights(u_new_id), u_w);
                                  }
             );
             KOKKOS_PROFILE_FENCE();
@@ -370,24 +370,24 @@ namespace GPU_HeiPa {
 
             Kokkos::parallel_for("best_block", bc.n, KOKKOS_LAMBDA(const vertex_t u) {
                 bool found = false;
-                partition_t u_id = lp.partition.map(u);
+                partition_t old_u_id = lp.partition.map(u);
                 weight_t u_w = g.weights(u);
 
-                partition_t best_id = u_id;
+                partition_t best_id = old_u_id;
                 weight_t best_id_w = -max_sentinel<weight_t>();
 
-                if (lp.partition.bweights(u_id) <= lp.lmax) { return; }                                        // u_id not overloaded
-                if ((f64) u_w > lp.heavy_alpha * ((f64) lp.partition.bweights(u_id) - opt_weight)) { return; } // vertex is too heavy
+                if (lp.partition.bweights(old_u_id) <= lp.lmax) { return; }                                        // u_id not overloaded
+                if ((f64) u_w > lp.heavy_alpha * ((f64) lp.partition.bweights(old_u_id) - opt_weight)) { return; } // vertex is too heavy
 
                 weight_t own_conn = 0;
                 for (u32 i = bc.row(u); i < bc.row(u + 1); ++i) {
                     partition_t id = bc.ids(i);
                     weight_t w = bc.weights(i);
 
-                    own_conn = id == u_id ? w : own_conn;
+                    own_conn = id == old_u_id ? w : own_conn;
 
                     if (id == lp.k) { continue; }                            // no valid entry
-                    if (id == u_id) { continue; }                            // dont move to self
+                    if (id == old_u_id) { continue; }                            // dont move to self
                     if (lp.partition.bweights(id) >= lp.sigma) { continue; } // dont move into non underloaded partition
 
                     if (w > best_id_w || (w == best_id_w && id < best_id)) {
@@ -406,13 +406,13 @@ namespace GPU_HeiPa {
 
                 u32 b = gain_bucket(gain, u_w);
                 u32 mini = u % lp.sections;
-                u32 g_id = get_idx(u_id, b, mini, lp.sections);
+                u32 g_id = get_idx(old_u_id, b, mini, lp.sections);
 
                 weight_t old = Kokkos::atomic_fetch_add(&lp.bucket_counts(g_id), u_w);
                 lp.save_atomic(u) = old; // prefix inside this bucket
 
                 u32 idx = Kokkos::atomic_fetch_add(&lp.to_move_idx(), 1);
-                lp.to_move_list(idx) = {u, best_id, gain};
+                lp.to_move_list(idx) = {u, u_w, old_u_id, best_id, gain};
                 lp.id(u) = best_id;
             });
             KOKKOS_PROFILE_FENCE();
@@ -430,7 +430,6 @@ namespace GPU_HeiPa {
             );
             KOKKOS_PROFILE_FENCE();
         }
-
         // pick prefix
         {
             ScopedTimer _t("rebalance", "jetrw", "pick_prefix");
@@ -441,12 +440,12 @@ namespace GPU_HeiPa {
             Kokkos::parallel_for("pick_prefix", list_size, KOKKOS_LAMBDA(const u32 i) {
                 Move m = lp.to_move_list(i);
                 vertex_t u = m.u;
-                partition_t new_u_id = m.id;
+                weight_t u_w = m.w;
+                partition_t old_u_id = m.old_id;
+                partition_t new_u_id = m.new_id;
                 weight_t gain = m.gain;
 
-                weight_t u_w = g.weights(u);
-                partition_t u_id = lp.partition.map(u);
-                weight_t size_p = lp.partition.bweights(u_id);
+                weight_t size_p = lp.partition.bweights(old_u_id);
 
                 if (size_p <= lp.sigma) return; // not overloaded enough
 
@@ -454,39 +453,38 @@ namespace GPU_HeiPa {
 
                 u32 b = gain_bucket(gain, u_w);
                 u32 mini = u % lp.sections;
-                u32 g_id = get_idx(u_id, b, mini, lp.sections);
+                u32 g_id = get_idx(old_u_id, b, mini, lp.sections);
 
                 u32 width = MAX_BUCKETS * lp.sections;
-                u32 p_begin_shard = u_id * width;
+                u32 p_begin_shard = old_u_id * width;
 
                 weight_t begin_bucket = lp.bucket_offsets(p_begin_shard);
                 weight_t score = lp.save_atomic(u) + lp.bucket_offsets(g_id) - begin_bucket;
 
                 if (score < limit) {
                     u32 idx = Kokkos::atomic_fetch_add(&lp.to_move_idx_2(), 1);
-                    lp.to_move_list_2(idx) = {u, new_u_id, 0};
+                    lp.to_move_list_2(idx) = {u, u_w, old_u_id, new_u_id, 0};
                 }
             });
             KOKKOS_PROFILE_FENCE();
         }
-        u32 list_size_2;
         // move in block connectivity
-        Kokkos::deep_copy(list_size_2, lp.to_move_idx_2);
-        move_bc(bc, g, lp.partition, lp.to_move_list_2, list_size_2);
+        Kokkos::deep_copy(lp.list_size_2, lp.to_move_idx_2);
+        move_bc(bc, g, lp.partition, lp.to_move_list_2, lp.list_size_2);
         // moves in partition
         {
             ScopedTimer _t("rebalance", "jetrw", "apply_moves");
 
-            Kokkos::parallel_for("move", list_size_2, KOKKOS_LAMBDA(const u32 i) {
+            Kokkos::parallel_for("move", lp.list_size_2, KOKKOS_LAMBDA(const u32 i) {
                                      Move m = lp.to_move_list_2(i);
                                      vertex_t u = m.u;
-                                     weight_t u_w = g.weights(u);
-                                     partition_t u_id = lp.partition.map(u);
-                                     partition_t v_id = m.id;
+                                     weight_t u_w = m.w;
+                                     partition_t old_u_id = m.old_id;
+                                     partition_t new_u_id = m.new_id;
 
-                                     lp.partition.map(u) = v_id;
-                                     Kokkos::atomic_add(&lp.partition.bweights(u_id), -u_w);
-                                     Kokkos::atomic_add(&lp.partition.bweights(v_id), u_w);
+                                     lp.partition.map(u) = new_u_id;
+                                     Kokkos::atomic_add(&lp.partition.bweights(old_u_id), -u_w);
+                                     Kokkos::atomic_add(&lp.partition.bweights(new_u_id), u_w);
                                  }
             );
             KOKKOS_PROFILE_FENCE();
@@ -508,23 +506,22 @@ namespace GPU_HeiPa {
                                      partition_t best_id = lp.partition.map(u);
                                      weight_t best_id_w = -max_sentinel<weight_t>();
 
-                                     partition_t u_id = lp.partition.map(u);
+                                     partition_t old_u_id = lp.partition.map(u);
                                      weight_t u_w = g.weights(u);
 
-                                     if (lp.partition.bweights(u_id) <= lp.lmax) { return; }                                                                 // u_id not overloaded
-                                     if ((f64) g.weights(u) > lp.heavy_alpha * (lp.partition.bweights(u_id) - ((f64) g.g_weight / (f64) lp.k))) { return;; } // vertex is too heavy
-
+                                     if (lp.partition.bweights(old_u_id) <= lp.lmax) { return; }                                                                 // u_id not overloaded
+                                     if ((f64) g.weights(u) > lp.heavy_alpha * (lp.partition.bweights(old_u_id) - ((f64) g.g_weight / (f64) lp.k))) { return;; } // vertex is too heavy
 
                                      weight_t own_conn = 0;
                                      for (u32 i = bc.row(u); i < bc.row(u + 1); ++i) {
                                          partition_t id = bc.ids(i);
                                          weight_t w = bc.weights(i);
 
-                                         own_conn = id == u_id ? w : own_conn;
+                                         own_conn = id == old_u_id ? w : own_conn;
 
                                          if (id == lp.k) { continue; }                                // no valid entry
                                          if (lp.partition.bweights(id) + u_w > lp.lmax) { continue; } // dont move into overloaded partition
-                                         if (u_id == id) { continue; }                                // dont move to self
+                                         if (old_u_id == id) { continue; }                            // dont move to self
 
                                          if (w > best_id_w || w == best_id_w && id < best_id) {
                                              best_id = id;
@@ -533,9 +530,11 @@ namespace GPU_HeiPa {
                                          }
                                      }
 
+                                     weight_t gain = best_id_w - own_conn;
+
                                      if (found) {
                                          u32 idx = Kokkos::atomic_fetch_add(&lp.to_move_idx(), 1);
-                                         lp.to_move_list(idx) = {u, best_id, best_id_w - own_conn};
+                                         lp.to_move_list(idx) = {u, u_w, old_u_id, best_id, gain};
                                          lp.id(u) = best_id;
                                      }
                                  }
@@ -554,13 +553,13 @@ namespace GPU_HeiPa {
             Kokkos::parallel_for("count_buckets", list_size, KOKKOS_LAMBDA(const u32 i) {
                                      Move m = lp.to_move_list(i);
                                      vertex_t u = m.u;
-
-                                     partition_t new_id = m.id;
+                                     weight_t u_w = m.w;
+                                     partition_t new_u_id = m.new_id;
                                      weight_t gain = m.gain;
 
-                                     u32 b = gain_bucket(gain, g.weights(u));
+                                     u32 b = gain_bucket(gain, u_w);
                                      u32 mini = u % lp.sections;
-                                     Kokkos::atomic_inc(&lp.bucket_counts(get_idx(new_id, b, mini, lp.sections)));
+                                     Kokkos::atomic_inc(&lp.bucket_counts(get_idx(new_u_id, b, mini, lp.sections)));
                                  }
             );
             KOKKOS_PROFILE_FENCE();
@@ -591,13 +590,13 @@ namespace GPU_HeiPa {
             Kokkos::parallel_for("fill_buckets", list_size, KOKKOS_LAMBDA(const u32 i) {
                                      Move m = lp.to_move_list(i);
                                      vertex_t u = m.u;
-
-                                     partition_t new_id = m.id;
+                                     weight_t u_w = m.w;
+                                     partition_t new_u_id = m.new_id;
                                      weight_t gain = m.gain;
 
-                                     u32 b = gain_bucket(gain, g.weights(u));
+                                     u32 b = gain_bucket(gain, u_w);
                                      u32 mini = u % lp.sections;
-                                     u32 pos = Kokkos::atomic_fetch_inc(&lp.bucket_cursor(get_idx(new_id, b, mini, lp.sections)));
+                                     u32 pos = Kokkos::atomic_fetch_inc(&lp.bucket_cursor(get_idx(new_u_id, b, mini, lp.sections)));
                                      lp.flat_buckets(pos) = u;
                                  }
             );
@@ -623,15 +622,13 @@ namespace GPU_HeiPa {
 
                                              for (u32 pos = beg; pos < end && acquired < cap_d; ++pos) {
                                                  vertex_t u = lp.flat_buckets(pos);
+                                                 partition_t old_u_id = lp.partition.map(u);
+                                                 weight_t u_w = g.weights(u);
 
-                                                 // partition_t pu = lp.p_manager.partition(u);
-                                                 // if (lp.p_manager.bweights(pu) <= lp.lmax) continue;
-
-                                                 weight_t wu = g.weights(u);
-                                                 if (acquired + wu <= cap_d) {
+                                                 if (acquired + u_w <= cap_d) {
                                                      u32 idx = Kokkos::atomic_fetch_add(&lp.to_move_idx_2(), 1);
-                                                     lp.to_move_list_2(idx) = {u, lp.id(u), 0};
-                                                     acquired += wu;
+                                                     lp.to_move_list_2(idx) = {u, u_w, old_u_id, lp.id(u), 0};
+                                                     acquired += u_w;
                                                  } else {
                                                      break;
                                                  }
@@ -642,24 +639,23 @@ namespace GPU_HeiPa {
             );
             KOKKOS_PROFILE_FENCE();
         }
-        u32 list_size_2;
         // move in block connectivity
-        Kokkos::deep_copy(list_size_2, lp.to_move_idx_2);
-        move_bc(bc, g, lp.partition, lp.to_move_list_2, list_size_2);
+        Kokkos::deep_copy(lp.list_size_2, lp.to_move_idx_2);
+        move_bc(bc, g, lp.partition, lp.to_move_list_2, lp.list_size_2);
         // moves in partition
         {
             ScopedTimer _t("rebalance", "jetrs", "apply_moves");
 
-            Kokkos::parallel_for("move", list_size_2, KOKKOS_LAMBDA(const u32 i) {
+            Kokkos::parallel_for("move", lp.list_size_2, KOKKOS_LAMBDA(const u32 i) {
                                      Move m = lp.to_move_list_2(i);
                                      vertex_t u = m.u;
-                                     weight_t u_w = g.weights(u);
-                                     partition_t u_id = lp.partition.map(u);
-                                     partition_t v_id = m.id;
+                                     weight_t u_w = m.w;
+                                     partition_t old_u_id = m.old_id;
+                                     partition_t new_u_id = m.new_id;
 
-                                     lp.partition.map(u) = v_id;
-                                     Kokkos::atomic_add(&lp.partition.bweights(u_id), -u_w);
-                                     Kokkos::atomic_add(&lp.partition.bweights(v_id), u_w);
+                                     lp.partition.map(u) = new_u_id;
+                                     Kokkos::atomic_add(&lp.partition.bweights(old_u_id), -u_w);
+                                     Kokkos::atomic_add(&lp.partition.bweights(new_u_id), u_w);
                                  }
             );
             KOKKOS_PROFILE_FENCE();
@@ -708,10 +704,6 @@ namespace GPU_HeiPa {
         weight_t curr_edge_cut = best_edge_cut;
         weight_t curr_weight = best_weight;
 
-        bool executed_rw = false;
-        weight_t last_rw_edge_cut = max_sentinel<weight_t>();
-        weight_t last_rw_weight = max_sentinel<weight_t>();
-
         // reset to move array
         {
             ScopedTimer _t("refine", "JetLabelPropagation", "reset_to_move");
@@ -722,7 +714,6 @@ namespace GPU_HeiPa {
         u32 weak_iterations = 0;
         u32 iteration = 0;
         while (iteration < lp.n_max_iterations) {
-            executed_rw = false;
             if (curr_weight <= lp.lmax) {
                 jetlp(lp, g, bc);
                 // assert_bc(bc, g, lp.partition, lp.k);
@@ -732,7 +723,6 @@ namespace GPU_HeiPa {
                     jetrw(lp, g, bc);
                     // assert_bc(bc, g, lp.partition, lp.k);
                     weak_iterations++;
-                    executed_rw = true;
                 } else {
                     jetrs(lp, g, bc);
                     // assert_bc(bc, g, lp.partition, lp.k);
@@ -743,7 +733,9 @@ namespace GPU_HeiPa {
             // recalculate edge cut and max weight
             {
                 ScopedTimer _t("refine", "JetLabelPropagation", "get_edge_cut");
-                curr_edge_cut = edge_cut(bc, lp.partition);
+                // curr_edge_cut = edge_cut(bc, lp.partition);
+                curr_edge_cut = edge_cut_update(curr_edge_cut, g, lp.partition, lp.to_move_list_2, lp.list_size_2, mem_stack);
+
                 KOKKOS_PROFILE_FENCE();
             }
             // recalculate max weight
@@ -753,19 +745,6 @@ namespace GPU_HeiPa {
                 KOKKOS_PROFILE_FENCE();
             }
 
-            if (executed_rw) {
-                if (curr_edge_cut == last_rw_edge_cut && last_rw_weight == curr_weight) {
-                    // we executed rw, but it stayed the same, another rw call will change nothing
-                    weak_iterations = lp.max_weak_iterations;
-                } else {
-                    last_rw_edge_cut = curr_edge_cut;
-                    last_rw_weight = curr_weight;
-                }
-            } else {
-                last_rw_edge_cut = max_sentinel<weight_t>();
-                last_rw_weight = max_sentinel<weight_t>();
-            }
-
             if (curr_weight <= lp.lmax) {
                 if (curr_edge_cut < best_edge_cut) {
                     if ((f64) curr_edge_cut < lp.phi * (f64) best_edge_cut) { iteration = 0; }
@@ -773,20 +752,22 @@ namespace GPU_HeiPa {
                     {
                         ScopedTimer _t("refine", "JetLabelPropagation", "copy_partition");
                         copy_into(partition, lp.partition, g.n);
+
+                        best_edge_cut = curr_edge_cut;
+                        best_weight = curr_weight;
                         KOKKOS_PROFILE_FENCE();
                     }
-                    best_edge_cut = curr_edge_cut;
-                    best_weight = curr_weight;
                 }
             } else if (curr_weight < best_weight) {
                 // copy the partition
                 {
                     ScopedTimer _t("refine", "JetLabelPropagation", "copy_partition");
                     copy_into(partition, lp.partition, g.n);
+
+                    best_edge_cut = curr_edge_cut;
+                    best_weight = curr_weight;
                     KOKKOS_PROFILE_FENCE();
                 }
-                best_edge_cut = curr_edge_cut;
-                best_weight = curr_weight;
                 iteration = 0;
             }
 

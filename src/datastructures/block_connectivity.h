@@ -197,7 +197,7 @@ namespace GPU_HeiPa {
             Kokkos::parallel_for("add_conn", list_size, KOKKOS_LAMBDA(const u32 i) {
                 Move m = to_move_list(i);
                 vertex_t u = m.u;
-                partition_t new_u_id = m.id;
+                partition_t new_u_id = m.new_id;
 
                 for (u32 k = g.neighborhood(u); k < g.neighborhood(u + 1); ++k) {
                     vertex_t v = g.edges_v(k);

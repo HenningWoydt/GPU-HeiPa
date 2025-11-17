@@ -42,8 +42,8 @@ namespace GPU_HeiPa {
                                     vertex_t v = g.edges_v(i);
                                     weight_t w = g.edges_w(i);
 
-                                    partition_t u_id = partition.map[u];
-                                    partition_t v_id = partition.map[v];
+                                    partition_t u_id = partition.map(u);
+                                    partition_t v_id = partition.map(v);
 
                                     local_sum += w * (u_id != v_id);
                                 },
@@ -56,12 +56,12 @@ namespace GPU_HeiPa {
     inline weight_t edge_cut(const BlockConnectivity &bc,
                              const Partition &partition) {
         weight_t total_edge_cut = 0;
-        Kokkos::parallel_reduce("edge_cut", bc.size, KOKKOS_LAMBDA(const u32 j, weight_t &local_edge_cut) {
-                                    vertex_t u = bc.us(j);
+        Kokkos::parallel_reduce("edge_cut", bc.size, KOKKOS_LAMBDA(const u32 i, weight_t &local_edge_cut) {
+                                    vertex_t u = bc.us(i);
                                     partition_t u_id = partition.map(u);
 
-                                    partition_t id = bc.ids(j);
-                                    weight_t w = bc.weights(j);
+                                    partition_t id = bc.ids(i);
+                                    weight_t w = bc.weights(i);
 
                                     bool not_self = u_id != id;
                                     bool not_sentinel = id != partition.k;
@@ -71,6 +71,48 @@ namespace GPU_HeiPa {
                                 total_edge_cut);
 
         return total_edge_cut;
+    }
+
+    inline weight_t edge_cut_update(weight_t old_edge_cut,
+                                    const Graph &g,
+                                    const Partition &partition,
+                                    const UnmanagedDeviceMove &to_move_list,
+                                    const u32 list_size,
+                                    KokkosMemoryStack &mem_stack) {
+        auto *old_map_ptr = (partition_t *) get_chunk_back(mem_stack, sizeof(partition_t) * g.n);
+        UnmanagedDevicePartition old_map = UnmanagedDevicePartition(old_map_ptr, g.n);
+        Kokkos::deep_copy(old_map, partition.map);
+
+        Kokkos::parallel_for("edge_cut", list_size, KOKKOS_LAMBDA(const u32 i) {
+            Move m = to_move_list(i);
+            vertex_t u = m.u;
+            partition_t old_u_id = m.old_id;
+
+            old_map(u) = old_u_id;
+        });
+
+        weight_t delta = 0;
+        Kokkos::parallel_reduce("edge_cut", list_size, KOKKOS_LAMBDA(const u32 i, weight_t &local_delta) {
+                                    Move m = to_move_list(i);
+                                    vertex_t u = m.u;
+                                    partition_t old_u_id = m.old_id;
+                                    partition_t new_u_id = m.new_id;
+
+                                    for (u32 j = g.neighborhood(u); j < g.neighborhood(u + 1); ++j) {
+                                        vertex_t v = g.edges_v(j);
+                                        weight_t w = g.edges_w(j);
+
+                                        partition_t old_v_id = old_map(v);
+                                        partition_t new_v_id = partition.map(v);
+
+                                        local_delta += w * ((old_u_id != old_v_id) - (new_u_id != new_v_id));
+                                    }
+                                },
+                                delta);
+
+        pop_back(mem_stack);
+
+        return old_edge_cut - 2*delta;
     }
 }
 

@@ -49,7 +49,9 @@ namespace GPU_HeiPa {
 
     struct Move {
         vertex_t u;
-        partition_t id;
+        weight_t w;
+        partition_t old_id;
+        partition_t new_id;
         weight_t gain;
     };
 
