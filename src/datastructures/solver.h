@@ -80,6 +80,7 @@ namespace GPU_HeiPa {
 
             weight_t edge_cut;
             weight_t max_b_weight;
+            f64 imb;
             partition_t empty_partitions;
             partition_t oload_partitions;
             weight_t sum_oload_weights;
@@ -99,6 +100,7 @@ namespace GPU_HeiPa {
                     << std::setw(11) << L.m << " | "
                     << std::setw(8) << L.edge_cut << " | "
                     << std::setw(5) << L.max_b_weight << " | "
+                    << std::setw(8) << L.imb << " | "
                     << std::setw(6) << (u32) L.empty_partitions << " | "
                     << std::setw(6) << (u32) L.oload_partitions << " | "
                     << std::setw(8) << L.sum_oload_weights << " | "
@@ -116,6 +118,7 @@ namespace GPU_HeiPa {
                     << std::setw(11) << "m" << " | "
                     << std::setw(8) << "cut" << " | "
                     << std::setw(5) << "maxW" << " | "
+                    << std::setw(8) << "imb" << " | "
                     << std::setw(6) << "empty" << " | "
                     << std::setw(6) << "oload" << " | "
                     << std::setw(8) << "w_oload" << " | "
@@ -210,16 +213,28 @@ namespace GPU_HeiPa {
                 level += 1;
             }
 
-            u32 max_level = level - 1;
+            level_infos.emplace_back();
+            level_infos[level].level = level;
+            level_infos[level].n = graphs.back().n;
+            level_infos[level].m = graphs.back().m;
+
             initial_partitioning();
+
+            level_infos[level].max_b_weight = max_weight(partition);
+            level_infos[level].imb = (f64) level_infos[level].max_b_weight / ((f64) host_g.g_weight / (f64) config.k);
+            level_infos[level].edge_cut = edge_cut(graphs.back(), partition);
+            level_infos[level].empty_partitions = n_empty_blocks(partition);
+            level_infos[level].oload_partitions = n_oload_blocks(partition);
+            level_infos[level].sum_oload_weights = sum_oload_weight(partition);
 
             while (!mappings.empty()) {
                 level -= 1;
 
                 uncontraction(level);
-                refinement(max_level, level);
+                refinement(level);
 
                 level_infos[level].max_b_weight = max_weight(partition);
+                level_infos[level].imb = (f64) level_infos[level].max_b_weight / ((f64) host_g.g_weight / (f64) config.k);
                 level_infos[level].edge_cut = edge_cut(graphs.back(), partition);
                 level_infos[level].empty_partitions = n_empty_blocks(partition);
                 level_infos[level].oload_partitions = n_oload_blocks(partition);
@@ -294,10 +309,10 @@ namespace GPU_HeiPa {
             assert_state_after_partition(graphs.back(), partition, config.k);
         }
 
-        void refinement(u32 max_level, u32 level) {
+        void refinement(u32 level) {
             auto p = get_time_point();
 
-            refine(graphs.back(), partition, k, lmax, max_level, level, mem_stack);
+            refine(graphs.back(), partition, k, lmax, level, mem_stack);
 
             Kokkos::fence();
             refinement_ms += get_milli_seconds(p, get_time_point());

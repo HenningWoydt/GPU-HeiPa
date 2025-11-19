@@ -50,7 +50,7 @@ namespace GPU_HeiPa {
                                 sum);
         Kokkos::fence();
 
-        return sum;
+        return sum / 2;
     }
 
     inline weight_t edge_cut(const BlockConnectivity &bc,
@@ -70,7 +70,7 @@ namespace GPU_HeiPa {
                                 },
                                 total_edge_cut);
 
-        return total_edge_cut;
+        return total_edge_cut / 2;
     }
 
     inline weight_t edge_cut_update(weight_t old_edge_cut,
