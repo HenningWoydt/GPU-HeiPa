@@ -160,8 +160,7 @@ namespace GPU_HeiPa {
             Kokkos::parallel_for("remove_weight", list_size, KOKKOS_LAMBDA(const u32 i) {
                 Move m = to_move_list(i);
                 vertex_t u = m.u;
-
-                partition_t u_id = partition.map(u);
+                partition_t u_id = m.old_id;
 
                 for (u32 k = g.neighborhood(u); k < g.neighborhood(u + 1); k++) {
                     vertex_t v = g.edges_v(k);

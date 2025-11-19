@@ -292,6 +292,7 @@ namespace GPU_HeiPa {
                 Move m = lp.to_move_list(i);
                 vertex_t u = m.u;
                 weight_t u_w = m.w;
+                weight_t u_gain = m.gain;
                 partition_t old_u_id = m.old_id;
                 partition_t new_u_id = m.new_id;
 
@@ -300,7 +301,7 @@ namespace GPU_HeiPa {
                     vertex_t v = g.edges_v(j);
                     weight_t w = g.edges_w(j);
 
-                    bool high_priority = lp.in_X(v) == lp.round && ord_smaller(u, v, lp.gain(u), lp.gain(v));
+                    bool high_priority = lp.in_X(v) == lp.round && ord_smaller(u, v, u_gain, lp.gain(v));
 
                     partition_t v_id = high_priority ? lp.id(v) : lp.partition.map(v);
 
@@ -387,7 +388,7 @@ namespace GPU_HeiPa {
                     own_conn = id == old_u_id ? w : own_conn;
 
                     if (id == lp.k) { continue; }                            // no valid entry
-                    if (id == old_u_id) { continue; }                            // dont move to self
+                    if (id == old_u_id) { continue; }                        // dont move to self
                     if (lp.partition.bweights(id) >= lp.sigma) { continue; } // dont move into non underloaded partition
 
                     if (w > best_id_w || (w == best_id_w && id < best_id)) {
@@ -751,10 +752,11 @@ namespace GPU_HeiPa {
                     // copy the partition
                     {
                         ScopedTimer _t("refine", "JetLabelPropagation", "copy_partition");
-                        copy_into(partition, lp.partition, g.n);
 
+                        copy_into(partition, lp.partition, g.n);
                         best_edge_cut = curr_edge_cut;
                         best_weight = curr_weight;
+
                         KOKKOS_PROFILE_FENCE();
                     }
                 }
@@ -762,10 +764,11 @@ namespace GPU_HeiPa {
                 // copy the partition
                 {
                     ScopedTimer _t("refine", "JetLabelPropagation", "copy_partition");
-                    copy_into(partition, lp.partition, g.n);
 
+                    copy_into(partition, lp.partition, g.n);
                     best_edge_cut = curr_edge_cut;
                     best_weight = curr_weight;
+
                     KOKKOS_PROFILE_FENCE();
                 }
                 iteration = 0;
