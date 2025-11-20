@@ -103,7 +103,7 @@ namespace GPU_HeiPa {
             gain_type = 1;
         } else {
             gain_type = MID_BUCKET;
-            gain = abs(gain);
+            gain = Kokkos::abs(gain);
             if (gain < 1.0) {
                 while (gain < 1.0) {
                     gain *= 1.5;
@@ -265,7 +265,7 @@ namespace GPU_HeiPa {
                     if (id == lp.k) { continue; } // no valid entry
                     if (id == u_id) { continue; } // do not move to self
 
-                    if (w > best_id_w || w == best_id_w && id < best_id) {
+                    if (w > best_id_w || (w == best_id_w && id < best_id)) {
                         best_id = id;
                         best_id_w = w;
                         found = true;

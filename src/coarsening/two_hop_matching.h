@@ -399,7 +399,7 @@ namespace GPU_HeiPa {
                 }
                 if (h == 0) h = 1;
 
-                u32 key = h % thm.n;
+                u32 key = (u32) h % thm.n;
                 while (true) {
                     vertex_t old_u = Kokkos::atomic_compare_exchange(&hash(key), thm.n, u);
                     if (old_u == thm.n) {
