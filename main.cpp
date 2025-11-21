@@ -103,6 +103,7 @@ int main(int argc, char *argv[]) {
         Configuration config(argc, argv);
         Solver(config).solve();
     }
+    Kokkos::fence();
     ScopedTimer _t_guard_end("io", "main", "Kokkos::finalize");
     Kokkos::finalize();
     _t_guard_end.stop();
