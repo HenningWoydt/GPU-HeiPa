@@ -160,6 +160,8 @@ namespace GPU_HeiPa {
         UnmanagedDevicePartition underloaded_blocks;
 
         UnmanagedDeviceWeight save_atomic;
+
+        UnmanagedDevicePartition old_map;
     };
 
     inline JetLabelPropagation initialize_lp(const vertex_t t_n,
@@ -214,6 +216,9 @@ namespace GPU_HeiPa {
         auto *save_atomic_ptr = (weight_t *) get_chunk_back(mem_stack, sizeof(weight_t) * t_n);
         lp.save_atomic = UnmanagedDeviceWeight(save_atomic_ptr, t_n);
 
+        auto *old_map_ptr = (partition_t *) get_chunk_back(mem_stack, sizeof(partition_t) * t_n);
+        lp.old_map = UnmanagedDevicePartition(old_map_ptr, t_n);
+
         return lp;
     }
 
@@ -223,6 +228,7 @@ namespace GPU_HeiPa {
 
         ScopedTimer _t("refine", "JetLabelPropagation", "free");
 
+        pop_back(mem_stack);
         pop_back(mem_stack);
         pop_back(mem_stack);
         pop_back(mem_stack);
@@ -291,6 +297,7 @@ namespace GPU_HeiPa {
             });
             KOKKOS_PROFILE_FENCE();
         }
+
         // use afterburner
         {
             ScopedTimer _t("refine", "jetlp", "afterburner");
@@ -686,12 +693,13 @@ namespace GPU_HeiPa {
         }
     }
 
-    inline void refine(Graph &g,
-                       Partition &partition,
-                       partition_t k,
-                       weight_t lmax,
-                       u32 level,
-                       KokkosMemoryStack &mem_stack) {
+    inline weight_t refine(Graph &g,
+                           Partition &partition,
+                           partition_t k,
+                           weight_t lmax,
+                           u32 level,
+                           weight_t curr_edge_cut,
+                           KokkosMemoryStack &mem_stack) {
         JetLabelPropagation lp = initialize_lp(g.n, g.m, k, lmax, mem_stack);
 
         if (level == 0) { lp.conn_c = 0.25; }
@@ -707,13 +715,7 @@ namespace GPU_HeiPa {
         BlockConnectivity bc = from_scratch(g, lp.partition, mem_stack);
         // assert_bc(bc, g, lp.partition, lp.k);
 
-        weight_t best_edge_cut = 0;
-        // initial edge cut
-        {
-            ScopedTimer _t_edge_cut("refine", "JetLabelPropagation", "get_edge_cut");
-            best_edge_cut = edge_cut(bc, lp.partition);
-            KOKKOS_PROFILE_FENCE();
-        }
+        weight_t best_edge_cut = curr_edge_cut;
         weight_t best_weight = 0;
         // initial maximum weight
         {
@@ -722,7 +724,7 @@ namespace GPU_HeiPa {
             KOKKOS_PROFILE_FENCE();
         }
 
-        weight_t curr_edge_cut = best_edge_cut;
+        // weight_t curr_edge_cut = best_edge_cut;
         weight_t curr_weight = best_weight;
 
         // init arrays
@@ -741,17 +743,17 @@ namespace GPU_HeiPa {
 
             if (curr_weight <= lp.lmax) {
                 jetlp(lp, g, bc);
-                std::cout << level << " jetlp " << lp.n_moves << " ";
+                // std::cout << level << " jetlp " << lp.n_moves << " ";
                 // assert_bc(bc, g, lp.partition, lp.k);
                 balance_iterations = 0;
             } else {
                 if (balance_iterations < lp.max_weak_iterations) {
                     jetrw(lp, g, bc);
-                    std::cout << level << " jetrw " << lp.n_moves << " ";
+                    // std::cout << level << " jetrw " << lp.n_moves << " ";
                     // assert_bc(bc, g, lp.partition, lp.k);
                 } else {
                     jetrs(lp, g, bc);
-                    std::cout << level << " jetrs " << lp.n_moves << " ";
+                    // std::cout << level << " jetrs " << lp.n_moves << " ";
                     // assert_bc(bc, g, lp.partition, lp.k);
                 }
                 balance_iterations++;
@@ -759,6 +761,15 @@ namespace GPU_HeiPa {
 
             // move in block connectivity
             move_bc(bc, g, lp.partition, lp.moves, lp.n_moves);
+
+            // save old map
+            {
+                ScopedTimer _t("refine", "JetLabelPropagation", "copy_old_map");
+
+                Kokkos::deep_copy(lp.old_map, lp.partition.map);
+
+                KOKKOS_PROFILE_FENCE();
+            }
             // moves in partition
             {
                 ScopedTimer _t("refine", "JetLabelPropagation", "apply_moves");
@@ -780,7 +791,8 @@ namespace GPU_HeiPa {
             // recalculate edge cut and max weight
             {
                 ScopedTimer _t("refine", "JetLabelPropagation", "get_edge_cut");
-                curr_edge_cut = edge_cut(bc, lp.partition);
+
+                curr_edge_cut = edge_cut_update(curr_edge_cut, g, lp.partition, lp.old_map, lp.moves, lp.n_moves);
 
                 KOKKOS_PROFILE_FENCE();
             }
@@ -790,8 +802,6 @@ namespace GPU_HeiPa {
                 curr_weight = max_weight(lp.partition);
                 KOKKOS_PROFILE_FENCE();
             }
-
-            std::cout << total_n_iteration << " " << curr_edge_cut << " " << curr_weight << std::endl;
 
             if (best_weight > lp.lmax && curr_weight < best_weight) {
                 // copy the partition
@@ -822,6 +832,8 @@ namespace GPU_HeiPa {
         free_lp(lp, mem_stack);
 
         assert_back_is_empty(mem_stack);
+
+        return best_edge_cut;
     }
 }
 

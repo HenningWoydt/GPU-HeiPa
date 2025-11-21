@@ -63,6 +63,7 @@ namespace GPU_HeiPa {
 
         Partition partition;
 
+        weight_t curr_edge_cut = 0;
         weight_t initial_edge_cut = 0;
         weight_t initial_max_block_weight = 0;
 
@@ -301,6 +302,7 @@ namespace GPU_HeiPa {
             recalculate_weights(partition, graphs.back());
 
             initial_edge_cut = edge_cut(graphs.back(), partition);
+            curr_edge_cut = initial_edge_cut;
             initial_max_block_weight = max_weight(partition);
 
             Kokkos::fence();
@@ -312,7 +314,7 @@ namespace GPU_HeiPa {
         void refinement(u32 level) {
             auto p = get_time_point();
 
-            refine(graphs.back(), partition, k, lmax, level, mem_stack);
+            curr_edge_cut = refine(graphs.back(), partition, k, lmax, level, curr_edge_cut, mem_stack);
 
             Kokkos::fence();
             refinement_ms += get_milli_seconds(p, get_time_point());

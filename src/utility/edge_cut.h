@@ -76,21 +76,9 @@ namespace GPU_HeiPa {
     inline weight_t edge_cut_update(weight_t old_edge_cut,
                                     const Graph &g,
                                     const Partition &partition,
+                                    const UnmanagedDevicePartition &old_map,
                                     const UnmanagedDeviceMove &to_move_list,
-                                    const u32 list_size,
-                                    KokkosMemoryStack &mem_stack) {
-        auto *old_map_ptr = (partition_t *) get_chunk_back(mem_stack, sizeof(partition_t) * g.n);
-        UnmanagedDevicePartition old_map = UnmanagedDevicePartition(old_map_ptr, g.n);
-        Kokkos::deep_copy(old_map, partition.map);
-
-        Kokkos::parallel_for("edge_cut", list_size, KOKKOS_LAMBDA(const u32 i) {
-            Move m = to_move_list(i);
-            vertex_t u = m.u;
-            partition_t old_u_id = m.old_id;
-
-            old_map(u) = old_u_id;
-        });
-
+                                    const u32 list_size) {
         weight_t delta = 0;
         Kokkos::parallel_reduce("edge_cut", list_size, KOKKOS_LAMBDA(const u32 i, weight_t &local_delta) {
                                     Move m = to_move_list(i);
@@ -105,14 +93,15 @@ namespace GPU_HeiPa {
                                         partition_t old_v_id = old_map(v);
                                         partition_t new_v_id = partition.map(v);
 
-                                        local_delta += w * ((old_u_id != old_v_id) - (new_u_id != new_v_id));
+                                        bool old_cut = (old_u_id != old_v_id);
+                                        bool new_cut = (new_u_id != new_v_id);
+
+                                        local_delta += w * (new_cut - old_cut);
                                     }
                                 },
                                 delta);
 
-        pop_back(mem_stack);
-
-        return old_edge_cut - 2*delta;
+        return old_edge_cut + delta / 2;
     }
 }
 
