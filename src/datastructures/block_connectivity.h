@@ -48,13 +48,6 @@ namespace GPU_HeiPa {
                         KokkosMemoryStack &mem_stack) {
         ScopedTimer _t("refine", "BlockConnectivity", "free");
 
-        bc.n = 0;
-        bc.size = 0;
-        bc.row = UnmanagedDeviceU32(nullptr, 0);
-        bc.us = UnmanagedDeviceVertex(nullptr, 0);
-        bc.ids = UnmanagedDevicePartition(nullptr, 0);
-        bc.weights = UnmanagedDeviceWeight(nullptr, 0);
-
         pop_back(mem_stack);
         pop_back(mem_stack);
         pop_back(mem_stack);
@@ -97,12 +90,9 @@ namespace GPU_HeiPa {
         // allocate rest
         {
             ScopedTimer _t("refine", "BlockConnectivity_fs", "allocate");
-            auto *us_ptr = (vertex_t *) get_chunk_back(mem_stack, sizeof(vertex_t) * bc.size);
-            auto *ids_ptr = (partition_t *) get_chunk_back(mem_stack, sizeof(partition_t) * bc.size);
-            auto *weights_ptr = (weight_t *) get_chunk_back(mem_stack, sizeof(weight_t) * bc.size);
-            bc.us = UnmanagedDeviceVertex(us_ptr, bc.size);
-            bc.ids = UnmanagedDevicePartition(ids_ptr, bc.size);
-            bc.weights = UnmanagedDeviceWeight(weights_ptr, bc.size);
+            bc.us = UnmanagedDeviceVertex((vertex_t *) get_chunk_back(mem_stack, sizeof(vertex_t) * bc.size), bc.size);
+            bc.ids = UnmanagedDevicePartition((partition_t *) get_chunk_back(mem_stack, sizeof(partition_t) * bc.size), bc.size);
+            bc.weights = UnmanagedDeviceWeight((weight_t *) get_chunk_back(mem_stack, sizeof(weight_t) * bc.size), bc.size);
             Kokkos::deep_copy(bc.ids, partition.k);
             Kokkos::deep_copy(bc.weights, 0);
             KOKKOS_PROFILE_FENCE();
@@ -149,18 +139,18 @@ namespace GPU_HeiPa {
     }
 
     inline void move_bc(BlockConnectivity &bc,
-                         const Graph &g,
-                         const Partition &partition,
-                         const UnmanagedDeviceMove &to_move_list,
-                         const u32 list_size) {
+                        const Graph &g,
+                        const Partition &partition,
+                        const UnmanagedDevicePartition &id,
+                        const UnmanagedDeviceVertex &moves,
+                        const u32 n_moves) {
         // remove_weight
         {
             ScopedTimer _t("refine", "BlockConnectivity_move", "remove_weight");
 
-            Kokkos::parallel_for("remove_weight", list_size, KOKKOS_LAMBDA(const u32 i) {
-                Move m = to_move_list(i);
-                vertex_t u = m.u;
-                partition_t u_id = m.old_id;
+            Kokkos::parallel_for("remove_weight", n_moves, KOKKOS_LAMBDA(const u32 i) {
+                vertex_t u = moves(i);
+                partition_t u_id = partition.map(u);
 
                 for (u32 k = g.neighborhood(u); k < g.neighborhood(u + 1); k++) {
                     vertex_t v = g.edges_v(k);
@@ -193,10 +183,9 @@ namespace GPU_HeiPa {
         {
             ScopedTimer _t("refine", "BlockConnectivity_move", "add_conn");
 
-            Kokkos::parallel_for("add_conn", list_size, KOKKOS_LAMBDA(const u32 i) {
-                Move m = to_move_list(i);
-                vertex_t u = m.u;
-                partition_t new_u_id = m.new_id;
+            Kokkos::parallel_for("add_conn", n_moves, KOKKOS_LAMBDA(const u32 i) {
+                vertex_t u = moves(i);
+                partition_t new_u_id = id(u);
 
                 for (u32 k = g.neighborhood(u); k < g.neighborhood(u + 1); ++k) {
                     vertex_t v = g.edges_v(k);

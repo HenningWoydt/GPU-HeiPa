@@ -47,14 +47,6 @@ namespace GPU_HeiPa {
     typedef s32 weight_t;
     typedef u32 partition_t;
 
-    struct Move {
-        vertex_t u;
-        weight_t w;
-        partition_t old_id;
-        partition_t new_id;
-        weight_t gain;
-    };
-
     using DeviceMemorySpace = Kokkos::DefaultExecutionSpace::memory_space;
 
     using HostVertex = Kokkos::View<vertex_t *, Kokkos::HostSpace>;
@@ -98,8 +90,6 @@ namespace GPU_HeiPa {
     using UnmanagedDeviceS64 = Kokkos::View<s64 *, DeviceMemorySpace, Kokkos::MemoryTraits<Kokkos::Unmanaged> >;
     using UnmanagedDeviceF32 = Kokkos::View<f32 *, DeviceMemorySpace, Kokkos::MemoryTraits<Kokkos::Unmanaged> >;
     using UnmanagedDeviceF64 = Kokkos::View<f64 *, DeviceMemorySpace, Kokkos::MemoryTraits<Kokkos::Unmanaged> >;
-
-    using UnmanagedDeviceMove = Kokkos::View<Move *, DeviceMemorySpace, Kokkos::MemoryTraits<Kokkos::Unmanaged> >;
 }
 
 #endif //GPU_HEIPA_DEFINITIONS_H
