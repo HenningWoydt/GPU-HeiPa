@@ -30,27 +30,47 @@
 #include <Kokkos_Core.hpp>
 
 namespace GPU_HeiPa {
+    #ifndef ENABLE_PROFILER
+    #define ENABLE_PROFILER 1
+    #endif
 
-#ifndef ENABLE_PROFILER
-#define ENABLE_PROFILER 1
-#endif
+    #ifndef ASSERT_ENABLED
+    #define ASSERT_ENABLED false
+    #endif
 
-#ifndef ASSERT_ENABLED
-#define ASSERT_ENABLED false
-#endif
+    #if (ASSERT_ENABLED)
+    #define ASSERT(condition) if(!(condition)) {std::cerr << "Error in file " << __FILE__ << " in function " << __FUNCTION__ << " at line " << __LINE__ << "!" << std::endl; abort(); } ((void)0)
+    #else
+    #define ASSERT(condition) if(!(condition)) {((void)0); } ((void)0)
+    #endif
 
-#if (ASSERT_ENABLED)
-#define ASSERT(condition) if(!(condition)) {std::cerr << "Error in file " << __FILE__ << " in function " << __FUNCTION__ << " at line " << __LINE__ << "!" << std::endl; abort(); } ((void)0)
-#else
-#define ASSERT(condition) if(!(condition)) {((void)0); } ((void)0)
-#endif
+    #if (ENABLE_PROFILER)
+    #define KOKKOS_PROFILE_FENCE() do { Kokkos::fence(); } while(0)
+    #else
+    #define KOKKOS_PROFILE_FENCE() do {} while(0)
+    #endif
 
-#if (ENABLE_PROFILER)
-#define KOKKOS_PROFILE_FENCE() do { Kokkos::fence(); } while(0)
-#else
-#define KOKKOS_PROFILE_FENCE() do {} while(0)
-#endif
+    #if (ASSERT_ENABLED)
 
+    // Basic assert
+    #define MY_KOKKOS_ASSERT(cond) \
+        do { \
+        if (!(cond)) { \
+        printf("\n[ASSERT FAILED]\n" \
+        "  Condition : %s\n" \
+        "  File      : %s\n" \
+        "  Function  : %s\n" \
+        "  Line      : %d\n", \
+        #cond, __FILE__, __func__, __LINE__); \
+        Kokkos::abort("[ASSERT FAILED]"); \
+        } \
+        } while (0)
+
+    #else  // ASSERT_ENABLED
+
+    #define MY_KOKKOS_ASSERT(cond)         do { (void)sizeof(cond); } while (0)
+
+    #endif
 }
 
 #endif //GPU_HEIPA_MACROS_H

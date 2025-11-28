@@ -113,17 +113,15 @@ namespace GPU_HeiPa {
         //
         {
             ScopedTimer _t("coarsening", "determine_mapping", "allocate");
-            auto *needs_id_ptr = (u32 *) get_chunk_back(mem_stack, sizeof(u32) * n);
-            auto *assigned_id_ptr = (vertex_t *) get_chunk_back(mem_stack, sizeof(vertex_t) * n);
-            needs_id = UnmanagedDeviceU32(needs_id_ptr, n);
-            assigned_id = UnmanagedDeviceVertex(assigned_id_ptr, n);
+            needs_id = UnmanagedDeviceU32((u32 *) get_chunk_back(mem_stack, sizeof(u32) * n), n);
+            assigned_id = UnmanagedDeviceVertex((vertex_t *) get_chunk_back(mem_stack, sizeof(vertex_t) * n), n);
         }
         //
         {
             ScopedTimer _t("coarsening", "determine_mapping", "mark_and_count");
             Kokkos::parallel_reduce("mark_and_count", n, KOKKOS_LAMBDA(const vertex_t u, vertex_t &lsum) {
                                         vertex_t v = matching(u);
-                                        u32 need = (v == u || u < v) ? 1 : 0;
+                                        u32 need = v <= u;
                                         needs_id(u) = need; // side-effect: mark array
                                         lsum += need;       // accumulate count
                                     },
@@ -148,11 +146,14 @@ namespace GPU_HeiPa {
             ScopedTimer _t("coarsening", "determine_mapping", "assign_old_to_new");
             Kokkos::parallel_for("assign_old_to_new", n, KOKKOS_LAMBDA(const vertex_t u) {
                 vertex_t v = matching(u);
-                vertex_t id = u > v ? assigned_id(v) : assigned_id(u);
-                mapping.mapping(u) = id;
+                mapping.mapping(u) = v <= u ? assigned_id(u) : assigned_id(v);
             });
             KOKKOS_PROFILE_FENCE();
         }
+
+        Kokkos::parallel_for("assign_old_to_new", n, KOKKOS_LAMBDA(const vertex_t u) {
+            MY_KOKKOS_ASSERT(mapping.mapping(u) < mapping.coarse_n);
+        });
 
         pop_back(mem_stack);
         pop_back(mem_stack);
@@ -284,15 +285,14 @@ namespace GPU_HeiPa {
                               const Partition &partition,
                               KokkosMemoryStack &mem_stack) {
         vertex_t n_unmapped = thm.n - thm.n_matched;
-        auto *unmapped_v_ptr = (vertex_t *) get_chunk_back(mem_stack, sizeof(vertex_t) * n_unmapped);
-        UnmanagedDeviceVertex unmapped_v = UnmanagedDeviceVertex(unmapped_v_ptr, n_unmapped);
+        UnmanagedDeviceVertex unmapped_v = UnmanagedDeviceVertex((vertex_t *) get_chunk_back(mem_stack, sizeof(vertex_t) * n_unmapped), n_unmapped);
 
         vertex_t n_mappable = 0;
         // determine unmapped vertices
         {
             ScopedTimer _t("coarsening", "thm_leaf_matching", "determine_unmapped");
             Kokkos::parallel_scan("fill_unmapped_deg1", g.n, KOKKOS_LAMBDA(const vertex_t u, vertex_t &offset, const bool final) {
-                const bool is_unmatched_deg1 = (matching(u) == u) && (g.neighborhood(u + 1) - g.neighborhood(u) == 1);
+                bool is_unmatched_deg1 = (matching(u) == u) && (g.neighborhood(u + 1) - g.neighborhood(u) == 1);
 
                 if (is_unmatched_deg1) {
                     if (final) { unmapped_v(offset) = u; }
@@ -308,9 +308,14 @@ namespace GPU_HeiPa {
         }
 
         // large hash array, but no faulty collisions possible
-        auto *hash_ptr = (vertex_t *) get_chunk_back(mem_stack, sizeof(vertex_t) * thm.n);
-        UnmanagedDeviceVertex hash = UnmanagedDeviceVertex(hash_ptr, thm.n);
-        Kokkos::deep_copy(hash, thm.n);
+        UnmanagedDeviceVertex hash;
+        //
+        {
+            ScopedTimer _t("coarsening", "thm_leaf_matching", "init_hash_array");
+
+            hash = UnmanagedDeviceVertex((vertex_t *) get_chunk_back(mem_stack, sizeof(vertex_t) * thm.n), thm.n);
+            Kokkos::deep_copy(hash, thm.n);
+        }
 
         u32 made_pairs = 0;
         // pick partners for unmatched vertices
@@ -325,17 +330,16 @@ namespace GPU_HeiPa {
                     if (old_u == thm.n) {
                         // we claimed the spot, no more to be done
                         break;
-                    } else {
-                        // slot not empty, but has old_u in it, try to claim old_u
-                        vertex_t next_old_u = Kokkos::atomic_compare_exchange(&hash(v), old_u, thm.n);
-                        if (next_old_u == old_u) {
-                            // we claimed old_u, so now match them
-                            matching(u) = old_u;
-                            matching(old_u) = u;
-                            local += 1; // count pairs
-                        } else {
-                            // old_u was claimed by someone else, recheck all
-                        }
+                    }
+
+                    // slot not empty, but has old_u in it, try to claim old_u
+                    vertex_t next_old_u = Kokkos::atomic_compare_exchange(&hash(v), old_u, thm.n);
+                    if (next_old_u == old_u) {
+                        // we claimed old_u, so now match them
+                        matching(u) = old_u;
+                        matching(old_u) = u;
+                        local += 1; // count pairs
+                        break;
                     }
                 }
             }, made_pairs);
@@ -354,13 +358,12 @@ namespace GPU_HeiPa {
                               const Partition &partition,
                               KokkosMemoryStack &mem_stack) {
         vertex_t n_unmapped = thm.n - thm.n_matched;
-        auto *unmapped_v_ptr = (vertex_t *) get_chunk_back(mem_stack, sizeof(vertex_t) * n_unmapped);
-        UnmanagedDeviceVertex unmapped_v = UnmanagedDeviceVertex(unmapped_v_ptr, n_unmapped);
+        UnmanagedDeviceVertex unmapped_v = UnmanagedDeviceVertex((vertex_t *) get_chunk_back(mem_stack, sizeof(vertex_t) * n_unmapped), n_unmapped);
 
         vertex_t n_mappable = 0;
         // determine unmapped vertices
         {
-            ScopedTimer _t("coarsening", "thm_leaf_matching", "determine_unmapped");
+            ScopedTimer _t("coarsening", "thm_twin_matching", "determine_unmapped");
             Kokkos::parallel_scan("fill_unmapped_deg1", g.n, KOKKOS_LAMBDA(const vertex_t u, vertex_t &offset, const bool final) {
                 const bool is_unmatched = (matching(u) == u);
 
@@ -378,14 +381,19 @@ namespace GPU_HeiPa {
         }
 
         // large hash array
-        auto *hash_ptr = (vertex_t *) get_chunk_back(mem_stack, sizeof(vertex_t) * thm.n);
-        UnmanagedDeviceVertex hash = UnmanagedDeviceVertex(hash_ptr, thm.n);
-        Kokkos::deep_copy(hash, thm.n);
+        UnmanagedDeviceVertex hash;
+        //
+        {
+            ScopedTimer _t("coarsening", "thm_twin_matching", "init_hash_array");
+
+            hash = UnmanagedDeviceVertex((vertex_t *) get_chunk_back(mem_stack, sizeof(vertex_t) * thm.n), thm.n);
+            Kokkos::deep_copy(hash, thm.n);
+        }
 
         u32 made_pairs = 0;
         // pick partners for unmatched vertices
         {
-            ScopedTimer _t("coarsening", "thm_leaf_matching", "pick_neighbor");
+            ScopedTimer _t("coarsening", "thm_twin_matching", "pick_neighbor");
             Kokkos::parallel_reduce("pick_neighbor", n_mappable, KOKKOS_LAMBDA(const u32 i, u32 &local) {
                 vertex_t u = unmapped_v(i);
 
@@ -405,17 +413,16 @@ namespace GPU_HeiPa {
                     if (old_u == thm.n) {
                         // we claimed the spot, no more to be done
                         break;
-                    } else {
-                        // slot not empty, but has old_u in it, try to claim old_u
-                        vertex_t next_old_u = Kokkos::atomic_compare_exchange(&hash(key), old_u, thm.n);
-                        if (next_old_u == old_u) {
-                            // we claimed old_u, so now match them
-                            matching(u) = old_u;
-                            matching(old_u) = u;
-                            local += 1; // count pairs
-                        } else {
-                            // old_u was claimed by someone else, recheck all
-                        }
+                    }
+
+                    // slot not empty, but has old_u in it, try to claim old_u
+                    vertex_t next_old_u = Kokkos::atomic_compare_exchange(&hash(key), old_u, thm.n);
+                    if (next_old_u == old_u) {
+                        // we claimed old_u, so now match them
+                        matching(u) = old_u;
+                        matching(old_u) = u;
+                        local += 1; // count pairs
+                        break;
                     }
                 }
             }, made_pairs);
@@ -518,15 +525,37 @@ namespace GPU_HeiPa {
 
         heavy_edge_matching(thm, g, matching, partition, mem_stack);
 
+        Kokkos::parallel_for("assign_old_to_new", g.n, KOKKOS_LAMBDA(const vertex_t u) {
+            vertex_t v = matching(u);
+            MY_KOKKOS_ASSERT(matching(v) == u);
+        });
+
         if ((f64) thm.n_matched < thm.threshold * (f64) g.n) {
             leaf_matching(thm, g, matching, partition, mem_stack);
         }
+
+        Kokkos::parallel_for("assign_old_to_new", g.n, KOKKOS_LAMBDA(const vertex_t u) {
+            vertex_t v = matching(u);
+            MY_KOKKOS_ASSERT(matching(v) == u);
+        });
+
         if ((f64) thm.n_matched < thm.threshold * (f64) g.n) {
             twin_matching(thm, g, matching, partition, mem_stack);
         }
+
+        Kokkos::parallel_for("assign_old_to_new", g.n, KOKKOS_LAMBDA(const vertex_t u) {
+            vertex_t v = matching(u);
+            MY_KOKKOS_ASSERT(matching(v) == u);
+        });
+
         if ((f64) thm.n_matched < thm.threshold * (f64) g.n) {
             relative_matching(thm, g, matching, partition);
         }
+
+        Kokkos::parallel_for("assign_old_to_new", g.n, KOKKOS_LAMBDA(const vertex_t u) {
+            vertex_t v = matching(u);
+            MY_KOKKOS_ASSERT(matching(v) == u);
+        });
 
         Mapping mapping = determine_mapping(matching, g.n, mem_stack);
 

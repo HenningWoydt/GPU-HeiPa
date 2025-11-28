@@ -126,13 +126,13 @@ namespace GPU_HeiPa {
         ++p;
         vertex_t u = 0;
         size_t curr_m = 0;
-        
+
         // Pre-fetch data pointers for better cache performance
-        vertex_t* edges_v_ptr = g.edges_v.data();
-        weight_t* edges_w_ptr = g.edges_w.data();
-        weight_t* weights_ptr = g.weights.data();
-        vertex_t* neighborhood_ptr = g.neighborhood.data();
-        
+        vertex_t *edges_v_ptr = g.edges_v.data();
+        weight_t *edges_w_ptr = g.edges_w.data();
+        weight_t *weights_ptr = g.weights.data();
+        vertex_t *neighborhood_ptr = g.neighborhood.data();
+
         while (p < end) {
             // skip comment lines
             while (*p == '%') {
@@ -181,6 +181,9 @@ namespace GPU_HeiPa {
 
                 edges_v_ptr[curr_m] = v - 1;
                 edges_w_ptr[curr_m] = w;
+                ASSERT(v-1 < g.n);
+                ASSERT(w > 0);
+                ASSERT(curr_m < g.m);
                 ++curr_m;
             }
             neighborhood_ptr[u + 1] = (vertex_t) curr_m;
