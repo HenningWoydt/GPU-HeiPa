@@ -94,31 +94,29 @@ namespace GPU_HeiPa {
 
     KOKKOS_INLINE_FUNCTION
     u32 gain_bucket(weight_t g, weight_t vwgt) {
+        if (g > 0) { return 0; }
+        if (g == 0) { return 1; }
+
         //cast to float so we can approximate log_1.5
-        f64 gain = static_cast<f64>(g) / static_cast<f64>(vwgt);
-        u32 gain_type = 0;
-        if (gain > 0.0) {
-            gain_type = 0;
-        } else if (gain == 0.0) {
-            gain_type = 1;
-        } else {
-            gain_type = MID_BUCKET;
-            gain = Kokkos::abs(gain);
-            if (gain < 1.0) {
-                while (gain < 1.0) {
-                    gain *= 1.5;
-                    gain_type--;
-                }
+        f64 gain = (f64) -g / (f64) vwgt;
+        u32 gain_type = MID_BUCKET;
+
+        if (gain < 1.0) {
+            while (gain < 1.0) {
+                gain *= 1.5;
+                gain_type--;
+
                 if (gain_type < 2) {
-                    gain_type = 2;
+                    return 2;
                 }
-            } else {
-                while (gain > 1.0) {
-                    gain /= 1.5;
-                    gain_type++;
-                }
-                if (gain_type > MAX_BUCKETS) {
-                    gain_type = MAX_BUCKETS - 1;
+            }
+        } else {
+            while (gain > 1.0) {
+                gain /= 1.5;
+                gain_type++;
+
+                if (gain_type >= MAX_BUCKETS) {
+                    return MAX_BUCKETS - 1;
                 }
             }
         }
@@ -390,11 +388,12 @@ namespace GPU_HeiPa {
                     lp.underloaded_blocks(idx) = id;
                 }
             });
+
+            Kokkos::deep_copy(lp.n_moves, lp.n_underloaded_blocks);
             KOKKOS_PROFILE_FENCE();
         }
 
-        Kokkos::deep_copy(lp.n_moves, lp.n_underloaded_blocks);
-        if (lp.n_moves == 0){ return; }
+        if (lp.n_moves == 0) { return; }
 
         // determine best block
         {
