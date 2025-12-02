@@ -88,25 +88,25 @@ namespace GPU_HeiPa {
 
     std::string get_kokkos_execution_space_as_str() {
         using ExecSpace = Kokkos::DefaultExecutionSpace;
-#if defined(KOKKOS_ENABLE_CUDA)
+        #if defined(KOKKOS_ENABLE_CUDA)
         if (std::is_same<ExecSpace, Kokkos::Cuda>::value) { return "Cuda"; }
-#endif
+        #endif
 
-#if defined(KOKKOS_ENABLE_HIP)
+        #if defined(KOKKOS_ENABLE_HIP)
         if (std::is_same<ExecSpace, Kokkos::HIP>::value) { return "HIP"; }
-#endif
+        #endif
 
-#if defined(KOKKOS_ENABLE_OPENMP)
+        #if defined(KOKKOS_ENABLE_OPENMP)
         if (std::is_same<ExecSpace, Kokkos::OpenMP>::value) { return "OpenMP"; }
-#endif
+        #endif
 
-#if defined(KOKKOS_ENABLE_THREADS)
+        #if defined(KOKKOS_ENABLE_THREADS)
         if (std::is_same<ExecSpace, Kokkos::Threads>::value) { return "Threads"; }
-#endif
+        #endif
 
-#if defined(KOKKOS_ENABLE_SERIAL)
+        #if defined(KOKKOS_ENABLE_SERIAL)
         if (std::is_same<ExecSpace, Kokkos::Serial>::value) { return "Serial"; }
-#endif
+        #endif
     }
 
     KOKKOS_INLINE_FUNCTION
@@ -145,100 +145,42 @@ namespace GPU_HeiPa {
     KOKKOS_INLINE_FUNCTION
     u32 floor_log2_u32(u32 v) {
         // precondition: v > 0
-#if defined(__CUDA_ARCH__)
+        #if defined(__CUDA_ARCH__)
         // CUDA device: count-leading-zeros (32-bit)
         return 31u - (u32) __clz(v);
-#elif defined(__HIP_DEVICE_COMPILE__)
+        #elif defined(__HIP_DEVICE_COMPILE__)
         // HIP device: same builtin
         return 31u - (u32) __clz(v);
-#elif defined(_MSC_VER)
+        #elif defined(_MSC_VER)
         // MSVC host
         unsigned long idx;
         _BitScanReverse(&idx, v);
         return (u32) idx;
-#elif defined(__GNUC__) || defined(__clang__)
+        #elif defined(__GNUC__) || defined(__clang__)
         // GCC/Clang host
         return 31u - (u32) __builtin_clz(v);
-#else
+        #else
         // portable fallback
         u32 r = 0;
         while (v >>= 1) ++r;
         return r;
-#endif
+        #endif
     }
 
     KOKKOS_INLINE_FUNCTION
     u32 floor_log2_u64(u64 x) {
         if (x == 0ull) return 0u;
-#if defined(__CUDA_ARCH__)
+        #if defined(__CUDA_ARCH__)
         return 63u - (u32) __clzll((unsigned long long) x);
-#elif defined(__HIP_DEVICE_COMPILE__)
+        #elif defined(__HIP_DEVICE_COMPILE__)
         return 63u - (u32) __clzll((unsigned long long) x);
-#else
+        #else
         return 63u - (u32) __builtin_clzll((unsigned long long) x);
-#endif
+        #endif
     }
 
     KOKKOS_INLINE_FUNCTION
-    u64 abs_s64_to_u64(s64 x) {
-        return (x >= 0)
-                   ? (u64) x
-                   : (x == (s64) 0x8000000000000000LL ? (1ull << 63) : (u64) (-x));
-    }
-
-    // Helper: bitcast float->u32 without UB
-    KOKKOS_INLINE_FUNCTION
-    u32 f32_bits(f32 x) {
-        union {
-            f32 f;
-            u32 u;
-        } u;
-        u.f = x;
-        return u.u;
-    }
-
-    // Helper: pack rating+tie into one u64
-    KOKKOS_INLINE_FUNCTION
-    u64 pack_f32_vertex(f32 rating, vertex_t v) {
-        const u32 r = f32_bits(rating); // monotonic if rating >= 0
-        const u32 tie = 0xFFFFFFFFu - (u32) v; // prefer smaller v on ties
-        return (u64(r) << 32) | u64(tie);
-    }
-
-    // Helper: unpack vertex from packed pair
-    KOKKOS_INLINE_FUNCTION
-    vertex_t unpack_vertex(u64 packed) {
-        if (packed == 0ull) return UINT32_MAX;
-        const u32 inv_v = (u32) (packed & 0xFFFFFFFFu);
-        return (vertex_t) (0xFFFFFFFFu - inv_v);
-    }
-
-    // Pack (score:int32, vertex:uint32) -> uint64
-    KOKKOS_INLINE_FUNCTION
-    u64 pack_s32_partition(s32 score, partition_t p) {
-        // Make signed int32 sortable in unsigned domain by biasing
-        const u32 biased = static_cast<u32>(score) ^ 0x80000000u;
-        // Prefer *larger* score first, then smaller vertex on tie → invert vertex
-        const u32 inv_v  = 0xFFFFFFFFu - static_cast<u32>(p);
-        return (static_cast<u64>(biased) << 32) | static_cast<u64>(inv_v);
-    }
-
-    // Unpack partition
-    KOKKOS_INLINE_FUNCTION
-    partition_t unpack_partition(u64 packed) {
-        const u32 inv_v = static_cast<u32>(packed & 0xFFFFFFFFu);
-        return static_cast<vertex_t>(0xFFFFFFFFu - inv_v);
-    }
-
-    // Unpack s32
-    KOKKOS_INLINE_FUNCTION
-    s32 unpack_score(u64 packed) {
-        const u32 biased = static_cast<u32>(packed >> 32);
-        return static_cast<s32>(biased ^ 0x80000000u);
-    }
-
-    KOKKOS_INLINE_FUNCTION
-partition_t random_partition(vertex_t u, u32 seed, u32 prime, u32 xor_const, partition_t k) {
+    partition_t random_partition(vertex_t u, u32 seed, u32 prime, u32 xor_const, partition_t k) {
         // Mix in the seed with a 32-bit hash style formula
         u32 key = (u * prime) ^ (xor_const + seed * 0x9e3779b9u); // 0x9e3779b9u is 32-bit golden ratio
         key ^= key >> 16;
@@ -251,7 +193,7 @@ partition_t random_partition(vertex_t u, u32 seed, u32 prime, u32 xor_const, par
     }
 
     // 32/64-bit friendly xorshift hash
-    template <class UInt>
+    template<class UInt>
     KOKKOS_INLINE_FUNCTION
     typename std::enable_if<std::is_unsigned<UInt>::value, UInt>::type
     xorshiftHash(UInt x) {
@@ -260,7 +202,6 @@ partition_t random_partition(vertex_t u, u32 seed, u32 prime, u32 xor_const, par
         x ^= x << 5;
         return x;
     }
-
 }
 
 #endif //GPU_HEIPA_KOKKOS_UTIL_H

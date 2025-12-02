@@ -28,8 +28,8 @@
 
 #include <Kokkos_Core.hpp>
 
-#include "src/datastructures/solver.h"
-#include "src/utility/configuration.h"
+#include "../src/datastructures/solver.h"
+#include "../src/utility/configuration.h"
 
 using namespace GPU_HeiPa;
 
@@ -52,12 +52,12 @@ int main(int argc, char *argv[]) {
                 // {"--graph", "../../graph_collection/mapping/rgg24.graph"},
                 // {"--mapping", "../data/out/partition/rgg24.txt"},
                 // {"--statistics", "../data/out/statistics/rgg24.JSON"},
-                // {"--graph", "../../graph_collection/mapping/rgg23.graph"},
-                // {"--mapping", "../data/out/partition/rgg23.txt"},
-                // {"--statistics", "../data/out/statistics/rgg23.JSON"},
-                {"--graph", "../../graph_collection/mapping/GAP-road.graph"},
-                {"--mapping", "../data/out/partition/GAP-road.txt"},
-                {"--statistics", "../data/out/statistics/GAP-road.JSON"},
+                {"--graph", "../../graph_collection/mapping/rgg23.graph"},
+                {"--mapping", "../data/out/partition/rgg23.txt"},
+                {"--statistics", "../data/out/statistics/rgg23.JSON"},
+                // {"--graph", "../../graph_collection/mapping/GAP-road.graph"},
+                // {"--mapping", "../data/out/partition/GAP-road.txt"},
+                // {"--statistics", "../data/out/statistics/GAP-road.JSON"},
                 // {"--graph", "../../graph_collection/mapping/2cubes_sphere.mtx.graph"},
                 // {"--mapping", "../data/out/partition/2cubes_sphere.mtx.txt"},
                 // {"--statistics", "../data/out/statistics/2cubes_sphere.mtx.JSON"},

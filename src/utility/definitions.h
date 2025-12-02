@@ -44,7 +44,7 @@ namespace GPU_HeiPa {
     typedef double f64;
 
     typedef u32 vertex_t;
-    typedef s32 weight_t;
+    typedef s64 weight_t;
     typedef u32 partition_t;
 
     using DeviceMemorySpace = Kokkos::DefaultExecutionSpace::memory_space;

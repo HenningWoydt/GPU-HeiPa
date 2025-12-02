@@ -325,3 +325,4 @@ cmake .. -DCMAKE_BUILD_TYPE=Release \
          -DCMAKE_CXX_STANDARD=17 \
          -DCMAKE_CXX_EXTENSIONS=OFF
 cmake --build . --parallel "$JOBS" --target GPU-HeiPa
+cmake --build . --parallel "$JOBS" --target GPU-HeiProMap

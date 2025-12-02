@@ -24,38 +24,28 @@
  * SOFTWARE.
  ******************************************************************************/
 
-#ifndef GPU_HEIPA_CONFIGURATION_H
-#define GPU_HEIPA_CONFIGURATION_H
+#ifndef GPU_HEIPA_PROMAP_CONFIGURATION_H
+#define GPU_HEIPA_PROMAP_CONFIGURATION_H
 
-#include <iostream>
-#include <random>
 #include <string>
 #include <vector>
 
-#include "definitions.h"
-#include "JSON_util.h"
-#include "kokkos_util.h"
+#include "configuration.h"
+#include "util.h"
 
 namespace GPU_HeiPa {
-    struct CommandLineOption {
-        std::string large_key;
-        std::string small_key;
-        std::string description;
-        std::string default_val;
-        std::string input;
-        bool is_set;
-    };
-
-    class Configuration {
+    class ProMapConfiguration {
         std::vector<CommandLineOption> options = {
             {"--help", "", "Produces the help message", "", "", false},
             {"--graph", "-g", "Filepath to the graph.", "", "", false},
-            {"--mapping", "-m", "Output filepath to the generated mapping.", "GPU-HeiPa_par.txt", "", false},
-            {"--k", "-k", "Number of blocks k", "", "", false},
+            {"--mapping", "-m", "Output filepath to the generated mapping.", "GPU-HeiProMap_par.txt", "", false},
+            {"--hierarchy", "-h", "Hierarchy in the form a1:a2:...:al .", "", "", false},
+            {"--distance", "-d", "Distance in the form d1:d2:...:dl .", "", "", false},
             {"--imbalance", "-e", "Allowed imbalance (for example 0.03).", "0.03", "", false},
             {"--config", "-c", "Broad Config.", "", "", false},
-            {"--statistics", "", "Output filepath to the statistics file.", "GPU-HeiPa_stats.JSON", "", false},
-            {"--seed", "-s", "Seed for more randomness.", "0", "", false}
+            {"--statistics", "", "Output filepath to the statistics file.", "GPU-HeiProMap_stats.JSON", "", false},
+            {"--seed", "-s", "Seed for more randomness.", "0", "", false},
+            {"--distance-oracle", "", "Which Distance Oracle to use {matrix, division, binary}.", "binary", "", false},
         };
 
     public:
@@ -65,7 +55,15 @@ namespace GPU_HeiPa {
         std::string statistics_out;
 
         // partition information
+        std::string hierarchy_string;
+        std::vector<partition_t> hierarchy;
         partition_t k = 0;
+
+        // distance information
+        std::string distance_string;
+        std::vector<weight_t> distance;
+
+        // balancing information
         f64 imbalance = 0.0;
 
         // partitioning algorithm
@@ -74,12 +72,15 @@ namespace GPU_HeiPa {
         // random initialization
         u64 seed = 0;
 
+        // distance oracle
+        std::string distance_oracle_string;
+
         // device space info
         std::string device_space;
 
-        Configuration() = default;
+        ProMapConfiguration() = default;
 
-        Configuration(int argc, char *argv[]) {
+        ProMapConfiguration(int argc, char *argv[]) {
             // read command lines into vector
             std::vector<std::string> args(argv, argv + argc);
 
@@ -108,7 +109,12 @@ namespace GPU_HeiPa {
             mapping_out = get("--mapping");
             statistics_out = get("--statistics");
 
-            k = (partition_t) std::stoul(get("--k"));
+            hierarchy_string = get("--hierarchy");
+            hierarchy = convert<partition_t>(split(hierarchy_string, ':'));
+            k = prod<partition_t>(hierarchy);
+
+            distance_string = get("--distance");
+            distance = convert<weight_t>(split(distance_string, ':'));
 
             imbalance = std::stod(get("--imbalance"));
 
@@ -121,6 +127,8 @@ namespace GPU_HeiPa {
             } else {
                 seed = std::random_device{}();
             }
+
+            distance_oracle_string = get("--distance-oracle");
 
             device_space = get_kokkos_execution_space_as_str();
         }
@@ -205,4 +213,4 @@ namespace GPU_HeiPa {
     };
 }
 
-#endif //GPU_HEIPA_CONFIGURATION_H
+#endif //GPU_HEIPA_PROMAP_CONFIGURATION_H
