@@ -168,7 +168,7 @@ namespace GPU_HeiPa {
     inline void promap_jetlp(ProMapJetLabelPropagation &lp,
                              Graph &g,
                              BlockConnectivity &bc,
-                             d_oracle_t &oracle) {
+                             d_oracle_t &d_oracle) {
         lp.round += 1;
 
         // for each vertex determine best block
@@ -205,9 +205,11 @@ namespace GPU_HeiPa {
                     if (id == lp.k) { continue; } // no valid entry
                     if (id == u_id) { continue; } // do not move to self
 
-                    if (w > best_id_w || (w == best_id_w && id < best_id)) {
+                    weight_t comm_w = w * get(d_oracle, u_id, id);
+
+                    if (comm_w > best_id_w || (comm_w == best_id_w && id < best_id)) {
                         best_id = id;
-                        best_id_w = w;
+                        best_id_w = comm_w;
                         found = true;
                     }
                 }
@@ -220,7 +222,7 @@ namespace GPU_HeiPa {
                     bool non_neg = F >= 0;
                     bool conn_filter = -F < Kokkos::floor(lp.conn_c * (f64) own_conn);
 
-                    if (non_neg || conn_filter) {
+                    if (non_neg) {
                         status = 1;
 
                         gain = F;
@@ -259,11 +261,19 @@ namespace GPU_HeiPa {
                         partition_t v_new_id = lp.lp_id(v);
                         weight_t w = g.edges_w(j);
 
-                        if (v_new_id == old_u_id) { update -= w; }
-                        if (v_new_id == new_u_id) { update += w; }
+                        // distances BEFORE v moves
+                        weight_t d_Un_Vo = get(d_oracle, new_u_id, v_old_id);
+                        weight_t d_Uo_Vo = get(d_oracle, old_u_id, v_old_id);
 
-                        if (v_old_id == old_u_id) { update += w; }
-                        if (v_old_id == new_u_id) { update -= w; }
+                        // distances AFTER v moves
+                        weight_t d_Un_Vn = get(d_oracle, new_u_id, v_new_id);
+                        weight_t d_Uo_Vn = get(d_oracle, old_u_id, v_new_id);
+
+                        // gains are (cost_before - cost_after)
+                        weight_t before_u = d_Uo_Vo - d_Un_Vo; // gain if only u moves
+                        weight_t after_u = d_Uo_Vn - d_Un_Vn;  // gain if v moved first
+
+                        update += w * (after_u - before_u);
                     }
                 }
 
@@ -276,6 +286,8 @@ namespace GPU_HeiPa {
             });
 
             Kokkos::deep_copy(lp.n_moves, lp.moves_idx);
+
+            std::cout << "n_moves " << lp.n_moves << std::endl;
 
             KOKKOS_PROFILE_FENCE();
         }
@@ -756,6 +768,8 @@ namespace GPU_HeiPa {
                 curr_weight = max_weight(lp.partition);
                 KOKKOS_PROFILE_FENCE();
             }
+
+            std::cout << curr_comm_cost << " " << curr_weight << std::endl;
 
             if (best_weight > lp.lmax && curr_weight < best_weight) {
                 // copy the partition

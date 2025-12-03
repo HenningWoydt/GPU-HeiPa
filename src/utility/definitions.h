@@ -44,8 +44,11 @@ namespace GPU_HeiPa {
     typedef double f64;
 
     typedef u32 vertex_t;
-    typedef s64 weight_t;
+    typedef s32 weight_t;
     typedef u32 partition_t;
+
+    static constexpr partition_t NULL_PART = std::numeric_limits<partition_t>::max();
+    static constexpr partition_t NO_MOVE = std::numeric_limits<partition_t>::max() - 1;
 
     using DeviceMemorySpace = Kokkos::DefaultExecutionSpace::memory_space;
 

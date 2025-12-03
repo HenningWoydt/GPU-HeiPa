@@ -67,8 +67,8 @@ int main(int argc, char *argv[]) {
                 // {"--graph", "../../graph_collection/mapping/cfd2.mtx.graph"},
                 // {"--mapping", "../data/out/partition/cfd2.mtx.txt"},
                 // {"--statistics", "../data/out/statistics/cfd2.mtx.JSON"},
-                {"--k", "16"},
-                {"--imbalance", "0.1"},
+                {"--k", "32"},
+                {"--imbalance", "0.03"},
                 {"--config", "IM"},
                 {"--seed", "1"},
             };

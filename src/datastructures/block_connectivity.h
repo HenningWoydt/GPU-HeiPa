@@ -36,18 +36,22 @@
 
 namespace GPU_HeiPa {
     struct BlockConnectivity {
-        UnmanagedDeviceU32 row;
-        UnmanagedDeviceVertex us;
-        UnmanagedDevicePartition ids;
-        UnmanagedDeviceWeight weights;
         vertex_t n = 0;
         u32 size = 0;
+
+        UnmanagedDeviceU32 row;
+        UnmanagedDevicePartition ids;
+        UnmanagedDeviceWeight weights;
+
+        UnmanagedDeviceU32 lock;
+        UnmanagedDevicePartition dest_cache;
     };
 
     inline void free_bc(BlockConnectivity &bc,
                         KokkosMemoryStack &mem_stack) {
-        ScopedTimer _t("refine", "BlockConnectivity", "free");
+        ScopedTimer _t("refinement", "BlockConnectivity", "free");
 
+        pop_back(mem_stack);
         pop_back(mem_stack);
         pop_back(mem_stack);
         pop_back(mem_stack);
@@ -60,14 +64,14 @@ namespace GPU_HeiPa {
         BlockConnectivity bc;
         // allocate rows
         {
-            ScopedTimer _t("refine", "BlockConnectivity_fs", "allocate_rows");
+            ScopedTimer _t("refinement", "BlockConnectivity_fs", "allocate_rows");
             auto *row_ptr = (u32 *) get_chunk_back(mem_stack, sizeof(u32) * (g.n + 1));
             bc.row = UnmanagedDeviceU32(row_ptr, g.n + 1);
             bc.n = g.n;
         }
         // set rows
         {
-            ScopedTimer _t("refine", "BlockConnectivity_fs", "set_rows");
+            ScopedTimer _t("refinement", "BlockConnectivity_fs", "set_rows");
             Kokkos::parallel_scan("set_rows", g.n + 1, KOKKOS_LAMBDA(const u32 i, u32 &running, const bool final) {
                 if (i == 0) {
                     // first slot is 0
@@ -89,27 +93,21 @@ namespace GPU_HeiPa {
         }
         // allocate rest
         {
-            ScopedTimer _t("refine", "BlockConnectivity_fs", "allocate");
-            bc.us = UnmanagedDeviceVertex((vertex_t *) get_chunk_back(mem_stack, sizeof(vertex_t) * bc.size), bc.size);
+            ScopedTimer _t("refinement", "BlockConnectivity_fs", "allocate");
             bc.ids = UnmanagedDevicePartition((partition_t *) get_chunk_back(mem_stack, sizeof(partition_t) * bc.size), bc.size);
             bc.weights = UnmanagedDeviceWeight((weight_t *) get_chunk_back(mem_stack, sizeof(weight_t) * bc.size), bc.size);
-            Kokkos::deep_copy(bc.ids, partition.k);
+            Kokkos::deep_copy(bc.ids, NULL_PART);
             Kokkos::deep_copy(bc.weights, 0);
-            KOKKOS_PROFILE_FENCE();
-        }
-        // set u values
-        {
-            ScopedTimer _t("refine", "BlockConnectivity_fs", "fill_u");
-            Kokkos::parallel_for("fill_u", g.n, KOKKOS_LAMBDA(const vertex_t u) {
-                for (size_t j = bc.row(u); j < bc.row(u + 1); j++) {
-                    bc.us(j) = u;
-                }
-            });
+
+            bc.lock = UnmanagedDeviceU32((u32 *) get_chunk_back(mem_stack, sizeof(u32) * bc.n), bc.n);
+            bc.dest_cache = UnmanagedDevicePartition((partition_t *) get_chunk_back(mem_stack, sizeof(partition_t) * bc.n), bc.n);
+            Kokkos::deep_copy(bc.lock, 0);
+            Kokkos::deep_copy(bc.dest_cache, NULL_PART);
             KOKKOS_PROFILE_FENCE();
         }
         // actual fill of structure
         {
-            ScopedTimer _t("refine", "BlockConnectivity_fs", "fill");
+            ScopedTimer _t("refinement", "BlockConnectivity_fs", "fill");
             Kokkos::parallel_for("fill", g.m, KOKKOS_LAMBDA(const u32 i) {
                 vertex_t u = g.edges_u(i);
                 vertex_t v = g.edges_v(i);
@@ -124,8 +122,8 @@ namespace GPU_HeiPa {
                 u32 j = r_beg + hash32(v_id) % r_len;
                 for (u32 t = 0; t < r_len; t++) {
                     if (j == r_end) { j = r_beg; }
-                    partition_t val = Kokkos::atomic_compare_exchange(&bc.ids(j), partition.k, v_id);
-                    if (val == partition.k || val == v_id) {
+                    partition_t val = Kokkos::atomic_compare_exchange(&bc.ids(j), NULL_PART, v_id);
+                    if (val == NULL_PART || val == v_id) {
                         Kokkos::atomic_add(&bc.weights(j), w);
                         break;
                     }
@@ -146,7 +144,7 @@ namespace GPU_HeiPa {
                         const u32 n_moves) {
         // remove_weight
         {
-            ScopedTimer _t("refine", "BlockConnectivity_move", "remove_weight");
+            ScopedTimer _t("refinement", "BlockConnectivity_move", "remove_weight");
 
             Kokkos::parallel_for("remove_weight", n_moves, KOKKOS_LAMBDA(const u32 i) {
                 vertex_t u = moves(i);
@@ -161,6 +159,8 @@ namespace GPU_HeiPa {
                     u32 r_end = bc.row(v + 1);
                     u32 r_len = r_end - r_beg;
 
+                    bc.dest_cache(v) = NULL_PART;
+
                     if (r_len == 0) { continue; }
 
                     u32 j = r_beg + hash32(u_id) % r_len;
@@ -169,7 +169,7 @@ namespace GPU_HeiPa {
                         if (bc.ids(j) == u_id) {
                             weight_t old_w = Kokkos::atomic_fetch_sub(&bc.weights(j), w);
                             if (old_w == w) {
-                                bc.ids(j) = partition.k;
+                                bc.ids(j) = NULL_PART;
                                 break;
                             }
                         }
@@ -181,7 +181,7 @@ namespace GPU_HeiPa {
         }
         // add the connections
         {
-            ScopedTimer _t("refine", "BlockConnectivity_move", "add_conn");
+            ScopedTimer _t("refinement", "BlockConnectivity_move", "add_conn");
 
             Kokkos::parallel_for("add_conn", n_moves, KOKKOS_LAMBDA(const u32 i) {
                 vertex_t u = moves(i);
@@ -218,8 +218,8 @@ namespace GPU_HeiPa {
                     j = r_beg + hash32(new_u_id) % r_len;
                     for (u32 t = 0; t < r_len; t++) {
                         if (j == r_end) { j = r_beg; }
-                        partition_t val = Kokkos::atomic_compare_exchange(&bc.ids(j), partition.k, new_u_id);
-                        if (val == partition.k || val == new_u_id) {
+                        partition_t val = Kokkos::atomic_compare_exchange(&bc.ids(j), NULL_PART, new_u_id);
+                        if (val == NULL_PART || val == new_u_id) {
                             // found empty spot or good spot, add the weight
                             Kokkos::atomic_add(&bc.weights(j), w);
                             break;
@@ -232,9 +232,27 @@ namespace GPU_HeiPa {
         }
     }
 
+    KOKKOS_INLINE_FUNCTION
+    weight_t conn_to_block(const BlockConnectivity &bc,
+                           vertex_t u,
+                           partition_t id) {
+        u32 r_beg = bc.row(u);
+        u32 r_end = bc.row(u + 1);
+        u32 r_len = r_end - r_beg;
+
+        u32 j = r_beg + hash32(id) % r_len;
+        for (u32 t = 0; t < r_len; t++) {
+            if (j == r_end) { j = r_beg; }
+            if (bc.ids(j) == id) {
+                return bc.weights(j);
+            }
+            j += 1;
+        }
+        return 0;
+    }
+
     struct HostBlockConnectivity {
         Kokkos::View<u32 *, Kokkos::HostSpace> row;
-        Kokkos::View<vertex_t *, Kokkos::HostSpace> us;
         Kokkos::View<partition_t *, Kokkos::HostSpace> ids;
         Kokkos::View<weight_t *, Kokkos::HostSpace> weights;
 
@@ -251,7 +269,6 @@ namespace GPU_HeiPa {
 
         // Allocate host mirrors
         h_bc.row = Kokkos::create_mirror_view_and_copy(Kokkos::HostSpace(), bc.row);
-        h_bc.us = Kokkos::create_mirror_view_and_copy(Kokkos::HostSpace(), bc.us);
         h_bc.ids = Kokkos::create_mirror_view_and_copy(Kokkos::HostSpace(), bc.ids);
         h_bc.weights = Kokkos::create_mirror_view_and_copy(Kokkos::HostSpace(), bc.weights);
 
@@ -272,7 +289,6 @@ namespace GPU_HeiPa {
         // --- Global shape checks ---
         ASSERT(h_bc.n == n);
         ASSERT(h_bc.row.extent(0) == static_cast<size_t>(n + 1));
-        ASSERT(h_bc.us.extent(0) == static_cast<size_t>(h_bc.size));
         ASSERT(h_bc.ids.extent(0) == static_cast<size_t>(h_bc.size));
         ASSERT(h_bc.weights.extent(0) == static_cast<size_t>(h_bc.size));
         ASSERT(h_bc.row(0) == 0);
@@ -311,12 +327,10 @@ namespace GPU_HeiPa {
             weight_t row_sum = 0;
 
             for (u32 i = r0; i < r1; ++i) {
-                const vertex_t uu = h_bc.us(i);
                 const partition_t id = h_bc.ids(i);
                 const weight_t w = h_bc.weights(i);
 
                 // ownership stamp + basic ranges
-                ASSERT(uu == u);
                 ASSERT(w >= static_cast<weight_t>(0));
 
                 // Allow sentinel id == k for unused slots; if present, weight must be 0

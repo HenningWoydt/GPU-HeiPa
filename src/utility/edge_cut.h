@@ -52,25 +52,6 @@ namespace GPU_HeiPa {
         return sum / 2;
     }
 
-    inline weight_t edge_cut(const BlockConnectivity &bc,
-                             const Partition &partition) {
-        weight_t total_edge_cut = 0;
-        Kokkos::parallel_reduce("edge_cut", bc.size, KOKKOS_LAMBDA(const u32 i, weight_t &local_edge_cut) {
-            vertex_t u = bc.us(i);
-            partition_t u_id = partition.map(u);
-
-            partition_t id = bc.ids(i);
-            weight_t w = bc.weights(i);
-
-            bool not_self = u_id != id;
-            bool not_sentinel = id != partition.k;
-
-            local_edge_cut += (not_self * not_sentinel) * w;
-        }, total_edge_cut);
-
-        return total_edge_cut / 2;
-    }
-
     inline weight_t edge_cut_update(weight_t old_edge_cut,
                                     const Graph &g,
                                     const Partition &partition,
