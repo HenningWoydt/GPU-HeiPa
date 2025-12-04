@@ -50,6 +50,7 @@ namespace GPU_HeiPa {
     static constexpr partition_t NULL_PART = std::numeric_limits<partition_t>::max();
     static constexpr partition_t NO_MOVE = std::numeric_limits<partition_t>::max() - 1;
 
+    using DeviceExecutionSpace = Kokkos::DefaultExecutionSpace;
     using DeviceMemorySpace = Kokkos::DefaultExecutionSpace::memory_space;
 
     using HostVertex = Kokkos::View<vertex_t *, Kokkos::HostSpace>;

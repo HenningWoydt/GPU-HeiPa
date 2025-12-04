@@ -256,67 +256,58 @@ namespace GPU_HeiPa {
             Kokkos::parallel_for("best_block", bc.n, KOKKOS_LAMBDA(const vertex_t u) {
                 if (bc.dest_cache(u) != NULL_PART) {
                     lp.dest_part(u) = bc.dest_cache(u);
-                    return;
-                }
+                } else {
+                    partition_t u_id = lp.partition.map(u);
+                    partition_t best_id = NO_MOVE;
 
-                partition_t u_id = lp.partition.map(u);
-                partition_t best_id = NO_MOVE;
+                    weight_t own_conn = 0;
+                    weight_t best_conn = 0;
 
-                weight_t own_conn = 0;
-                weight_t best_conn = 0;
+                    u32 r_beg = bc.row(u);
+                    u32 r_len = bc.sizes(u);
+                    u32 r_end = r_beg + r_len;
 
-                u32 r_beg = bc.row(u);
-                u32 r_len = bc.sizes(u);
-                u32 r_end = r_beg + r_len;
+                    for (u32 i = r_beg; i < r_end; ++i) {
+                        partition_t id = bc.ids(i);
+                        weight_t w = bc.weights(i);
 
-                for (u32 i = r_beg; i < r_end; ++i) {
-                    partition_t id = bc.ids(i);
-                    weight_t w = bc.weights(i);
+                        own_conn = id == u_id ? w : own_conn;
 
-                    own_conn = id == u_id ? w : own_conn;
+                        if (id == NULL_PART) { continue; } // no valid entry
+                        if (id == u_id) { continue; }      // do not move to self
 
-                    if (id == NULL_PART) { continue; } // no valid entry
-                    if (id == u_id) { continue; }      // do not move to self
-
-                    if (w > best_conn || (w == best_conn && id < best_id)) {
-                        best_id = id;
-                        best_conn = w;
+                        if (w > best_conn || (w == best_conn && id < best_id)) {
+                            best_id = id;
+                            best_conn = w;
+                        }
                     }
-                }
 
-                weight_t gain = 0;
+                    weight_t gain = 0;
 
-                if (best_id != NO_MOVE) {
-                    if ((best_conn >= own_conn) || (own_conn - best_conn) < Kokkos::floor(lp.conn_c * (f64) own_conn)) {
-                        gain = best_conn - own_conn;
-                    } else {
-                        best_id = NO_MOVE;
+                    if (best_id != NO_MOVE) {
+                        if ((best_conn >= own_conn) || (own_conn - best_conn) < Kokkos::floor(lp.conn_c * (f64) own_conn)) {
+                            gain = best_conn - own_conn;
+                        } else {
+                            best_id = NO_MOVE;
+                        }
                     }
+
+                    bc.dest_cache(u) = best_id;
+                    lp.dest_part(u) = best_id;
+                    lp.save_gains(u) = gain;
                 }
 
-                bc.dest_cache(u) = best_id;
-                lp.dest_part(u) = best_id;
-                lp.save_gains(u) = gain;
-            });
-            KOKKOS_PROFILE_FENCE();
-        }
-
-        // filter non movable vertices
-        {
-            ScopedTimer _t("refinement", "jetlp", "filer_non_movable");
-
-            Kokkos::parallel_scan("filer_non_movable", bc.n, KOKKOS_LAMBDA(const vertex_t u, u32 &idx, const bool final) {
                 if (lp.dest_part(u) != NO_MOVE && bc.lock(u) == 0) {
-                    if (final) {
-                        lp.temp_moves(idx) = u;
-                        lp.pre_gain(u) = lp.save_gains(u);
-                    }
-                    idx += 1;
-                } else if (final) {
+                    lp.pre_gain(u) = lp.save_gains(u);
+                    u32 idx = Kokkos::atomic_fetch_inc(&lp.temp_moves_idx());
+                    lp.temp_moves(idx) = u;
+                } else {
                     lp.pre_gain(u) = min_sentinel<weight_t>();
                     bc.lock(u) = 0;
                 }
-            }, lp.temp_n_moves);
+            });
+
+            Kokkos::deep_copy(lp.temp_n_moves, lp.temp_moves_idx);
 
             KOKKOS_PROFILE_FENCE();
         }
@@ -324,6 +315,8 @@ namespace GPU_HeiPa {
         // use afterburner
         {
             ScopedTimer _t("refinement", "jetlp", "afterburner");
+
+            Kokkos::deep_copy(lp.moves_idx, 0);
 
             Kokkos::parallel_for("afterburner", lp.temp_n_moves, KOKKOS_LAMBDA(const u32 i) {
                 vertex_t u = lp.temp_moves(i);
@@ -353,25 +346,13 @@ namespace GPU_HeiPa {
                 if (u_gain + update >= 0) {
                     bc.lock(u) = 1;
                     lp.id(u) = new_u_id;
+
+                    u32 idx = Kokkos::atomic_fetch_inc(&lp.moves_idx());
+                    lp.moves(idx) = u;
                 }
             });
 
-            KOKKOS_PROFILE_FENCE();
-        }
-
-        // collect moves
-        {
-            ScopedTimer _t("refinement", "jetlp", "collect_moves");
-
-            Kokkos::parallel_scan("collect_moves", lp.temp_n_moves, KOKKOS_LAMBDA(const u32 i, u32 &idx, const bool final) {
-                vertex_t u = lp.temp_moves(i);
-                if (bc.lock(u) == 1) {
-                    if (final) {
-                        lp.moves(idx) = u;
-                    }
-                    idx += 1;
-                }
-            }, lp.n_moves);
+            Kokkos::deep_copy(lp.n_moves, lp.moves_idx);
 
             KOKKOS_PROFILE_FENCE();
         }
@@ -794,9 +775,22 @@ namespace GPU_HeiPa {
                     partition_t old_b = lp.partition.map(u); // current block
                     partition_t new_b = lp.id(u);            // selected destination
 
+                    if (old_b == new_b) { return; }
+
                     // connectivity of u to its old / new blocks BEFORE moving
-                    weight_t old_con = conn_to_block(bc, u, old_b);
-                    weight_t new_con = conn_to_block(bc, u, new_b);
+                    weight_t old_con = 0;
+                    weight_t new_con = 0;
+
+                    u32 r_beg = bc.row(u);
+                    u32 r_len = bc.sizes(u);
+                    u32 r_end = r_beg + r_len;
+                    for (u32 j = r_beg; j < r_end; ++j) {
+                        partition_t id = bc.ids(j);
+                        weight_t w = bc.weights(j);
+
+                        old_con = id == old_b ? w : old_con;
+                        new_con = id == new_b ? w : new_con;
+                    }
 
                     // Jet uses (b_con - p_con). Sign/factor must match your cut definition.
                     local += (new_con - old_con);
@@ -817,6 +811,8 @@ namespace GPU_HeiPa {
                     weight_t u_w = g.weights(u);
                     partition_t u_old_id = lp.partition.map(u);
                     partition_t u_new_id = lp.id(u);
+
+                    if (u_old_id == u_new_id) { return; }
 
                     MY_KOKKOS_ASSERT(u_old_id < lp.partition.k);
                     MY_KOKKOS_ASSERT(u_new_id < lp.partition.k);
@@ -842,9 +838,22 @@ namespace GPU_HeiPa {
                     partition_t old_b = lp.old_map(u);       // BEFORE moves
                     partition_t new_b = lp.partition.map(u); // AFTER moves
 
+                    if (old_b == new_b) { return; }
+
                     // connectivity AFTER connectivity update
-                    weight_t old_con = conn_to_block(bc, u, old_b);
-                    weight_t new_con = conn_to_block(bc, u, new_b);
+                    weight_t old_con = 0;
+                    weight_t new_con = 0;
+
+                    u32 r_beg = bc.row(u);
+                    u32 r_len = bc.sizes(u);
+                    u32 r_end = r_beg + r_len;
+                    for (u32 j = r_beg; j < r_end; ++j) {
+                        partition_t id = bc.ids(j);
+                        weight_t w = bc.weights(j);
+
+                        old_con = id == old_b ? w : old_con;
+                        new_con = id == new_b ? w : new_con;
+                    }
 
                     local += (new_con - old_con);
                 }, cut_change2);
