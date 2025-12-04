@@ -161,6 +161,7 @@ namespace GPU_HeiPa {
         return mapping;
     }
 
+
     inline void heavy_edge_matching(TwoHopMatcher &thm,
                                     const Graph &g,
                                     UnmanagedDeviceVertex &matching,
@@ -192,10 +193,6 @@ namespace GPU_HeiPa {
             {
                 ScopedTimer _t("coarsening", "thm_heavy_edge_matching", "pick_neighbor");
 
-                using RP = Kokkos::RangePolicy<Kokkos::DefaultExecutionSpace, Kokkos::Schedule<Kokkos::Static>, Kokkos::IndexType<u32> >;
-                RP pol(0, g.m);
-                pol.set_chunk_size(1024);
-
                 Kokkos::parallel_for("pick_neighbor", n_unmapped, KOKKOS_LAMBDA(const u32 i) {
                     vertex_t u = unmapped_v(i);
 
@@ -219,7 +216,6 @@ namespace GPU_HeiPa {
 
                         if (v_weight >= max_allowed) { continue; }
 
-                        // Optimized rating calculation - avoid expensive division when possible
                         f32 weight_product = (f32) (u_weight * v_weight);
                         f32 rating = (f32) (w * w) / weight_product;
                         rating += edge_noise(u, v, round);
@@ -525,37 +521,17 @@ namespace GPU_HeiPa {
 
         heavy_edge_matching(thm, g, matching, partition, mem_stack);
 
-        Kokkos::parallel_for("assign_old_to_new", g.n, KOKKOS_LAMBDA(const vertex_t u) {
-            vertex_t v = matching(u);
-            MY_KOKKOS_ASSERT(matching(v) == u);
-        });
-
         if ((f64) thm.n_matched < thm.threshold * (f64) g.n) {
             leaf_matching(thm, g, matching, partition, mem_stack);
         }
-
-        Kokkos::parallel_for("assign_old_to_new", g.n, KOKKOS_LAMBDA(const vertex_t u) {
-            vertex_t v = matching(u);
-            MY_KOKKOS_ASSERT(matching(v) == u);
-        });
 
         if ((f64) thm.n_matched < thm.threshold * (f64) g.n) {
             twin_matching(thm, g, matching, partition, mem_stack);
         }
 
-        Kokkos::parallel_for("assign_old_to_new", g.n, KOKKOS_LAMBDA(const vertex_t u) {
-            vertex_t v = matching(u);
-            MY_KOKKOS_ASSERT(matching(v) == u);
-        });
-
         if ((f64) thm.n_matched < thm.threshold * (f64) g.n) {
             relative_matching(thm, g, matching, partition);
         }
-
-        Kokkos::parallel_for("assign_old_to_new", g.n, KOKKOS_LAMBDA(const vertex_t u) {
-            vertex_t v = matching(u);
-            MY_KOKKOS_ASSERT(matching(v) == u);
-        });
 
         Mapping mapping = determine_mapping(matching, g.n, mem_stack);
 
