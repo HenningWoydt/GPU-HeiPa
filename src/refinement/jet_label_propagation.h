@@ -131,13 +131,10 @@ namespace GPU_HeiPa {
         partition_t k = 0;
         weight_t lmax = 0;
 
-        u32 round = 0;
-
         u32 n_max_iterations = 12;
         u32 max_weak_iterations = 2;
         f64 phi = 0.999;
         f64 heavy_alpha = 1.5; // smaller - fewer vertices moved, larger more vertices moved
-        weight_t sigma = 10;
         f64 conn_c = 0.75;
         u32 sections = 1; // adaptive mini buckets per (part,bucket)
         Partition partition;
@@ -185,8 +182,6 @@ namespace GPU_HeiPa {
         lp.m = t_m;
         lp.k = t_k;
         lp.lmax = t_lmax;
-        lp.sigma = (weight_t) (0.99 * (f64) lp.lmax);
-        if (lp.sigma < lp.lmax - 100) lp.sigma = lp.lmax - 100;
 
         lp.partition = initialize_partition(t_n, t_k, t_lmax, mem_stack);
 
@@ -253,8 +248,6 @@ namespace GPU_HeiPa {
     inline void jetlp(JetLabelPropagation &lp,
                       Graph &g,
                       BlockConnectivity &bc) {
-        lp.round += 1;
-
         // for each vertex determine best block
         {
             ScopedTimer _t("refinement", "jetlp", "best_block");
@@ -387,8 +380,6 @@ namespace GPU_HeiPa {
     inline void jetrw(JetLabelPropagation &lp,
                       Graph &g,
                       BlockConnectivity &bc) {
-        lp.round += 1;
-
         weight_t opt_weight = (weight_t) ((f64) g.g_weight / (f64) lp.k);
         weight_t max_b_w = (weight_t) (lp.lmax * 0.99);
         if (max_b_w < lp.lmax - 100) { max_b_w = lp.lmax - 100; }
@@ -519,8 +510,6 @@ namespace GPU_HeiPa {
     inline void jetrs(JetLabelPropagation &lp,
                       Graph &g,
                       BlockConnectivity &bc) {
-        lp.round += 1;
-
         weight_t opt_weight = (weight_t) ((f64) g.g_weight / (f64) lp.k);
         weight_t max_b_w = std::max(opt_weight + 1, (weight_t) (lp.lmax * 0.99));
         u32 t_minibuckets = lp.k * MAX_BUCKETS * lp.sections;
@@ -777,10 +766,8 @@ namespace GPU_HeiPa {
 
         u32 balance_iterations = 0;
         u32 iteration = 0;
-        u32 total_n_iteration = 0;
         while (iteration < lp.n_max_iterations) {
             iteration += 1;
-            total_n_iteration += 1;
 
             if (curr_weight <= lp.lmax) {
                 jetlp(lp, g, bc);

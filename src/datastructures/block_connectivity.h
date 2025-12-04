@@ -415,7 +415,7 @@ namespace GPU_HeiPa {
             for (vertex_t ei = h_g.neighborhood(u); ei < h_g.neighborhood(u + 1); ++ei) {
                 const vertex_t v = h_g.edges_v(ei);
                 const partition_t pid = h_part(v);
-                ASSERT(pid >= 0 && pid < k);
+                ASSERT(pid < k);
                 neigh_pw[pid] += h_g.edges_w(ei);
             }
 
@@ -443,7 +443,7 @@ namespace GPU_HeiPa {
                 }
 
                 // Valid partition id
-                ASSERT(id >= 0 && id < k);
+                ASSERT(id < k);
 
                 // Unique per row
                 const bool inserted = seen_ids.insert(id).second;
@@ -599,7 +599,7 @@ namespace GPU_HeiPa {
                     row_nonempty++;
                     row_used++;
 
-                    if (id >= 0 && id < k) {
+                    if (id < k) {
                         used_slots++;
                     }
 
@@ -661,7 +661,7 @@ namespace GPU_HeiPa {
                 cache_null++;
             } else if (c == NO_MOVE) {
                 cache_no_move++;
-            } else if (c >= 0 && c < k) {
+            } else if (c < k) {
                 cache_valid++;
             } else {
                 cache_oob++;
