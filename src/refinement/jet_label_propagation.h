@@ -272,14 +272,18 @@ namespace GPU_HeiPa {
                 weight_t own_conn = 0;
                 weight_t best_conn = 0;
 
-                for (u32 i = bc.row(u); i < bc.row(u + 1); ++i) {
+                u32 r_beg = bc.row(u);
+                u32 r_len = bc.sizes(u);
+                u32 r_end = r_beg + r_len;
+
+                for (u32 i = r_beg; i < r_end; ++i) {
                     partition_t id = bc.ids(i);
                     weight_t w = bc.weights(i);
 
                     own_conn = id == u_id ? w : own_conn;
 
                     if (id == NULL_PART) { continue; } // no valid entry
-                    if (id == u_id) { continue; } // do not move to self
+                    if (id == u_id) { continue; }      // do not move to self
 
                     if (w > best_conn || (w == best_conn && id < best_id)) {
                         best_id = id;
@@ -429,8 +433,12 @@ namespace GPU_HeiPa {
                 if (u_id_w <= lp.lmax) { return; }                                         // u_id not overloaded
                 if ((f64) u_w >= lp.heavy_alpha * ((f64) u_id_w - opt_weight)) { return; } // vertex is too heavy
 
+                u32 r_beg = bc.row(u);
+                u32 r_len = bc.sizes(u);
+                u32 r_end = r_beg + r_len;
+
                 weight_t own_conn = 0;
-                for (u32 i = bc.row(u); i < bc.row(u + 1); ++i) {
+                for (u32 i = r_beg; i < r_end; ++i) {
                     partition_t id = bc.ids(i);
                     weight_t w = bc.weights(i);
 
@@ -557,14 +565,18 @@ namespace GPU_HeiPa {
                 weight_t sum_other = 0;
                 u32 count_other = 0;
 
+                u32 r_beg = bc.row(u);
+                u32 r_len = bc.sizes(u);
+                u32 r_end = r_beg + r_len;
+
                 // Build average connectivity to "underloaded" blocks (< max_b_w)
-                for (u32 i = bc.row(u); i < bc.row(u + 1); ++i) {
+                for (u32 i = r_beg; i < r_end; ++i) {
                     partition_t id = bc.ids(i);
                     weight_t w = bc.weights(i);
 
                     own_conn = (id == u_id) ? w : own_conn;
 
-                    if (id == NULL_PART) continue;                           // invalid entry
+                    if (id == NULL_PART) continue;                      // invalid entry
                     if (id == u_id) continue;                           // don't move to self
                     if (lp.partition.bweights(id) >= max_b_w) continue; // don't count overloaded destinations
 
@@ -751,6 +763,8 @@ namespace GPU_HeiPa {
         BlockConnectivity bc = from_scratch(g, lp.partition, mem_stack);
         // assert_bc(bc, g, lp.partition, lp.k);
 
+        // analyze_block_connectivity(bc, g, lp.partition, k);
+
         weight_t best_edge_cut = curr_edge_cut;
         weight_t best_weight = 0;
         // initial maximum weight
@@ -884,6 +898,9 @@ namespace GPU_HeiPa {
                 }
             }
         }
+
+        // analyze_block_connectivity(bc, g, lp.partition, k);
+        // assert_bc(bc, g, lp.partition, lp.k);
 
         free_bc(bc, mem_stack);
         free_lp(lp, mem_stack);

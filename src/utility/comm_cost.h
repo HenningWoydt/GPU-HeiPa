@@ -56,26 +56,6 @@ namespace GPU_HeiPa {
     }
 
     template<typename d_oracle_t>
-    inline weight_t comm_cost(const BlockConnectivity &bc,
-                              const Partition &partition,
-                              d_oracle_t &d_oracle) {
-        weight_t total_comm_cost = 0;
-        Kokkos::parallel_reduce("comm_cost", bc.size, KOKKOS_LAMBDA(const u32 i, weight_t &local_comm_cost) {
-            vertex_t u = bc.us(i);
-            partition_t u_id = partition.map(u);
-
-            partition_t id = bc.ids(i);
-            weight_t w = bc.weights(i);
-
-            bool not_sentinel = id != partition.k;
-
-            local_comm_cost += w * get(d_oracle, u_id, id) * not_sentinel;
-        }, total_comm_cost);
-
-        return total_comm_cost;
-    }
-
-    template<typename d_oracle_t>
     inline weight_t comm_cost_update(weight_t old_comm_cost,
                                      const Graph &g,
                                      const Partition &partition,
@@ -89,6 +69,11 @@ namespace GPU_HeiPa {
             partition_t old_u_id = old_map(u);
             partition_t new_u_id = partition.map(u);
 
+            // NEW: skip fake moves
+            if (old_u_id == new_u_id) {
+                return;
+            }
+
             for (u32 j = g.neighborhood(u); j < g.neighborhood(u + 1); ++j) {
                 vertex_t v = g.edges_v(j);
                 weight_t w = g.edges_w(j);
@@ -99,7 +84,18 @@ namespace GPU_HeiPa {
                 weight_t old_d = get(d_oracle, old_u_id, old_v_id);
                 weight_t new_d = get(d_oracle, new_u_id, new_v_id);
 
-                local_delta += w * (new_d - old_d);
+                weight_t contrib = w * (new_d - old_d);
+
+                // If the global cost counts each undirected edge twice (symmetric CSR):
+                // - edges with exactly one moved endpoint are only visited once here,
+                //   so we need to double their contribution.
+                bool u_moved = (old_u_id != new_u_id);
+                bool v_moved = (old_v_id != new_v_id);
+                if (u_moved && !v_moved) {
+                    contrib *= 2;
+                }
+
+                local_delta += contrib;
             }
         }, delta);
 

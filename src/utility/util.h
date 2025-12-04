@@ -59,6 +59,20 @@ namespace GPU_HeiPa {
         std::cout << "]" << std::endl;
     }
 
+    template<typename T>
+    std::string to_str(const std::vector<T> &vec, const std::string &name = "") {
+        std::stringstream ss;
+        if (!name.empty()) ss << name << " = ";
+        ss << "[";
+        for (size_t i = 0; i < vec.size(); ++i) {
+            ss << vec[i];
+            if (i + 1 != vec.size()) ss << ", ";
+        }
+        ss << "]";
+
+        return ss.str();
+    }
+
     inline std::vector<std::string> split(const std::string &str,
                                           char c) {
         std::vector<std::string> splits;

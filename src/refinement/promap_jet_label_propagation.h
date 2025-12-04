@@ -195,15 +195,19 @@ namespace GPU_HeiPa {
                 weight_t best_id_w = -max_sentinel<weight_t>();
                 weight_t gain = -max_sentinel<weight_t>() + 1;
 
+                u32 r_beg = bc.row(u);
+                u32 r_len = bc.sizes(u);
+                u32 r_end = r_beg + r_len;
+
                 bool found = false;
-                for (u32 i = bc.row(u); i < bc.row(u + 1); ++i) {
+                for (u32 i = r_beg; i < r_end; ++i) {
                     partition_t id = bc.ids(i);
                     weight_t w = bc.weights(i);
 
                     own_conn = id == u_id ? w : own_conn;
 
-                    if (id == lp.k) { continue; } // no valid entry
-                    if (id == u_id) { continue; } // do not move to self
+                    if (id == NULL_PART) { continue; } // no valid entry
+                    if (id == u_id) { continue; }      // do not move to self
 
                     weight_t comm_w = w * get(d_oracle, u_id, id);
 
@@ -287,8 +291,6 @@ namespace GPU_HeiPa {
 
             Kokkos::deep_copy(lp.n_moves, lp.moves_idx);
 
-            std::cout << "n_moves " << lp.n_moves << std::endl;
-
             KOKKOS_PROFILE_FENCE();
         }
     }
@@ -344,14 +346,18 @@ namespace GPU_HeiPa {
                 if (u_id_w <= lp.lmax) { return; }                                         // u_id not overloaded
                 if ((f64) u_w >= lp.heavy_alpha * ((f64) u_id_w - opt_weight)) { return; } // vertex is too heavy
 
+                u32 r_beg = bc.row(u);
+                u32 r_len = bc.sizes(u);
+                u32 r_end = r_beg + r_len;
+
                 weight_t own_conn = 0;
-                for (u32 i = bc.row(u); i < bc.row(u + 1); ++i) {
+                for (u32 i = r_beg; i < r_end; ++i) {
                     partition_t id = bc.ids(i);
                     weight_t w = bc.weights(i);
 
                     own_conn = id == u_id ? w : own_conn;
 
-                    if (id == lp.k) { continue; } // no valid entry
+                    if (id == NULL_PART) { continue; } // no valid entry
                     // if (id == u_id) { continue; }                           // dont move to self
                     if (lp.partition.bweights(id) >= max_b_w) { continue; } // dont move into non underloaded partition
 
@@ -474,14 +480,18 @@ namespace GPU_HeiPa {
                 weight_t sum_other = 0;
                 u32 count_other = 0;
 
+                u32 r_beg = bc.row(u);
+                u32 r_len = bc.sizes(u);
+                u32 r_end = r_beg + r_len;
+
                 // Build average connectivity to "underloaded" blocks (< max_b_w)
-                for (u32 i = bc.row(u); i < bc.row(u + 1); ++i) {
+                for (u32 i = r_beg; i < r_end; ++i) {
                     partition_t id = bc.ids(i);
                     weight_t w = bc.weights(i);
 
                     own_conn = (id == u_id) ? w : own_conn;
 
-                    if (id == lp.k) continue;                           // invalid entry
+                    if (id == NULL_PART) continue;                      // invalid entry
                     if (id == u_id) continue;                           // don't move to self
                     if (lp.partition.bweights(id) >= max_b_w) continue; // don't count overloaded destinations
 
@@ -737,6 +747,7 @@ namespace GPU_HeiPa {
                 });
                 KOKKOS_PROFILE_FENCE();
             }
+
             // invalidate caches of neighbors
             {
                 ScopedTimer _t("refinement", "JetLabelPropagation", "invalidate_caches");
@@ -768,8 +779,6 @@ namespace GPU_HeiPa {
                 curr_weight = max_weight(lp.partition);
                 KOKKOS_PROFILE_FENCE();
             }
-
-            std::cout << curr_comm_cost << " " << curr_weight << std::endl;
 
             if (best_weight > lp.lmax && curr_weight < best_weight) {
                 // copy the partition

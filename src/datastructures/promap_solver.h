@@ -163,6 +163,8 @@ namespace GPU_HeiPa {
             std::cout << "#Nodes            : " << graphs.back().n << std::endl;
             std::cout << "#Edges            : " << graphs.back().m << std::endl;
             std::cout << "k                 : " << config.k << std::endl;
+            std::cout << "hierarchy         : " << to_str(config.hierarchy) << std::endl;
+            std::cout << "distances         : " << to_str(config.distance) << std::endl;
             std::cout << "Lmax              : " << lmax << std::endl;
             std::cout << "Init. comm-cost   : " << initial_comm_cost << std::endl;
             std::cout << "Init. max block w : " << initial_max_block_weight << std::endl;
