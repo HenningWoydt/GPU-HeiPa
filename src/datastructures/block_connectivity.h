@@ -160,7 +160,7 @@ namespace GPU_HeiPa {
             ScopedTimer _t("refinement", "BlockConnectivity_move", "remove_weight");
 
             using TeamPolicy = Kokkos::TeamPolicy<DeviceExecutionSpace, Kokkos::IndexType<u32>>;
-            Kokkos::parallel_for("remove_weight", TeamPolicy(n_moves, Kokkos::AUTO), KOKKOS_LAMBDA(const TeamPolicy::member_type &t) {
+            Kokkos::parallel_for("remove_weight", TeamPolicy((int) n_moves, Kokkos::AUTO), KOKKOS_LAMBDA(const TeamPolicy::member_type &t) {
                 vertex_t u = moves(t.league_rank());
                 partition_t old_u_id = partition.map(u);
                 partition_t new_u_id = id(u);
@@ -201,7 +201,7 @@ namespace GPU_HeiPa {
             ScopedTimer _t("refinement", "BlockConnectivity_move", "add_conn");
 
             using TeamPolicy = Kokkos::TeamPolicy<DeviceExecutionSpace, Kokkos::IndexType<u32>>;
-            Kokkos::parallel_for("add_conn", TeamPolicy(n_moves, Kokkos::AUTO), KOKKOS_LAMBDA(const TeamPolicy::member_type &t) {
+            Kokkos::parallel_for("add_conn", TeamPolicy((int) n_moves, Kokkos::AUTO), KOKKOS_LAMBDA(const TeamPolicy::member_type &t) {
                 vertex_t u = moves(t.league_rank());
                 partition_t old_u_id = partition.map(u);
                 partition_t new_u_id = id(u);
