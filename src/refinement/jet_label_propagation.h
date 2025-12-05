@@ -367,6 +367,7 @@ namespace GPU_HeiPa {
         u32 t_minibuckets = lp.k * MAX_BUCKETS * lp.sections;
         u32 width = MAX_BUCKETS * lp.sections;
 
+        // u32 n_underloaded_blocks;
         // determine underloaded blocks
         {
             ScopedTimer _t("refinement", "jetrw", "underloaded_blocks");
@@ -374,16 +375,16 @@ namespace GPU_HeiPa {
 
             Kokkos::parallel_for("underloaded_blocks", lp.k, KOKKOS_LAMBDA(const partition_t id) {
                 if (lp.partition.bweights(id) < max_b_w) {
-                    u32 idx = Kokkos::atomic_fetch_add(&lp.n_underloaded_blocks(), 1);
+                    u32 idx = Kokkos::atomic_fetch_inc(&lp.n_underloaded_blocks());
                     lp.underloaded_blocks(idx) = id;
                 }
             });
 
-            Kokkos::deep_copy(lp.n_moves, lp.n_underloaded_blocks);
+            // Kokkos::deep_copy(n_underloaded_blocks, lp.n_underloaded_blocks);
+
             KOKKOS_PROFILE_FENCE();
         }
-
-        if (lp.n_moves == 0) { return; }
+        // if (n_underloaded_blocks == 0) { return; }
 
         // determine best block
         {
@@ -429,19 +430,27 @@ namespace GPU_HeiPa {
                 weight_t gain = best_id_w - own_conn;
 
                 if (gain <= 0) {
-                    best_id = lp.underloaded_blocks(u % lp.n_underloaded_blocks());
-                    gain = -own_conn;
+                    if (lp.n_underloaded_blocks() == 0) {
+                        best_id = u_id;
+                    } else {
+                        best_id = lp.underloaded_blocks(u % lp.n_underloaded_blocks());
+                        gain = -own_conn;
+                    }
                 }
 
-                lp.bid(u) = (u32) -1;
+                u32 g_id = (u32) -1;
                 if (best_id != u_id) {
                     u32 b = gain_bucket(gain, u_w);
-                    u32 g_id = (MAX_BUCKETS * u_id + b) * lp.sections + (u % lp.sections);
+                    g_id = (MAX_BUCKETS * u_id + b) * lp.sections + (u % lp.sections);
 
-                    lp.bid(u) = g_id;
                     lp.save_atomic(u) = Kokkos::atomic_fetch_add(&lp.bucket_sizes(g_id), u_w); // prefix inside this bucket
                     lp.id(u) = best_id;
+
+                    u32 idx = Kokkos::atomic_fetch_inc(&lp.temp_moves_idx());
+                    lp.temp_moves(idx) = u;
                 }
+
+                lp.bid(u) = g_id;
             });
             KOKKOS_PROFILE_FENCE();
         }
@@ -459,13 +468,15 @@ namespace GPU_HeiPa {
         }
         // pick prefix
         {
-            ScopedTimer _t("refinement", "jetrs", "pick_evictions");
+            ScopedTimer _t("refinement", "jetrw", "pick_evictions");
 
+            Kokkos::deep_copy(lp.temp_n_moves, lp.temp_moves_idx);
             Kokkos::deep_copy(lp.moves_idx, 0);
 
-            Kokkos::parallel_for("jetrs_pick_evictions", bc.n, KOKKOS_LAMBDA(const vertex_t u) {
+            Kokkos::parallel_for("jetrw_pick_evictions", lp.temp_n_moves, KOKKOS_LAMBDA(const u32 i) {
+                vertex_t u = lp.temp_moves(i);
                 u32 b_id = lp.bid(u);
-                if (b_id == (u32) -1) return; // not a candidate
+                // if (b_id == (u32) -1) return; // not a candidate
 
                 partition_t u_id = lp.partition.map(u);
 
