@@ -64,6 +64,7 @@ namespace GPU_HeiPa {
         Partition partition;
 
         weight_t curr_edge_cut = 0;
+        weight_t curr_max_block_weight = 0;
         weight_t initial_edge_cut = 0;
         weight_t initial_max_block_weight = 0;
 
@@ -125,7 +126,7 @@ namespace GPU_HeiPa {
                     << std::setw(6) << "empty" << " | "
                     << std::setw(6) << "oload" << " | "
                     << std::setw(8) << "w_oload" << " | "
-                    << std::setw(10) << "t_c" << " | "
+                    << std::setw(10) << "t_coars" << " | "
                     << std::setw(10) << "t_con" << " | "
                     << std::setw(10) << "t_unc" << " | "
                     << std::setw(10) << "t_ref"
@@ -322,6 +323,7 @@ namespace GPU_HeiPa {
             initial_edge_cut = edge_cut(graphs.back(), partition);
             curr_edge_cut = initial_edge_cut;
             initial_max_block_weight = max_weight(partition);
+            curr_max_block_weight = initial_max_block_weight;
 
             Kokkos::fence();
             initial_partitioning_ms += get_milli_seconds(p, get_time_point());
@@ -332,7 +334,9 @@ namespace GPU_HeiPa {
         void refinement(u32 level) {
             auto p = get_time_point();
 
-            curr_edge_cut = refine(graphs.back(), partition, k, lmax, level, curr_edge_cut, mem_stack);
+            auto pair = refine(graphs.back(), partition, k, lmax, level, curr_edge_cut, curr_max_block_weight, mem_stack);
+            curr_edge_cut = pair.first;
+            curr_max_block_weight = pair.second;
 
             Kokkos::fence();
             refinement_ms += get_milli_seconds(p, get_time_point());

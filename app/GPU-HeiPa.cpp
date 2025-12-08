@@ -114,7 +114,7 @@ int main(int argc, char *argv[]) {
     Profiler::instance().print_table_ascii_colored(std::cout);
 
     auto ep = get_time_point();
-    std::cout << "Total Time: " << get_seconds(sp, ep) << " seconds." << std::endl;
+    std::cout << "Total Time in GPU-HeiPa.cpp : " << get_seconds(sp, ep) << " seconds." << std::endl;
 
     return 0;
 }
