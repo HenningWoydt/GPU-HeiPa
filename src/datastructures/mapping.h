@@ -46,8 +46,7 @@ namespace GPU_HeiPa {
         mapping.old_n = t_old_n;
         mapping.coarse_n = t_coarse_n;
 
-        auto *mapping_ptr = (vertex_t *) get_chunk_front(mem_stack, sizeof(vertex_t) * t_old_n);
-        mapping.mapping = UnmanagedDeviceVertex(mapping_ptr, t_old_n);
+        mapping.mapping = UnmanagedDeviceVertex((vertex_t *) get_chunk_front(mem_stack, sizeof(vertex_t) * t_old_n), t_old_n);
 
         return mapping;
     }

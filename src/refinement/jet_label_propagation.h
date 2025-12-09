@@ -42,6 +42,11 @@ namespace GPU_HeiPa {
     constexpr f32 BUCKET_BASE = 1.5f; // geometric spacing for |gain|/weight
     constexpr u32 TARGET_PER_SHARD = 4096;
 
+    constexpr u32 N_MAX_ITERATIONS = 12;
+    constexpr u32 N_MAX_WEAK_ITERATIONS = 2;
+    constexpr f64 PHI = 0.9999;
+    constexpr f64 HEAVY_ALPHA = 1.5;
+
     KOKKOS_INLINE_FUNCTION
     u32 gain_bucket(weight_t gain, weight_t vwgt) {
         #if defined(KOKKOS_ENABLE_CUDA) || defined(KOKKOS_ENABLE_HIP)
@@ -131,11 +136,6 @@ namespace GPU_HeiPa {
         partition_t k = 0;
         weight_t lmax = 0;
 
-        u32 n_max_iterations = 12;
-        u32 max_weak_iterations = 2;
-        f64 phi = 0.999;
-        f64 heavy_alpha = 1.5; // smaller - fewer vertices moved, larger more vertices moved
-        f64 conn_c = 0.75;
         u32 sections = 1; // adaptive mini buckets per (part,bucket)
         Partition partition;
 
@@ -145,7 +145,6 @@ namespace GPU_HeiPa {
         UnmanagedDeviceWeight pre_gain;
         UnmanagedDevicePartition dest_part;
 
-        UnmanagedDeviceWeight gain;
         UnmanagedDevicePartition id;
 
         UnmanagedDeviceU32 bid;
@@ -191,7 +190,6 @@ namespace GPU_HeiPa {
         lp.pre_gain = UnmanagedDeviceWeight((weight_t *) get_chunk_back(mem_stack, sizeof(weight_t) * t_n), t_n);
         lp.dest_part = UnmanagedDevicePartition((partition_t *) get_chunk_back(mem_stack, sizeof(partition_t) * t_n), t_n);
 
-        lp.gain = UnmanagedDeviceWeight((weight_t *) get_chunk_back(mem_stack, sizeof(weight_t) * t_n), t_n);
         lp.id = UnmanagedDevicePartition((partition_t *) get_chunk_back(mem_stack, sizeof(partition_t) * t_n), t_n);
 
         lp.bid = UnmanagedDeviceU32((u32 *) get_chunk_back(mem_stack, sizeof(u32) * t_n), t_n);
@@ -241,12 +239,12 @@ namespace GPU_HeiPa {
         pop_back(mem_stack);
         pop_back(mem_stack);
         pop_back(mem_stack);
-        pop_back(mem_stack);
     }
 
     inline void jetlp(JetLabelPropagation &lp,
                       Graph &g,
-                      BlockConnectivity &bc) {
+                      BlockConnectivity &bc,
+                      const f64 conn_c) {
         // for each vertex determine best block
         {
             ScopedTimer _t("refinement", "jetlp", "best_block");
@@ -268,14 +266,16 @@ namespace GPU_HeiPa {
 
                     for (u32 i = r_beg; i < r_end; ++i) {
                         partition_t id = bc.ids(i);
+                        if (id == NULL_PART) { continue; } // no valid entry
+
                         weight_t w = bc.weights(i);
 
-                        own_conn = id == u_id ? w : own_conn;
+                        if (id == u_id) {
+                            own_conn = w;
+                            continue;
+                        }
 
-                        if (id == NULL_PART) { continue; } // no valid entry
-                        if (id == u_id) { continue; }      // do not move to self
-
-                        if (w > best_conn || (w == best_conn && id < best_id)) {
+                        if (w > best_conn) {
                             best_id = id;
                             best_conn = w;
                         }
@@ -284,7 +284,7 @@ namespace GPU_HeiPa {
                     weight_t gain = 0;
 
                     if (best_id != NO_MOVE) {
-                        if ((best_conn >= own_conn) || (own_conn - best_conn) < Kokkos::floor(lp.conn_c * (f64) own_conn)) {
+                        if ((best_conn >= own_conn) || (own_conn - best_conn) < Kokkos::floor(conn_c * (f64) own_conn)) {
                             gain = best_conn - own_conn;
                         } else {
                             best_id = NO_MOVE;
@@ -298,6 +298,7 @@ namespace GPU_HeiPa {
 
                 if (lp.dest_part(u) != NO_MOVE && bc.lock(u) == 0) {
                     lp.pre_gain(u) = lp.save_gains(u);
+
                     u32 idx = Kokkos::atomic_fetch_inc(&lp.temp_moves_idx());
                     lp.temp_moves(idx) = u;
                 } else {
@@ -394,7 +395,7 @@ namespace GPU_HeiPa {
                 weight_t u_w = g.weights(u);
 
                 if (u_id_w <= lp.lmax) { return; }                                         // u_id not overloaded
-                if ((f64) u_w >= lp.heavy_alpha * ((f64) u_id_w - opt_weight)) { return; } // vertex is too heavy
+                if ((f64) u_w >= HEAVY_ALPHA * ((f64) u_id_w - opt_weight)) { return; } // vertex is too heavy
 
                 partition_t best_id = u_id;
                 weight_t best_id_w = -max_sentinel<weight_t>();
@@ -517,17 +518,13 @@ namespace GPU_HeiPa {
         {
             ScopedTimer _t("refinement", "jetrs", "score_candidates");
 
+            Kokkos::deep_copy(lp.temp_moves_idx, 0);
             Kokkos::deep_copy(lp.bucket_sizes, 0);
 
             Kokkos::parallel_for("jetrs_score_candidates", bc.n, KOKKOS_LAMBDA(const vertex_t u) {
                 partition_t u_id = lp.partition.map(u);
                 weight_t u_w = g.weights(u);
                 weight_t u_id_w = lp.partition.bweights(u_id);
-
-                // Default: not a candidate
-                lp.gain(u) = -max_sentinel<weight_t>();
-                lp.save_atomic(u) = 0;
-                lp.bid(u) = (u32) -1;
 
                 if (u_id_w <= lp.lmax) return;               // block not overloaded
                 if (u_w > 2 * (u_id_w - opt_weight)) return; // too heavy
@@ -570,7 +567,13 @@ namespace GPU_HeiPa {
                 // atomic prefix inside minibucket
                 lp.save_atomic(u) = Kokkos::atomic_fetch_add(&lp.bucket_sizes(g_id), u_w);
                 lp.bid(u) = g_id;
+
+                u32 idx = Kokkos::atomic_fetch_inc(&lp.temp_moves_idx());
+                lp.temp_moves(idx) = u;
             });
+
+            Kokkos::deep_copy(lp.temp_n_moves, lp.temp_moves_idx);
+
             KOKKOS_PROFILE_FENCE();
         }
 
@@ -592,11 +595,11 @@ namespace GPU_HeiPa {
             ScopedTimer _t("refinement", "jetrs", "pick_evictions");
 
             Kokkos::deep_copy(lp.evict_adjust, 0);
-            Kokkos::deep_copy(lp.temp_moves_idx, 0);
+            Kokkos::deep_copy(lp.moves_idx, 0);
 
-            Kokkos::parallel_for("jetrs_pick_evictions", bc.n, KOKKOS_LAMBDA(const vertex_t u) {
+            Kokkos::parallel_for("jetrs_pick_evictions", lp.temp_n_moves, KOKKOS_LAMBDA(const u32 i) {
+                vertex_t u = lp.temp_moves(i);
                 u32 b_id = lp.bid(u);
-                if (b_id == (u32) -1) return; // not a candidate
 
                 partition_t u_id = lp.partition.map(u);
                 weight_t u_w = g.weights(u);
@@ -614,13 +617,17 @@ namespace GPU_HeiPa {
                     if (score + u_w >= limit) {
                         lp.evict_adjust(u_id) = score + u_w;
                     }
-                    u32 idx = Kokkos::atomic_fetch_add(&lp.temp_moves_idx(), 1);
-                    lp.temp_moves(idx) = u;
+                    u32 idx = Kokkos::atomic_fetch_add(&lp.moves_idx(), 1);
+                    lp.moves(idx) = u;
                 }
             });
-            KOKKOS_PROFILE_FENCE();
 
-            Kokkos::deep_copy(lp.temp_n_moves, lp.temp_moves_idx);
+            Kokkos::deep_copy(lp.n_moves, lp.moves_idx);
+
+            std::swap(lp.n_moves, lp.temp_n_moves);
+            std::swap(lp.moves, lp.temp_moves);
+
+            KOKKOS_PROFILE_FENCE();
         }
 
         if (lp.temp_n_moves == 0) {
@@ -711,8 +718,6 @@ namespace GPU_HeiPa {
                         lp.save_atomic(u) = Kokkos::atomic_fetch_add(&lp.max_vwgt(), u_w);
                     }
                 }
-                // Fallback: stay in old part
-                lp.id(u) = old_p;
             });
 
             Kokkos::deep_copy(lp.n_moves, lp.moves_idx);
@@ -731,7 +736,8 @@ namespace GPU_HeiPa {
                                                 KokkosMemoryStack &mem_stack) {
         JetLabelPropagation lp = initialize_lp(g.n, g.m, k, lmax, mem_stack);
 
-        if (level == 0) { lp.conn_c = 0.25; }
+        f64 conn_c = 0.75;
+        if (level == 0) { conn_c = 0.25; }
 
         // copy partition
         {
@@ -742,24 +748,21 @@ namespace GPU_HeiPa {
 
         // initial build of block connectivity
         BlockConnectivity bc = from_scratch(g, lp.partition, mem_stack);
-        // assert_bc(bc, g, lp.partition, lp.k);
-
-        // analyze_block_connectivity(bc, g, lp.partition, k);
 
         weight_t best_edge_cut = curr_edge_cut;
         weight_t best_weight = curr_weight;
 
         u32 balance_iterations = 0;
         u32 iteration = 0;
-        while (iteration < lp.n_max_iterations) {
+        while (iteration < N_MAX_ITERATIONS) {
             iteration += 1;
 
             if (curr_weight <= lp.lmax) {
-                jetlp(lp, g, bc);
+                jetlp(lp, g, bc, conn_c);
                 // assert_bc(bc, g, lp.partition, lp.k);
                 balance_iterations = 0;
             } else {
-                if (balance_iterations < lp.max_weak_iterations) {
+                if (balance_iterations < N_MAX_WEAK_ITERATIONS) {
                     jetrw(lp, g, bc);
                     // assert_bc(bc, g, lp.partition, lp.k);
                 } else {
@@ -807,11 +810,11 @@ namespace GPU_HeiPa {
             // move in block connectivity
             move_bc(bc, g, lp.partition, lp.id, lp.moves, lp.n_moves);
 
-            weight_t cut_delta = 0;
             // 5) compute cut change from "new" connectivity
             {
                 ScopedTimer _t("refinement", "JetLabelPropagation", "cut_delta");
 
+                weight_t cut_delta = 0;
                 Kokkos::parallel_reduce("cut_delta", lp.n_moves, KOKKOS_LAMBDA(const u32 i, weight_t &local) {
                     vertex_t u = lp.moves(i);
                     weight_t u_w = g.weights(u);
@@ -821,8 +824,6 @@ namespace GPU_HeiPa {
                     MY_KOKKOS_ASSERT(u_old_id != u_new_id);
                     MY_KOKKOS_ASSERT(u_old_id < lp.partition.k);
                     MY_KOKKOS_ASSERT(u_new_id < lp.partition.k);
-
-                    bc.dest_cache(u) = NULL_PART;
 
                     // connectivity AFTER connectivity update
                     weight_t old_con = 0;
@@ -873,7 +874,7 @@ namespace GPU_HeiPa {
                     KOKKOS_PROFILE_FENCE();
                 }
             } else if (curr_edge_cut < best_edge_cut && (curr_weight <= lp.lmax || curr_weight < best_weight)) {
-                if ((f64) curr_edge_cut < lp.phi * (f64) best_edge_cut) { iteration = 0; } {
+                if ((f64) curr_edge_cut < PHI * (f64) best_edge_cut) { iteration = 0; } {
                     ScopedTimer _t("refinement", "JetLabelPropagation", "copy_partition");
 
                     copy_into(partition, lp.partition, g.n);
@@ -884,9 +885,6 @@ namespace GPU_HeiPa {
                 }
             }
         }
-
-        // analyze_block_connectivity(bc, g, lp.partition, k);
-        // assert_bc(bc, g, lp.partition, lp.k);
 
         free_bc(bc, mem_stack);
         free_lp(lp, mem_stack);

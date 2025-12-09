@@ -93,7 +93,7 @@ namespace GPU_HeiPa {
         // map to [0,1): use top 24 bits to match float mantissa width
         uint32_t mant = x >> 8; // top 24 bits
         f32 noise = (f32) mant * (1.0f / 16777216.0f);
-        return noise * 0.000001f; // 1% amplitude
+        return noise * 0.000001f;
     }
 
     inline Mapping determine_mapping(const DeviceVertex &matching,
@@ -118,13 +118,11 @@ namespace GPU_HeiPa {
         {
             ScopedTimer _t("coarsening", "determine_mapping", "mark_and_count");
             Kokkos::parallel_reduce("mark_and_count", n, KOKKOS_LAMBDA(const vertex_t u, vertex_t &lsum) {
-                                        vertex_t v = matching(u);
-                                        u32 need = v <= u;
-                                        needs_id(u) = need; // side-effect: mark array
-                                        lsum += need;       // accumulate count
-                                    },
-                                    mapping.coarse_n
-            );
+                vertex_t v = matching(u);
+                u32 need = v <= u;
+                needs_id(u) = need; // side-effect: mark array
+                lsum += need;       // accumulate count
+            }, mapping.coarse_n);
             KOKKOS_PROFILE_FENCE();
         }
         // Exclusive scan to assign compact IDs [0, coarse_n)
@@ -148,10 +146,6 @@ namespace GPU_HeiPa {
             });
             KOKKOS_PROFILE_FENCE();
         }
-
-        Kokkos::parallel_for("assign_old_to_new", n, KOKKOS_LAMBDA(const vertex_t u) {
-            MY_KOKKOS_ASSERT(mapping.mapping(u) < mapping.coarse_n);
-        });
 
         pop_back(mem_stack);
         pop_back(mem_stack);
@@ -226,61 +220,6 @@ namespace GPU_HeiPa {
                 });
                 KOKKOS_PROFILE_FENCE();
             }
-
-    /*
-            {
-                ScopedTimer _t("coarsening", "thm_heavy_edge_matching", "pick_neighbor");
-
-                using MaxLocReducer = Kokkos::MaxLoc<f32, vertex_t, DeviceExecutionSpace>;
-                using TeamPolicy = Kokkos::TeamPolicy<DeviceExecutionSpace>;
-                Kokkos::parallel_for("pick_neighbor", TeamPolicy((int) n_unmapped, Kokkos::AUTO), KOKKOS_LAMBDA(const TeamPolicy::member_type &t) {
-                    vertex_t u = unmapped_v(t.league_rank());
-
-                    // Cache weight lookups to reduce memory access
-                    weight_t u_weight = g.weights(u);
-
-                    if (u_weight >= max_allowed || g.neighborhood(u + 1) - g.neighborhood(u) == 0) {
-                        if (t.team_rank() == 0) {
-                            thm.preferred_neighbor(u) = u;
-                        }
-                        return;
-                    }
-
-                    MaxLocReducer::value_type team_result;
-                    team_result.val = -max_sentinel<f32>();
-                    team_result.loc = u;
-
-                    Kokkos::parallel_reduce(Kokkos::TeamThreadRange(t, g.neighborhood(u), g.neighborhood(u + 1)), [=](const int j, MaxLocReducer::value_type &local) {
-                        vertex_t v = g.edges_v(j);
-
-                        if (matching(v) != v) { return; }
-
-                        weight_t w = g.edges_w(j);
-                        weight_t v_weight = g.weights(v);
-
-                        if (v_weight >= max_allowed) { return; }
-
-                        f32 weight_product = (f32) (u_weight * v_weight);
-                        f32 rating = (f32) (w * w) / weight_product;
-                        rating += edge_noise(u, v, round);
-
-                        if (rating > local.val) {
-                            local.val = rating;
-                            local.loc = v;
-                        }
-                    }, MaxLocReducer(team_result));
-
-                    if (t.team_rank() == 0) {
-                        if (team_result.loc == -1) {
-                            thm.preferred_neighbor(u) = u;
-                        } else {
-                            thm.preferred_neighbor(u) = team_result.loc;
-                        }
-                    }
-                });
-                KOKKOS_PROFILE_FENCE();
-            }
-            */
 
             // apply the matching
             {
@@ -363,10 +302,11 @@ namespace GPU_HeiPa {
             Kokkos::deep_copy(hash, thm.n);
         }
 
-        u32 made_pairs = 0;
         // pick partners for unmatched vertices
         {
             ScopedTimer _t("coarsening", "thm_leaf_matching", "pick_neighbor");
+
+            u32 made_pairs = 0;
             Kokkos::parallel_reduce("pick_neighbor", n_mappable, KOKKOS_LAMBDA(const u32 i, u32 &local) {
                 vertex_t u = unmapped_v(i);
                 vertex_t v = g.edges_v(g.neighborhood(u));
@@ -436,10 +376,11 @@ namespace GPU_HeiPa {
             Kokkos::deep_copy(hash, thm.n);
         }
 
-        u32 made_pairs = 0;
         // pick partners for unmatched vertices
         {
             ScopedTimer _t("coarsening", "thm_twin_matching", "pick_neighbor");
+
+            u32 made_pairs = 0;
             Kokkos::parallel_reduce("pick_neighbor", n_mappable, KOKKOS_LAMBDA(const u32 i, u32 &local) {
                 vertex_t u = unmapped_v(i);
 
@@ -561,8 +502,8 @@ namespace GPU_HeiPa {
         //
         {
             ScopedTimer _t("coarsening", "TwoHopMatcher", "allocate_matching");
-            auto *matching_ptr = (vertex_t *) get_chunk_back(mem_stack, sizeof(vertex_t) * g.n);
-            matching = UnmanagedDeviceVertex(matching_ptr, g.n);
+
+            matching = UnmanagedDeviceVertex((vertex_t *) get_chunk_back(mem_stack, sizeof(vertex_t) * g.n), g.n);
             Kokkos::parallel_for("set_matching", g.n, KOKKOS_LAMBDA(const vertex_t u) {
                 matching(u) = u;
             });

@@ -126,20 +126,20 @@ namespace GPU_HeiPa {
                 u32 r_end = bc.row(u + 1);
                 u32 r_len = r_end - r_beg;
 
-                if (r_len == 0) { return; }
-
                 partition_t v_id = partition.map(v);
+
+                if (r_len == 0) { return; }
 
                 for (u32 j = r_beg; j < r_end; j++) {
                     partition_t val = Kokkos::atomic_compare_exchange(&bc.ids(j), NULL_PART, v_id);
                     if (val == NULL_PART) {
                         Kokkos::atomic_add(&bc.weights(j), w);
                         Kokkos::atomic_inc(&bc.sizes(u));
-                        break;
+                        return;
                     }
                     if (val == v_id) {
                         Kokkos::atomic_add(&bc.weights(j), w);
-                        break;
+                        return;
                     }
                 }
             });
@@ -159,13 +159,12 @@ namespace GPU_HeiPa {
         {
             ScopedTimer _t("refinement", "BlockConnectivity_move", "remove_weight");
 
-            using TeamPolicy = Kokkos::TeamPolicy<DeviceExecutionSpace, Kokkos::IndexType<u32>>;
+            using TeamPolicy = Kokkos::TeamPolicy<DeviceExecutionSpace, Kokkos::IndexType<u32> >;
             Kokkos::parallel_for("remove_weight", TeamPolicy((int) n_moves, Kokkos::AUTO), KOKKOS_LAMBDA(const TeamPolicy::member_type &t) {
                 vertex_t u = moves(t.league_rank());
                 partition_t old_u_id = partition.map(u);
-                partition_t new_u_id = id(u);
 
-                if (old_u_id == new_u_id) { return; }
+                bc.dest_cache(u) = NULL_PART;
 
                 Kokkos::parallel_for(Kokkos::TeamThreadRange(t, g.neighborhood(u), g.neighborhood(u + 1)), [=](const u32 k) {
                     vertex_t v = g.edges_v(k);
@@ -181,7 +180,7 @@ namespace GPU_HeiPa {
                     if (r_len == 0) { return; }
 
                     u32 j = r_beg + hash32(old_u_id) % r_len;
-                    for (u32 t = 0; t < r_len; t++) {
+                    for (u32 i = 0; i < r_len; i++) {
                         if (j == r_end) { j = r_beg; }
                         if (bc.ids(j) == old_u_id) {
                             weight_t old_w = Kokkos::atomic_fetch_sub(&bc.weights(j), w);
@@ -200,13 +199,10 @@ namespace GPU_HeiPa {
         {
             ScopedTimer _t("refinement", "BlockConnectivity_move", "add_conn");
 
-            using TeamPolicy = Kokkos::TeamPolicy<DeviceExecutionSpace, Kokkos::IndexType<u32>>;
+            using TeamPolicy = Kokkos::TeamPolicy<DeviceExecutionSpace, Kokkos::IndexType<u32> >;
             Kokkos::parallel_for("add_conn", TeamPolicy((int) n_moves, Kokkos::AUTO), KOKKOS_LAMBDA(const TeamPolicy::member_type &t) {
                 vertex_t u = moves(t.league_rank());
-                partition_t old_u_id = partition.map(u);
                 partition_t new_u_id = id(u);
-
-                if (old_u_id == new_u_id) { return; }
 
                 Kokkos::parallel_for(Kokkos::TeamThreadRange(t, g.neighborhood(u), g.neighborhood(u + 1)), [=](const u32 k) {
                     vertex_t v = g.edges_v(k);
@@ -223,7 +219,7 @@ namespace GPU_HeiPa {
                     bool exists = false;
                     u32 j = r_beg + hash32(new_u_id) % r_len;
                     u32 empty_j = j;
-                    for (u32 t = 0; t < r_len; t++) {
+                    for (u32 i = 0; i < r_len; i++) {
                         if (j == r_end) { j = r_beg; }
                         if (bc.ids(j) == NULL_PART) { empty_j = j; }
                         if (bc.ids(j) == new_u_id) {
@@ -235,11 +231,11 @@ namespace GPU_HeiPa {
                         j += 1;
                     }
 
-                    if (exists) { return;; }
+                    if (exists) { return; }
 
                     // new_u_id does not exist, now search for an empty spot, start at last seen empty spot and hope
                     j = empty_j;
-                    for (u32 t = 0; t < r_len; t++) {
+                    for (u32 i = 0; i < r_len; i++) {
                         if (j == r_end) { j = r_beg; }
                         partition_t val = Kokkos::atomic_compare_exchange(&bc.ids(j), NULL_PART, new_u_id);
                         if (val == NULL_PART || val == new_u_id) {

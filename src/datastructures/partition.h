@@ -54,12 +54,9 @@ namespace GPU_HeiPa {
         partition.k = t_k;
         partition.lmax = t_lmax;
 
-        auto *map_ptr = (partition_t *) get_chunk_front(mem_stack, sizeof(partition_t) * t_n);
-        auto *temp_map_ptr = (partition_t *) get_chunk_front(mem_stack, sizeof(partition_t) * t_n);
-        auto *bweights_ptr = (weight_t *) get_chunk_front(mem_stack, sizeof(weight_t) * t_k);
-        partition.map = UnmanagedDevicePartition(map_ptr, t_n);
-        partition.temp_map = UnmanagedDevicePartition(temp_map_ptr, t_n);
-        partition.bweights = UnmanagedDeviceWeight(bweights_ptr, t_k);
+        partition.map = UnmanagedDevicePartition((partition_t *) get_chunk_front(mem_stack, sizeof(partition_t) * t_n), t_n);
+        partition.temp_map = UnmanagedDevicePartition((partition_t *) get_chunk_front(mem_stack, sizeof(partition_t) * t_n), t_n);
+        partition.bweights = UnmanagedDeviceWeight((weight_t *) get_chunk_front(mem_stack, sizeof(weight_t) * t_k), t_k);
 
         Kokkos::deep_copy(partition.map, 0);
         Kokkos::deep_copy(partition.bweights, 0);

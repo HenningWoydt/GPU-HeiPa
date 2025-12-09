@@ -57,17 +57,11 @@ namespace GPU_HeiPa {
         g.m = host_g.m;
         g.g_weight = host_g.g_weight;
 
-        auto *w_ptr = (weight_t *) get_chunk_front(mem_stack, sizeof(weight_t) * host_g.n);
-        auto *nb_ptr = (vertex_t *) get_chunk_front(mem_stack, sizeof(vertex_t) * (host_g.n + 1));
-        auto *eu_ptr = (vertex_t *) get_chunk_front(mem_stack, sizeof(vertex_t) * host_g.m);
-        auto *ev_ptr = (vertex_t *) get_chunk_front(mem_stack, sizeof(vertex_t) * host_g.m);
-        auto *ew_ptr = (weight_t *) get_chunk_front(mem_stack, sizeof(weight_t) * host_g.m);
-
-        g.weights = UnmanagedDeviceWeight(w_ptr, host_g.n);
-        g.neighborhood = UnmanagedDeviceVertex(nb_ptr, host_g.n + 1);
-        g.edges_u = UnmanagedDeviceVertex(eu_ptr, host_g.m);
-        g.edges_v = UnmanagedDeviceVertex(ev_ptr, host_g.m);
-        g.edges_w = UnmanagedDeviceWeight(ew_ptr, host_g.m);
+        g.weights = UnmanagedDeviceWeight((weight_t *) get_chunk_front(mem_stack, sizeof(weight_t) * host_g.n), host_g.n);
+        g.neighborhood = UnmanagedDeviceVertex((vertex_t *) get_chunk_front(mem_stack, sizeof(vertex_t) * (host_g.n + 1)), host_g.n + 1);
+        g.edges_u = UnmanagedDeviceVertex((vertex_t *) get_chunk_front(mem_stack, sizeof(vertex_t) * host_g.m), host_g.m);
+        g.edges_v = UnmanagedDeviceVertex((vertex_t *) get_chunk_front(mem_stack, sizeof(vertex_t) * host_g.m), host_g.m);
+        g.edges_w = UnmanagedDeviceWeight((weight_t *) get_chunk_front(mem_stack, sizeof(weight_t) * host_g.m), host_g.m);
         t_init.stop();
 
         ScopedTimer t_copy{"io", "from_HostGraph", "copy"};
@@ -366,6 +360,147 @@ namespace GPU_HeiPa {
         pop_front(mem_stack);
         pop_front(mem_stack);
         pop_front(mem_stack);
+    }
+
+    inline void print_graph_stats(const HostGraph &g, std::ostream &os = std::cout) {
+        using std::numeric_limits;
+
+        os << "========================================\n";
+        os << " Graph statistics\n";
+        os << "========================================\n";
+
+        os << "  vertices (n): " << g.n << "\n";
+        os << "  edges   (m): " << g.m << "\n";
+        os << "  g_weight   : " << g.g_weight << "\n";
+
+        if (g.n == 0) {
+            os << "  (empty graph)\n";
+            os << "========================================\n";
+            return;
+        }
+
+        // Degree stats
+        vertex_t min_deg = numeric_limits<vertex_t>::max();
+        vertex_t max_deg = 0;
+        std::uint64_t sum_deg = 0;
+        std::uint64_t num_isolated = 0;
+
+        for (vertex_t u = 0; u < g.n; ++u) {
+            vertex_t begin = g.neighborhood(u);
+            vertex_t end = g.neighborhood(u + 1);
+            vertex_t deg = end - begin;
+
+            sum_deg += deg;
+            if (deg == 0) { ++num_isolated; }
+
+            if (deg < min_deg) min_deg = deg;
+            if (deg > max_deg) max_deg = deg;
+        }
+
+        double avg_deg = static_cast<double>(sum_deg) / static_cast<double>(g.n);
+
+        // Try to infer whether edges are stored once or twice (undirected)
+        std::uint64_t csr_sum = sum_deg;
+
+        os << "  degree:\n";
+        os << "    min       = " << min_deg << "\n";
+        os << "    max       = " << max_deg << "\n";
+        os << "    avg       = " << avg_deg << "\n";
+        os << "    isolated  = " << num_isolated
+                << " (" << 100.0 * static_cast<double>(num_isolated) / static_cast<double>(g.n) << " %)\n";
+        os << "    CSR sum   = " << csr_sum << "\n";
+
+        if (csr_sum == g.m) {
+            os << "    note      = CSR degree sum == m (edges stored once)\n";
+        } else if (csr_sum == 2ull * g.m) {
+            os << "    note      = CSR degree sum == 2*m (undirected edges stored twice)\n";
+        } else {
+            os << "    note      = CSR degree sum != m and != 2*m (check consistency / multigraph?)\n";
+        }
+
+        // Density estimate (assuming simple undirected graph if possible)
+        double density = 0.0;
+        if (g.n > 1) {
+            std::uint64_t undirected_m =
+                    (csr_sum == 2ull * g.m) ? (csr_sum / 2ull) : static_cast<std::uint64_t>(g.m);
+            double max_undirected = static_cast<double>(g.n) *
+                                    static_cast<double>(g.n - 1) / 2.0;
+            density = max_undirected > 0.0
+                          ? static_cast<double>(undirected_m) / max_undirected
+                          : 0.0;
+        }
+        os << "  density (approx, undirected) ~ " << density << "\n";
+
+        // Vertex weight stats
+        weight_t min_vw = numeric_limits<weight_t>::max();
+        weight_t max_vw = 0;
+        std::uint64_t sum_vw = 0;
+
+        for (vertex_t u = 0; u < g.n; ++u) {
+            weight_t w = g.weights(u);
+            sum_vw += static_cast<std::uint64_t>(w);
+            if (w < min_vw) min_vw = w;
+            if (w > max_vw) max_vw = w;
+        }
+
+        os << "  vertex weights:\n";
+        os << "    total     = " << sum_vw << "\n";
+        os << "    min       = " << min_vw << "\n";
+        os << "    max       = " << max_vw << "\n";
+
+        if (static_cast<std::uint64_t>(g.g_weight) != sum_vw) {
+            os << "    warning   = sum(vertex_weights) != g_weight\n";
+        }
+
+        // Edge weight stats
+        weight_t min_ew = numeric_limits<weight_t>::max();
+        weight_t max_ew = 0;
+        std::uint64_t sum_ew = 0;
+
+        for (vertex_t e = 0; e < g.m; ++e) {
+            weight_t w = g.edges_w(e);
+            sum_ew += static_cast<std::uint64_t>(w);
+            if (w < min_ew) min_ew = w;
+            if (w > max_ew) max_ew = w;
+        }
+
+        os << "  edge weights:\n";
+        os << "    total     = " << sum_ew << "\n";
+        os << "    min       = " << (g.m ? min_ew : 0) << "\n";
+        os << "    max       = " << (g.m ? max_ew : 0) << "\n";
+
+        os << "========================================\n";
+
+        std::uint64_t cnt_deg_ge_10   = 0;
+        std::uint64_t cnt_deg_ge_100  = 0;
+        std::uint64_t cnt_deg_ge_1k   = 0;
+        std::uint64_t cnt_deg_ge_10k  = 0;
+        std::uint64_t cnt_deg_ge_100k = 0;
+        std::uint64_t cnt_deg_ge_1M   = 0;
+
+        for (vertex_t u = 0; u < g.n; ++u) {
+            vertex_t deg = g.neighborhood(u + 1) - g.neighborhood(u);
+
+            if (deg >= 10)    ++cnt_deg_ge_10;
+            if (deg >= 100)   ++cnt_deg_ge_100;
+            if (deg >= 1000)  ++cnt_deg_ge_1k;
+            if (deg >= 10000) ++cnt_deg_ge_10k;
+            if (deg >= 100000)++cnt_deg_ge_100k;
+            if (deg >= 1000000)++cnt_deg_ge_1M;
+        }
+
+        os << "  heavy degree counts (deg >= X):\n";
+        os << "    >= 10        : " << cnt_deg_ge_10    << "\n";
+        os << "    >= 100       : " << cnt_deg_ge_100   << "\n";
+        os << "    >= 1,000     : " << cnt_deg_ge_1k    << "\n";
+        os << "    >= 10,000    : " << cnt_deg_ge_10k   << "\n";
+        os << "    >= 100,000   : " << cnt_deg_ge_100k  << "\n";
+        os << "    >= 1,000,000 : " << cnt_deg_ge_1M    << "\n";
+    }
+
+    inline void print_graph_stats(const Graph &device_g, std::ostream &os = std::cout) {
+        HostGraph host_g = to_host_graph(device_g);
+        print_graph_stats(host_g, os);
     }
 }
 
