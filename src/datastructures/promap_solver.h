@@ -75,6 +75,7 @@ namespace GPU_HeiPa {
         weight_t initial_max_block_weight = 0;
 
         f64 io_ms = 0.0;
+        f64 misc_ms = 0.0;
         f64 coarsening_ms = 0.0;
         f64 contraction_ms = 0.0;
         f64 initial_partitioning_ms = 0.0;
@@ -146,31 +147,23 @@ namespace GPU_HeiPa {
             sp = get_time_point();
         }
 
-        std::vector<partition_t> solve() {
+        HostPartition solve() {
             internal_solve();
 
+            auto p = get_time_point();
             ScopedTimer _t_write("io", "Solver", "write_partition");
             HostPartition host_partition = HostPartition(Kokkos::view_alloc(Kokkos::WithoutInitializing, "host_partition"), graphs.back().n);
             Kokkos::deep_copy(host_partition, partition.map);
 
+            misc_ms += get_milli_seconds(p, get_time_point());
+
             write_partition(host_partition, graphs.back().n, config.mapping_out);
             _t_write.stop();
 
-            auto ep = get_time_point();
-            f64 duration = get_seconds(sp, ep);
-
-            std::cout << "Total time        : " << duration << std::endl;
-            std::cout << "#Nodes            : " << graphs.back().n << std::endl;
-            std::cout << "#Edges            : " << graphs.back().m << std::endl;
-            std::cout << "k                 : " << config.k << std::endl;
-            std::cout << "hierarchy         : " << to_str(config.hierarchy) << std::endl;
-            std::cout << "distances         : " << to_str(config.distance) << std::endl;
-            std::cout << "Lmax              : " << lmax << std::endl;
-            std::cout << "Init. comm-cost   : " << initial_comm_cost << std::endl;
-            std::cout << "Init. max block w : " << initial_max_block_weight << std::endl;
-            std::cout << "Final comm-cost   : " << comm_cost(graphs.back(), partition, d_oracle) << std::endl;
-            std::cout << "Final max block w : " << max_weight(partition) << std::endl;
-
+            auto p1 = get_time_point();
+            // calc stats
+            weight_t final_comm_cost = comm_cost(graphs.back(), partition, d_oracle);
+            weight_t max_block_w = max_weight(partition);
             size_t n_empty_partitions = 0;
             size_t n_overloaded_partitions = 0;
             weight_t sum_too_much = 0;
@@ -180,20 +173,8 @@ namespace GPU_HeiPa {
                 n_overloaded_partitions += partition_host.bweights(id) > lmax;
                 sum_too_much += std::max((weight_t) 0, partition_host.bweights(id) - lmax);
             }
-            std::cout << "#empty partitions : " << n_empty_partitions << std::endl;
-            std::cout << "#oload partitions : " << n_overloaded_partitions << std::endl;
-            std::cout << "Sum oload weights : " << sum_too_much << std::endl;
-            std::cout << "IO            : " << io_ms << std::endl;
-            std::cout << "Coarsening    : " << coarsening_ms << std::endl;
-            std::cout << "Contraction   : " << contraction_ms << std::endl;
-            std::cout << "Init. Part.   : " << initial_partitioning_ms << std::endl;
-            std::cout << "Uncontraction : " << uncontraction_ms << std::endl;
-            std::cout << "Refinement    : " << refinement_ms << std::endl;
 
-            #if ENABLE_PROFILER
-            print_all_levels(level_infos);
-            #endif
-
+            // free all memory
             free_distance_oracle<d_oracle_t>(d_oracle, mem_stack);
             free_partition(partition, mem_stack);
 
@@ -203,7 +184,40 @@ namespace GPU_HeiPa {
             assert_is_empty(mem_stack);
             destroy(mem_stack);
 
-            return {};
+            misc_ms += get_milli_seconds(p1, get_time_point());
+
+            auto ep = get_time_point();
+            f64 duration = get_seconds(sp, ep);
+
+            std::cout << "Total time        : " << duration << std::endl;
+            std::cout << "#Vertices         : " << n << std::endl;
+            std::cout << "#Edges            : " << m << std::endl;
+            std::cout << "k                 : " << k << std::endl;
+            std::cout << "hierarchy         : " << to_str(hierarchy) << std::endl;
+            std::cout << "distances         : " << to_str(distances) << std::endl;
+            std::cout << "Lmax              : " << lmax << std::endl;
+            std::cout << "Init. comm-cost   : " << initial_comm_cost << std::endl;
+            std::cout << "Init. max block w : " << initial_max_block_weight << std::endl;
+            std::cout << "Final comm-cost   : " << final_comm_cost << std::endl;
+            std::cout << "Final max block w : " << max_block_w << std::endl;
+
+            std::cout << "#empty partitions : " << n_empty_partitions << std::endl;
+            std::cout << "#oload partitions : " << n_overloaded_partitions << std::endl;
+            std::cout << "Sum oload weights : " << sum_too_much << std::endl;
+            std::cout << "IO            : " << io_ms << std::endl;
+            std::cout << "Misc          : " << misc_ms << std::endl;
+            std::cout << "Coarsening    : " << coarsening_ms << std::endl;
+            std::cout << "Contraction   : " << contraction_ms << std::endl;
+            std::cout << "Init. Part.   : " << initial_partitioning_ms << std::endl;
+            std::cout << "Uncontraction : " << uncontraction_ms << std::endl;
+            std::cout << "Refinement    : " << refinement_ms << std::endl;
+            std::cout << "ALL           : " << io_ms + misc_ms + coarsening_ms + contraction_ms + initial_partitioning_ms + uncontraction_ms + refinement_ms << std::endl;
+
+            #if ENABLE_PROFILER
+            print_all_levels(level_infos);
+            #endif
+
+            return host_partition;
         }
 
     private:
@@ -268,6 +282,11 @@ namespace GPU_HeiPa {
             auto p = get_time_point();
 
             host_g = from_file(config.graph_in);
+
+            io_ms += get_milli_seconds(p, get_time_point());
+
+            auto p1 = get_time_point();
+
             // Main stack: Graph + coarsening overhead
             mem_stack = initialize_kokkos_memory_stack(
                 20 * host_g.n * sizeof(vertex_t) + // 20% buffer for vertices
@@ -296,7 +315,7 @@ namespace GPU_HeiPa {
                 partition = initialize_partition(n, k, lmax, mem_stack);
             }
 
-            io_ms += get_milli_seconds(p, get_time_point());
+            misc_ms += get_milli_seconds(p1, get_time_point());
 
             assert_state_pre_partition(graphs.back());
         }

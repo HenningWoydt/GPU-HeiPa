@@ -56,9 +56,9 @@ int main(int argc, char *argv[]) {
                 // {"--graph", "../../graph_collection/mapping/rgg23.graph"},
                 // {"--mapping", "../data/out/partition/rgg23.txt"},
                 // {"--statistics", "../data/out/statistics/rgg23.JSON"},
-                {"--graph", "../../graph_collection/mapping/rgg24.graph"}, // SharedMap comm cost 10 243 578
-                {"--mapping", "../data/out/partition/rgg24.txt"},
-                {"--statistics", "../data/out/statistics/rgg24.JSON"},
+                {"--graph", "../../ProMapRepo/data/mapping/del24.graph"},
+                {"--mapping", "../data/out/partition/del24.txt"},
+                {"--statistics", "../data/out/statistics/del24.JSON"},
                 // {"--graph", "../../graph_collection/mapping/GAP-road.graph"},
                 // {"--mapping", "../data/out/partition/GAP-road.txt"},
                 // {"--statistics", "../data/out/statistics/GAP-road.JSON"},
@@ -112,7 +112,6 @@ int main(int argc, char *argv[]) {
                 std::cerr << "Error: Invalid distance oracle string: " << config.distance_oracle_string << std::endl;
             }
 
-
             for (int i = 0; i < argc_temp; ++i) { delete[] argv_temp[i]; }
             delete[] argv_temp;
         }
@@ -128,14 +127,16 @@ int main(int argc, char *argv[]) {
         }
     }
     Kokkos::fence();
-    ScopedTimer _t_guard_end("io", "main", "Kokkos::finalize");
-    Kokkos::finalize();
-    _t_guard_end.stop();
+    //
+    {
+        ScopedTimer _t("io", "main", "Kokkos::finalize");
+        Kokkos::finalize();
+    }
 
     Profiler::instance().print_table_ascii_colored(std::cout);
 
     auto ep = get_time_point();
-    std::cout << "Total Time: " << get_seconds(sp, ep) << " seconds." << std::endl;
+    std::cout << "Total Time spent in GPU-HeiProMap.cpp: " << get_seconds(sp, ep) << " seconds." << std::endl;
 
     return 0;
 }
