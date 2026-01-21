@@ -52,7 +52,6 @@ namespace GPU_HeiPa {
     class ProMapSolver {
     public:
         ProMapConfiguration config;
-        std::chrono::time_point<std::chrono::system_clock> sp;
 
         vertex_t n = 0;
         vertex_t m = 0;
@@ -144,10 +143,11 @@ namespace GPU_HeiPa {
         }
 
         explicit ProMapSolver(ProMapConfiguration t_config) : config(std::move(t_config)) {
-            sp = get_time_point();
         }
 
         HostPartition solve() {
+            auto sp = get_time_point();
+
             internal_solve();
 
             auto p = get_time_point();
@@ -224,7 +224,7 @@ namespace GPU_HeiPa {
         void internal_solve() {
             initialize();
 
-            const partition_t c = 4;
+            const partition_t c = 32;
             const partition_t max_n = c * k;
 
             u32 level = 0;
