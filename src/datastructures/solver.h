@@ -138,7 +138,8 @@ namespace GPU_HeiPa {
             }
         }
 
-        explicit Solver(Configuration t_config) : config(std::move(t_config)) {
+        explicit Solver(Configuration t_config, f64 add_io_ms = 0.0) : config(std::move(t_config)) {
+            io_ms += add_io_ms;
             sp = get_time_point();
         }
 

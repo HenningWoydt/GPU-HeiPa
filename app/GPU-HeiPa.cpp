@@ -52,7 +52,7 @@ int main(int argc, char *argv[]) {
                 // {"--graph", "../../graph_collection/mapping/rgg24.graph"},
                 // {"--mapping", "../data/out/partition/rgg24.txt"},
                 // {"--statistics", "../data/out/statistics/rgg24.JSON"},
-                {"--graph", "../../graph_collection/mapping/rgg23.graph"},
+                {"--graph", "../../GraPaRepo/data/mapping/rgg23.graph"},
                 {"--mapping", "../data/out/partition/rgg23.txt"},
                 {"--statistics", "../data/out/statistics/rgg23.JSON"},
                 // {"--graph", "../../graph_collection/mapping/mawi_201512020030.graph"},
@@ -100,14 +100,21 @@ int main(int argc, char *argv[]) {
 
             Configuration config(argc_temp, argv_temp);
             _t_parse.stop();
-            Solver(config).solve();
+
+            auto p_temp = get_time_point();
+            f64 add_io_ms = get_milli_seconds(sp, p_temp);
+
+            Solver(config, add_io_ms).solve();
 
             for (int i = 0; i < argc_temp; ++i) { delete[] argv_temp[i]; }
             delete[] argv_temp;
         }
     } else {
         Configuration config(argc, argv);
-        Solver(config).solve();
+
+        auto p_temp = get_time_point();
+        f64 add_io_ms = get_milli_seconds(sp, p_temp);
+        Solver(config, add_io_ms).solve();
     }
     Kokkos::fence();
     ScopedTimer _t_guard_end("io", "main", "Kokkos::finalize");
