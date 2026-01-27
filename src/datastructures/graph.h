@@ -50,38 +50,42 @@ namespace GPU_HeiPa {
 
     inline Graph from_HostGraph(const HostGraph &host_g,
                                 KokkosMemoryStack &mem_stack) {
-        ScopedTimer t_init{"io", "from_HostGraph", "initialize"};
         Graph g;
+        // initialize the graph
+        {
+            ScopedTimer _t{"initialize", "from_HostGraph", "initialize"};
 
-        g.n = host_g.n;
-        g.m = host_g.m;
-        g.g_weight = host_g.g_weight;
+            g.n = host_g.n;
+            g.m = host_g.m;
+            g.g_weight = host_g.g_weight;
 
-        g.weights = UnmanagedDeviceWeight((weight_t *) get_chunk_front(mem_stack, sizeof(weight_t) * host_g.n), host_g.n);
-        g.neighborhood = UnmanagedDeviceVertex((vertex_t *) get_chunk_front(mem_stack, sizeof(vertex_t) * (host_g.n + 1)), host_g.n + 1);
-        g.edges_u = UnmanagedDeviceVertex((vertex_t *) get_chunk_front(mem_stack, sizeof(vertex_t) * host_g.m), host_g.m);
-        g.edges_v = UnmanagedDeviceVertex((vertex_t *) get_chunk_front(mem_stack, sizeof(vertex_t) * host_g.m), host_g.m);
-        g.edges_w = UnmanagedDeviceWeight((weight_t *) get_chunk_front(mem_stack, sizeof(weight_t) * host_g.m), host_g.m);
-        t_init.stop();
-
-        ScopedTimer t_copy{"io", "from_HostGraph", "copy"};
-        Kokkos::deep_copy(g.weights, host_g.weights);
-        Kokkos::deep_copy(g.neighborhood, host_g.neighborhood);
-        Kokkos::deep_copy(g.edges_v, host_g.edges_v);
-        Kokkos::deep_copy(g.edges_w, host_g.edges_w);
-        KOKKOS_PROFILE_FENCE();
-        t_copy.stop();
-
-        ScopedTimer t_fill_edges_u{"io", "from_HostGraph", "fill_edges_u"};
-        Kokkos::parallel_for("fill_edges_u", g.n, KOKKOS_LAMBDA(const vertex_t u) {
-            u32 begin = g.neighborhood(u);
-            u32 end = g.neighborhood(u + 1);
-            for (u32 i = begin; i < end; ++i) {
-                g.edges_u(i) = u;
-            }
-        });
-        KOKKOS_PROFILE_FENCE();
-        t_fill_edges_u.stop();
+            g.weights = UnmanagedDeviceWeight((weight_t *) get_chunk_front(mem_stack, sizeof(weight_t) * host_g.n), host_g.n);
+            g.neighborhood = UnmanagedDeviceVertex((vertex_t *) get_chunk_front(mem_stack, sizeof(vertex_t) * (host_g.n + 1)), host_g.n + 1);
+            g.edges_u = UnmanagedDeviceVertex((vertex_t *) get_chunk_front(mem_stack, sizeof(vertex_t) * host_g.m), host_g.m);
+            g.edges_v = UnmanagedDeviceVertex((vertex_t *) get_chunk_front(mem_stack, sizeof(vertex_t) * host_g.m), host_g.m);
+            g.edges_w = UnmanagedDeviceWeight((weight_t *) get_chunk_front(mem_stack, sizeof(weight_t) * host_g.m), host_g.m);
+        }
+        // copy the structure to device
+        {
+            ScopedTimer _t{"initialize", "from_HostGraph", "copy"};
+            Kokkos::deep_copy(g.weights, host_g.weights);
+            Kokkos::deep_copy(g.neighborhood, host_g.neighborhood);
+            Kokkos::deep_copy(g.edges_v, host_g.edges_v);
+            Kokkos::deep_copy(g.edges_w, host_g.edges_w);
+            KOKKOS_PROFILE_FENCE();
+        }
+        // create the third array
+        {
+            ScopedTimer _t{"initialize", "from_HostGraph", "fill_edges_u"};
+            Kokkos::parallel_for("fill_edges_u", g.n, KOKKOS_LAMBDA(const vertex_t u) {
+                u32 begin = g.neighborhood(u);
+                u32 end = g.neighborhood(u + 1);
+                for (u32 i = begin; i < end; ++i) {
+                    g.edges_u(i) = u;
+                }
+            });
+            KOKKOS_PROFILE_FENCE();
+        }
 
         return g;
     }
@@ -471,31 +475,31 @@ namespace GPU_HeiPa {
 
         os << "========================================\n";
 
-        std::uint64_t cnt_deg_ge_10   = 0;
-        std::uint64_t cnt_deg_ge_100  = 0;
-        std::uint64_t cnt_deg_ge_1k   = 0;
-        std::uint64_t cnt_deg_ge_10k  = 0;
+        std::uint64_t cnt_deg_ge_10 = 0;
+        std::uint64_t cnt_deg_ge_100 = 0;
+        std::uint64_t cnt_deg_ge_1k = 0;
+        std::uint64_t cnt_deg_ge_10k = 0;
         std::uint64_t cnt_deg_ge_100k = 0;
-        std::uint64_t cnt_deg_ge_1M   = 0;
+        std::uint64_t cnt_deg_ge_1M = 0;
 
         for (vertex_t u = 0; u < g.n; ++u) {
             vertex_t deg = g.neighborhood(u + 1) - g.neighborhood(u);
 
-            if (deg >= 10)    ++cnt_deg_ge_10;
-            if (deg >= 100)   ++cnt_deg_ge_100;
-            if (deg >= 1000)  ++cnt_deg_ge_1k;
+            if (deg >= 10) ++cnt_deg_ge_10;
+            if (deg >= 100) ++cnt_deg_ge_100;
+            if (deg >= 1000) ++cnt_deg_ge_1k;
             if (deg >= 10000) ++cnt_deg_ge_10k;
             if (deg >= 100000)++cnt_deg_ge_100k;
             if (deg >= 1000000)++cnt_deg_ge_1M;
         }
 
         os << "  heavy degree counts (deg >= X):\n";
-        os << "    >= 10        : " << cnt_deg_ge_10    << "\n";
-        os << "    >= 100       : " << cnt_deg_ge_100   << "\n";
-        os << "    >= 1,000     : " << cnt_deg_ge_1k    << "\n";
-        os << "    >= 10,000    : " << cnt_deg_ge_10k   << "\n";
-        os << "    >= 100,000   : " << cnt_deg_ge_100k  << "\n";
-        os << "    >= 1,000,000 : " << cnt_deg_ge_1M    << "\n";
+        os << "    >= 10        : " << cnt_deg_ge_10 << "\n";
+        os << "    >= 100       : " << cnt_deg_ge_100 << "\n";
+        os << "    >= 1,000     : " << cnt_deg_ge_1k << "\n";
+        os << "    >= 10,000    : " << cnt_deg_ge_10k << "\n";
+        os << "    >= 100,000   : " << cnt_deg_ge_100k << "\n";
+        os << "    >= 1,000,000 : " << cnt_deg_ge_1M << "\n";
     }
 
     inline void print_graph_stats(const Graph &device_g, std::ostream &os = std::cout) {

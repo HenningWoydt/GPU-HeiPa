@@ -37,6 +37,7 @@ int main(int argc, char *argv[]) {
     auto sp = get_time_point();
     std::ios::sync_with_stdio(false);
     std::cout.tie(nullptr);
+    int verbose_level = 1;
 
     ScopedTimer _t_guard("io", "main", "Kokkos::initialize");
     Kokkos::initialize();
@@ -56,7 +57,7 @@ int main(int argc, char *argv[]) {
                 // {"--graph", "../../graph_collection/mapping/rgg23.graph"},
                 // {"--mapping", "../data/out/partition/rgg23.txt"},
                 // {"--statistics", "../data/out/statistics/rgg23.JSON"},
-                {"--graph", "../../ProMapRepo/data/mapping/rgg23.graph"},
+                {"--graph", "../../ProMapRepo/data/mapping/rgg23.graph"}, // comm cost 9543754, 1098 ms
                 {"--mapping", "../data/out/partition/rgg23.txt"},
                 {"--statistics", "../data/out/statistics/rgg23.JSON"},
                 // {"--graph", "../../graph_collection/mapping/GAP-road.graph"},
@@ -76,7 +77,8 @@ int main(int argc, char *argv[]) {
                 {"--imbalance", "0.03"},
                 {"--config", "IM"},
                 {"--seed", "1"},
-                {"--distance-oracle", "matrix"}
+                {"--distance-oracle", "matrix"},
+                {"--verbose-level", "2"}
             };
 
             std::vector<std::string> args = {"GPU-HeiProMap"};
@@ -102,29 +104,43 @@ int main(int argc, char *argv[]) {
             }
 
             ProMapConfiguration config(argc_temp, argv_temp);
+            verbose_level = config.verbose_level;
             _t_parse.stop();
 
+            HostGraph host_g = from_file(config.graph_in);
+            HostPartition host_partition;
+
+            f64 add_io_ms = get_milli_seconds(sp, get_time_point());
             if (config.distance_oracle_string == "matrix") {
-                ProMapSolver<DistanceOracleMatrix>(config).solve();
+                host_partition = ProMapSolver<DistanceOracleMatrix>(config).solve(host_g, verbose_level, add_io_ms);
             } else if (config.distance_oracle_string == "binary") {
-                ProMapSolver<DistanceOracleBinary>(config).solve();
+                host_partition = ProMapSolver<DistanceOracleBinary>(config).solve(host_g, verbose_level, add_io_ms);
             } else {
                 std::cerr << "Error: Invalid distance oracle string: " << config.distance_oracle_string << std::endl;
             }
+
+            // write_partition(host_partition, host_g.n, config.mapping_out);
 
             for (int i = 0; i < argc_temp; ++i) { delete[] argv_temp[i]; }
             delete[] argv_temp;
         }
     } else {
         ProMapConfiguration config(argc, argv);
+        verbose_level = config.verbose_level;
 
+        HostGraph host_g = from_file(config.graph_in);
+        HostPartition host_partition;
+
+        f64 add_io_ms = get_milli_seconds(sp, get_time_point());
         if (config.distance_oracle_string == "matrix") {
-            ProMapSolver<DistanceOracleMatrix>(config).solve();
+            host_partition = ProMapSolver<DistanceOracleMatrix>(config).solve(host_g, verbose_level, add_io_ms);
         } else if (config.distance_oracle_string == "binary") {
-            ProMapSolver<DistanceOracleBinary>(config).solve();
+            host_partition = ProMapSolver<DistanceOracleBinary>(config).solve(host_g, verbose_level, add_io_ms);
         } else {
             std::cerr << "Error: Invalid distance oracle string: " << config.distance_oracle_string << std::endl;
         }
+
+        write_partition(host_partition, host_g.n, config.mapping_out);
     }
     Kokkos::fence();
     //
@@ -133,10 +149,14 @@ int main(int argc, char *argv[]) {
         Kokkos::finalize();
     }
 
-    Profiler::instance().print_table_ascii_colored(std::cout);
+    if (verbose_level >= 2) {
+        Profiler::instance().print_table_ascii_colored(std::cout);
+    }
 
     auto ep = get_time_point();
-    std::cout << "Total Time spent in GPU-HeiProMap.cpp: " << get_seconds(sp, ep) << " seconds." << std::endl;
+    if (verbose_level >= 2) {
+        std::cout << "Total Time spent in GPU-HeiProMap.cpp: " << get_seconds(sp, ep) << " seconds." << std::endl;
+    }
 
     return 0;
 }

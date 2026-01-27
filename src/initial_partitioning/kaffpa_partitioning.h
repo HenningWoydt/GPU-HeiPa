@@ -36,16 +36,13 @@
 #include <algorithm>
 
 namespace GPU_HeiPa {
-    inline void kaffpa_initial_partition(Graph &g,
-                                         int k,
-                                         f64 imbalance,
-                                         u64 seed,
-                                         Partition &partition) {
+    inline void kaffpa_partition(HostGraph &g,
+                                 int k,
+                                 f64 imbalance,
+                                 u64 seed,
+                                 HostPartition &partition,
+                                 int mode) {
         ScopedTimer _t_copy("initial_partitioning", "KaFFPa", "copy");
-
-        // Convert device graph to simple CSR arrays on host
-        HostGraph host_g = to_host_graph(g);
-        HostPartition host_partition(Kokkos::view_alloc(Kokkos::WithoutInitializing, "host_partition"), g.n);
 
         int n = (int) g.n;
         vertex_t m = g.m;
@@ -55,23 +52,20 @@ namespace GPU_HeiPa {
         int *adjcwgt = (int *) malloc(m * sizeof(int));
         int *adjncy = (int *) malloc(m * sizeof(int));
         bool suppress_output = true;
-        int mode = FAST;
-        int edge_cut_temp = 0;
-        int *part_temp = (int *) malloc((u64) n * sizeof(int));
         int edge_cut = std::numeric_limits<int>::max();
         int *part = (int *) malloc((u64) n * sizeof(int));
 
-        std::vector<std::pair<vertex_t, weight_t>> edges;
+        std::vector<std::pair<vertex_t, weight_t> > edges;
         edges.reserve(m);
-        for (vertex_t old_u = 0; old_u < host_g.n; ++old_u) {
-            vwgt[old_u] = (int) host_g.weights(old_u);
+        for (vertex_t old_u = 0; old_u < g.n; ++old_u) {
+            vwgt[old_u] = (int) g.weights(old_u);
             xadj[old_u + 1] = xadj[old_u];
 
             // Collect edges for this vertex
             edges.clear();
-            for (u32 i = host_g.neighborhood(old_u); i < host_g.neighborhood(old_u + 1); ++i) {
-                vertex_t v = host_g.edges_v(i);
-                weight_t w = host_g.edges_w(i);
+            for (u32 i = g.neighborhood(old_u); i < g.neighborhood(old_u + 1); ++i) {
+                vertex_t v = g.edges_v(i);
+                weight_t w = g.edges_w(i);
                 edges.emplace_back(v, w);
             }
 
@@ -79,7 +73,7 @@ namespace GPU_HeiPa {
             std::sort(edges.begin(), edges.end());
 
             // Add sorted edges to arrays
-            for (const auto& edge : edges) {
+            for (const auto &edge: edges) {
                 adjncy[xadj[old_u + 1]] = (int) edge.first;
                 adjcwgt[xadj[old_u + 1]] = (int) edge.second;
                 xadj[old_u + 1] += 1;
@@ -89,26 +83,36 @@ namespace GPU_HeiPa {
         _t_copy.stop();
         ScopedTimer _t_partition("initial_partitioning", "KaFFPa", "partition");
 
-        kaffpa(&n, vwgt, xadj, adjcwgt, adjncy, &k, &imbalance, suppress_output, (int) seed, mode, &edge_cut_temp, part_temp);
+        kaffpa(&n, vwgt, xadj, adjcwgt, adjncy, &k, &imbalance, suppress_output, (int) seed, mode, &edge_cut, part);
 
         _t_partition.stop();
         ScopedTimer _t_upload("initial_partitioning", "KaFFPa", "upload");
 
-        if (edge_cut_temp < edge_cut) {
-            edge_cut = edge_cut_temp;
-            std::swap(part_temp, part);
-        }
 
         for (int i = 0; i < n; ++i) {
-            host_partition(i) = (partition_t) part[i];
+            partition(i) = (partition_t) part[i];
         }
 
         free(vwgt);
         free(xadj);
         free(adjcwgt);
         free(adjncy);
-        free(part_temp);
         free(part);
+    }
+
+    inline void kaffpa_partition(Graph &g,
+                                 int k,
+                                 f64 imbalance,
+                                 u64 seed,
+                                 Partition &partition,
+                                 int mode) {
+        ScopedTimer _t_copy("initial_partitioning", "KaFFPa", "copy");
+
+        // Convert device graph to simple CSR arrays on host
+        HostGraph host_g = to_host_graph(g);
+        HostPartition host_partition(Kokkos::view_alloc(Kokkos::WithoutInitializing, "host_partition"), g.n);
+
+        kaffpa_partition(host_g, k, imbalance, seed, host_partition, mode);
 
         auto device_subview = Kokkos::subview(partition.map, std::pair<size_t, size_t>(0, host_partition.extent(0)));
         Kokkos::deep_copy(device_subview, host_partition);

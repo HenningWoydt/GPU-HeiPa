@@ -179,65 +179,59 @@ namespace GPU_HeiPa {
             Kokkos::parallel_for("best_block", bc.n, KOKKOS_LAMBDA(const vertex_t u) {
                 if (lp.to_move(u) != 0) { return; } // already moved
 
-                u32 status = lp.lp_to_check(u);
-                if (status == 1) {
-                    // have cached, insert into list
-                    u32 idx = Kokkos::atomic_fetch_add(&lp.temp_moves_idx(), 1);
-                    lp.temp_moves(idx) = u;
-                    return;
-                }
-                if (status == 2) { return; } // have cached, but bad
+                // u32 status = lp.lp_to_check(u);
+                // if (status == 1) {
+                //     // have cached, insert into list
+                //     u32 idx = Kokkos::atomic_fetch_add(&lp.temp_moves_idx(), 1);
+                //     lp.temp_moves(idx) = u;
+                //     return;
+                // }
+                // if (status == 2) { return; } // have cached, but bad
 
                 partition_t u_id = lp.partition.map(u);
 
-                weight_t own_conn = 0;
                 partition_t best_id = u_id;
-                weight_t best_id_w = -max_sentinel<weight_t>();
-                weight_t gain = -max_sentinel<weight_t>() + 1;
+                weight_t best_delta = -max_sentinel<weight_t>();
 
                 u32 r_beg = bc.row(u);
                 u32 r_len = bc.sizes(u);
                 u32 r_end = r_beg + r_len;
 
-                bool found = false;
                 for (u32 i = r_beg; i < r_end; ++i) {
                     partition_t id = bc.ids(i);
-                    weight_t w = bc.weights(i);
+                    if (id == u_id) { continue; }
+                    if (id == NULL_PART) { continue; }
 
-                    own_conn = id == u_id ? w : own_conn;
+                    weight_t delta = 0;
+                    for (u32 j = r_beg; j < r_end; ++j) {
+                        partition_t temp_id = bc.ids(j);
+                        weight_t w = bc.weights(j);
 
-                    if (id == NULL_PART) { continue; } // no valid entry
-                    if (id == u_id) { continue; }      // do not move to self
+                        if (temp_id == NULL_PART) { continue; }
 
-                    weight_t comm_w = w * get(d_oracle, u_id, id);
+                        weight_t old_d = get(d_oracle, u_id, temp_id);
+                        weight_t new_d = get(d_oracle, id, temp_id);
 
-                    if (comm_w > best_id_w || (comm_w == best_id_w && id < best_id)) {
+                        delta += w * (old_d - new_d);
+                    }
+
+                    if (delta > best_delta) {
+                        best_delta = delta;
                         best_id = id;
-                        best_id_w = comm_w;
-                        found = true;
                     }
                 }
 
-                status = 2;
-                if (found) {
-                    weight_t F = best_id_w - own_conn;
+                // status = 2;
+                if (best_delta >= 0) {
+                    // status = 1;
 
-                    // apply first filter
-                    bool non_neg = F >= 0;
-                    bool conn_filter = -F < Kokkos::floor(lp.conn_c * (f64) own_conn);
-
-                    if (non_neg) {
-                        status = 1;
-
-                        gain = F;
-                        u32 idx = Kokkos::atomic_fetch_add(&lp.temp_moves_idx(), 1);
-                        lp.temp_moves(idx) = u;
-                    }
+                    u32 idx = Kokkos::atomic_fetch_add(&lp.temp_moves_idx(), 1);
+                    lp.temp_moves(idx) = u;
                 }
 
-                lp.lp_to_check(u) = status;
+                // lp.lp_to_check(u) = status;
                 lp.lp_id(u) = best_id;
-                lp.lp_gain(u) = gain;
+                lp.lp_gain(u) = best_delta;
             });
             KOKKOS_PROFILE_FENCE();
         }
@@ -251,31 +245,33 @@ namespace GPU_HeiPa {
             Kokkos::parallel_for("afterburner", lp.temp_n_moves, KOKKOS_LAMBDA(const u32 i) {
                 vertex_t u = lp.temp_moves(i);
                 weight_t u_gain = lp.lp_gain(u);
+
                 partition_t old_u_id = lp.partition.map(u);
                 partition_t new_u_id = lp.lp_id(u);
 
                 weight_t update = 0;
                 for (u32 j = g.neighborhood(u); j < g.neighborhood(u + 1); ++j) {
                     vertex_t v = g.edges_v(j);
+                    weight_t w = g.edges_w(j);
 
                     weight_t v_gain = lp.lp_gain(v);
 
                     if (v_gain > u_gain || (v_gain == u_gain && v < u)) {
+                        // Assume v moves first
                         partition_t v_old_id = lp.partition.map(v);
                         partition_t v_new_id = lp.lp_id(v);
-                        weight_t w = g.edges_w(j);
 
                         // distances BEFORE v moves
-                        weight_t d_Un_Vo = get(d_oracle, new_u_id, v_old_id);
-                        weight_t d_Uo_Vo = get(d_oracle, old_u_id, v_old_id);
+                        weight_t d_unew_vold = get(d_oracle, new_u_id, v_old_id);
+                        weight_t d_uold_vold = get(d_oracle, old_u_id, v_old_id);
 
                         // distances AFTER v moves
-                        weight_t d_Un_Vn = get(d_oracle, new_u_id, v_new_id);
-                        weight_t d_Uo_Vn = get(d_oracle, old_u_id, v_new_id);
+                        weight_t d_unew_vnew = get(d_oracle, new_u_id, v_new_id);
+                        weight_t d_uold_vnew = get(d_oracle, old_u_id, v_new_id);
 
                         // gains are (cost_before - cost_after)
-                        weight_t before_u = d_Uo_Vo - d_Un_Vo; // gain if only u moves
-                        weight_t after_u = d_Uo_Vn - d_Un_Vn;  // gain if v moved first
+                        weight_t before_u = d_uold_vold - d_unew_vold; // gain if only u moves
+                        weight_t after_u = d_uold_vnew - d_unew_vnew;  // gain if v moved first
 
                         update += w * (after_u - before_u);
                     }
@@ -299,7 +295,7 @@ namespace GPU_HeiPa {
     inline void promap_jetrw(ProMapJetLabelPropagation &lp,
                              Graph &g,
                              BlockConnectivity &bc,
-                             d_oracle_t &oracle) {
+                             d_oracle_t &d_oracle) {
         lp.round += 1;
 
         weight_t opt_weight = (weight_t) ((f64) g.g_weight / (f64) lp.k);
@@ -338,7 +334,7 @@ namespace GPU_HeiPa {
                 weight_t u_w = g.weights(u);
 
                 partition_t best_id = u_id;
-                weight_t best_id_w = -max_sentinel<weight_t>();
+                weight_t best_delta = -max_sentinel<weight_t>();
 
                 lp.id(u) = u_id; // default move to self
                 lp.bid(u) = (u32) -1;
@@ -350,33 +346,53 @@ namespace GPU_HeiPa {
                 u32 r_len = bc.sizes(u);
                 u32 r_end = r_beg + r_len;
 
-                weight_t own_conn = 0;
                 for (u32 i = r_beg; i < r_end; ++i) {
                     partition_t id = bc.ids(i);
-                    weight_t w = bc.weights(i);
 
-                    own_conn = id == u_id ? w : own_conn;
-
-                    if (id == NULL_PART) { continue; } // no valid entry
-                    // if (id == u_id) { continue; }                           // dont move to self
+                    if (u_id == id) { continue; } // dont move to same partition
+                    if (id == NULL_PART) { continue; }
+                    if (lp.partition.bweights(id) > lp.sigma) { continue; } // dont move to overloaded block
                     if (lp.partition.bweights(id) >= max_b_w) { continue; } // dont move into non underloaded partition
 
-                    if (w > best_id_w || (w == best_id_w && id < best_id)) {
+                    weight_t delta = 0;
+                    for (u32 j = r_beg; j < r_end; ++j) {
+                        partition_t temp_id = bc.ids(j);
+                        weight_t w = bc.weights(j);
+
+                        if (temp_id == NULL_PART) { continue; }
+
+                        weight_t old_d = get(d_oracle, u_id, temp_id);
+                        weight_t new_d = get(d_oracle, id, temp_id);
+
+                        delta += w * (old_d - new_d);
+                    }
+
+                    if (delta > best_delta) {
+                        best_delta = delta;
                         best_id = id;
-                        best_id_w = w;
                     }
                 }
 
-                weight_t gain = best_id_w - own_conn;
 
-                if (gain <= 0) {
+                if (best_delta <= 0) {
                     best_id = lp.underloaded_blocks(u % lp.n_underloaded_blocks());
-                    gain = -own_conn;
+                    best_delta = 0;
+                    for (u32 j = r_beg; j < r_end; ++j) {
+                        partition_t temp_id = bc.ids(j);
+                        weight_t w = bc.weights(j);
+
+                        if (temp_id == NULL_PART) { continue; }
+
+                        weight_t old_d = get(d_oracle, u_id, temp_id);
+                        weight_t new_d = get(d_oracle, best_id, temp_id);
+
+                        best_delta += w * (old_d - new_d);
+                    }
                 }
 
                 lp.bid(u) = (u32) -1;
                 if (best_id != u_id) {
-                    u32 b = gain_bucket(gain, u_w);
+                    u32 b = gain_bucket(best_delta, u_w);
                     u32 g_id = (MAX_BUCKETS * u_id + b) * lp.sections + (u % lp.sections);
 
                     lp.bid(u) = g_id;
@@ -433,7 +449,7 @@ namespace GPU_HeiPa {
     inline void promap_jetrs(ProMapJetLabelPropagation &lp,
                              Graph &g,
                              BlockConnectivity &bc,
-                             d_oracle_t &oracle) {
+                             d_oracle_t &d_oracle) {
         lp.round += 1;
 
         weight_t opt_weight = (weight_t) ((f64) g.g_weight / (f64) lp.k);
@@ -478,6 +494,7 @@ namespace GPU_HeiPa {
 
                 weight_t own_conn = 0;
                 weight_t sum_other = 0;
+                weight_t dist_other = 0;
                 u32 count_other = 0;
 
                 u32 r_beg = bc.row(u);
@@ -496,12 +513,13 @@ namespace GPU_HeiPa {
                     if (lp.partition.bweights(id) >= max_b_w) continue; // don't count overloaded destinations
 
                     sum_other += w;
+                    dist_other += get(d_oracle, u_id, id);
                     count_other += 1;
                 }
 
                 if (count_other == 0) count_other = 1;
 
-                weight_t g_u = ((weight_t) ((f64) sum_other / (f64) count_other)) - own_conn;
+                weight_t g_u = ((weight_t) ((f64) (dist_other * sum_other) / (f64) count_other)) - (own_conn * dist_other);
 
                 // Map to gain bucket
                 u32 b = gain_bucket(g_u, Kokkos::min(u_w, u_id_w - lp.lmax));
@@ -705,15 +723,20 @@ namespace GPU_HeiPa {
             iteration += 1;
             total_n_iteration += 1;
 
+            // std::cout << "s " << level << " comm_cost: " << comm_cost(g, lp.partition, d_oracle) << " max_w:" << max_weight(lp.partition) << std::endl;
+
             if (curr_weight <= lp.lmax) {
+                // std::cout << "jetlp" << std::endl;
                 promap_jetlp(lp, g, bc, d_oracle);
                 // assert_bc(bc, g, lp.partition, lp.k);
                 balance_iterations = 0;
             } else {
                 if (balance_iterations < lp.max_weak_iterations) {
+                    // std::cout << "jetrw" << std::endl;
                     promap_jetrw(lp, g, bc, d_oracle);
                     // assert_bc(bc, g, lp.partition, lp.k);
                 } else {
+                    // std::cout << "jetrs" << std::endl;
                     promap_jetrs(lp, g, bc, d_oracle);
                     // assert_bc(bc, g, lp.partition, lp.k);
                 }
@@ -747,6 +770,8 @@ namespace GPU_HeiPa {
                 });
                 KOKKOS_PROFILE_FENCE();
             }
+
+            // std::cout << "e " << level << " comm_cost: " << comm_cost(g, lp.partition, d_oracle) << " max_w:" << max_weight(lp.partition) << std::endl;
 
             // invalidate caches of neighbors
             {

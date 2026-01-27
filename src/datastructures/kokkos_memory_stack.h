@@ -55,7 +55,7 @@ namespace GPU_HeiPa {
     }
 
     inline KokkosMemoryStack initialize_kokkos_memory_stack(size_t n_bytes, const std::string& t_name) {
-        ScopedTimer _t("io", "KokkosMemoryStack", "allocate");
+        ScopedTimer _t("initialize", "KokkosMemoryStack", "allocate");
 
         KokkosMemoryStack stack;
         stack.name = t_name;
@@ -175,7 +175,7 @@ namespace GPU_HeiPa {
     }
 
     inline void destroy(KokkosMemoryStack &stack) {
-        ScopedTimer _t("io", "KokkosMemoryStack", "free");
+        ScopedTimer _t("initialize", "KokkosMemoryStack", "free");
 
         if (stack.base) {
             Kokkos::kokkos_free<DeviceMemorySpace>(stack.base);

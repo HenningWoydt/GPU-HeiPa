@@ -34,19 +34,19 @@
 #include "../datastructures/partition.h"
 
 namespace GPU_HeiPa {
-    inline void metis_initial_partition(Graph &g,
-                                        int k,
-                                        f64 imbalance,
-                                        u64 seed,
-                                        Partition &partition) {
-        ScopedTimer _t_copy("initial_partitioning", "METIS", "copy");
+    enum MetisOption {
+        METIS_KWAY,
+        METIS_RECURSIVE,
+    };
 
-        // Convert device graph to simple CSR arrays on host
-        HostGraph host_g = to_host_graph(g);
-        HostPartition host_partition(Kokkos::view_alloc(Kokkos::WithoutInitializing, "host_partition"), g.n);
-
+    inline void metis_partition(HostGraph &g,
+                                int k,
+                                f64 imbalance,
+                                u64 seed,
+                                HostPartition &partition,
+                                MetisOption option) {
         idx_t n = (idx_t) g.n;
-        idx_t ncon = 1;  // Number of constraints (typically 1 for vertex weights)
+        idx_t ncon = 1; // Number of constraints (typically 1 for vertex weights)
         vertex_t m = g.m;
         idx_t *vwgt = (idx_t *) malloc((u64) n * sizeof(idx_t));
         idx_t *xadj = (idx_t *) malloc((u64) (n + 1) * sizeof(idx_t));
@@ -62,49 +62,47 @@ namespace GPU_HeiPa {
         // Set default options and configure
         METIS_SetDefaultOptions(options);
         options[METIS_OPTION_SEED] = (idx_t) seed;
-        options[METIS_OPTION_NCUTS] = 1;      // Single cut for determinism
-        options[METIS_OPTION_NUMBERING] = 0;  // C-style numbering
-        
+        options[METIS_OPTION_NCUTS] = 1;     // Single cut for determinism
+        options[METIS_OPTION_NUMBERING] = 0; // C-style numbering
+
         // Set imbalance constraint
         for (int i = 0; i < ncon; i++) {
-            ubvec[i] = (real_t) (1.0 + imbalance);
+            ubvec[i] = std::max((real_t) 1.0, (real_t) (1.0 + imbalance));
         }
 
-        std::vector<std::pair<vertex_t, weight_t>> edges;
+        std::vector<std::pair<vertex_t, weight_t> > edges;
         edges.reserve(m);
-        for (vertex_t old_u = 0; old_u < host_g.n; ++old_u) {
-            vwgt[old_u] = (idx_t) host_g.weights(old_u);
+        for (vertex_t old_u = 0; old_u < g.n; ++old_u) {
+            vwgt[old_u] = (idx_t) g.weights(old_u);
             xadj[old_u + 1] = xadj[old_u];
 
             // Collect edges for this vertex
             edges.clear();
-            for (u32 i = host_g.neighborhood(old_u); i < host_g.neighborhood(old_u + 1); ++i) {
-                vertex_t v = host_g.edges_v(i);
-                weight_t w = host_g.edges_w(i);
+            for (u32 i = g.neighborhood(old_u); i < g.neighborhood(old_u + 1); ++i) {
+                vertex_t v = g.edges_v(i);
+                weight_t w = g.edges_w(i);
                 edges.emplace_back(v, w);
             }
-            
+
             // Sort edges by vertex ID for deterministic ordering
             std::sort(edges.begin(), edges.end());
-            
+
             // Add sorted edges to arrays
-            for (const auto& edge : edges) {
+            for (const auto &edge: edges) {
                 adjncy[xadj[old_u + 1]] = (idx_t) edge.first;
                 adjwgt[xadj[old_u + 1]] = (idx_t) edge.second;
                 xadj[old_u + 1] += 1;
             }
         }
 
-        _t_copy.stop();
-        ScopedTimer _t_partition("initial_partitioning", "METIS", "partition");
-
-        METIS_PartGraphKway(&n, &ncon, xadj, adjncy, vwgt, NULL, adjwgt, &nparts, NULL, ubvec, options, &edgecut, part);
-
-        _t_partition.stop();
-        ScopedTimer _t_upload("initial_partitioning", "METIS", "upload");
+        if (option == METIS_KWAY) {
+            METIS_PartGraphKway(&n, &ncon, xadj, adjncy, vwgt, NULL, adjwgt, &nparts, NULL, ubvec, options, &edgecut, part);
+        } else if (option == METIS_RECURSIVE) {
+            METIS_PartGraphRecursive(&n, &ncon, xadj, adjncy, vwgt, NULL, adjwgt, &nparts, NULL, ubvec, options, &edgecut, part);
+        }
 
         for (int i = 0; i < n; ++i) {
-            host_partition(i) = (partition_t) part[i];
+            partition(i) = (partition_t) part[i];
         }
 
         free(vwgt);
@@ -113,6 +111,21 @@ namespace GPU_HeiPa {
         free(adjncy);
         free(part);
         free(ubvec);
+    }
+
+    inline void metis_partition(Graph &g,
+                                int k,
+                                f64 imbalance,
+                                u64 seed,
+                                Partition &partition,
+                                MetisOption option) {
+        ScopedTimer _t_copy("initial_partitioning", "METIS", "copy");
+
+        // Convert device graph to simple CSR arrays on host
+        HostGraph host_g = to_host_graph(g);
+        HostPartition host_partition(Kokkos::view_alloc(Kokkos::WithoutInitializing, "host_partition"), g.n);
+
+        metis_partition(host_g, k, imbalance, seed, host_partition, option);
 
         auto device_subview = Kokkos::subview(partition.map, std::pair<size_t, size_t>(0, host_partition.extent(0)));
         Kokkos::deep_copy(device_subview, host_partition);

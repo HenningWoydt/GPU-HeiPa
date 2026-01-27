@@ -52,20 +52,22 @@ namespace GPU_HeiPa {
 
     using DeviceExecutionSpace = Kokkos::DefaultExecutionSpace;
     using DeviceMemorySpace = Kokkos::DefaultExecutionSpace::memory_space;
+    using HostMemory = Kokkos::CudaHostPinnedSpace;
+    // using HostMemory = Kokkos::HostSpace;
 
-    using HostVertex = Kokkos::View<vertex_t *, Kokkos::HostSpace>;
-    using HostWeight = Kokkos::View<weight_t *, Kokkos::HostSpace>;
-    using HostPartition = Kokkos::View<partition_t *, Kokkos::HostSpace>;
-    using HostU8 = Kokkos::View<u8 *, Kokkos::HostSpace>;
-    using HostU16 = Kokkos::View<u16 *, Kokkos::HostSpace>;
-    using HostU32 = Kokkos::View<u32 *, Kokkos::HostSpace>;
-    using HostU64 = Kokkos::View<u64 *, Kokkos::HostSpace>;
-    using HostS8 = Kokkos::View<s8 *, Kokkos::HostSpace>;
-    using HostS16 = Kokkos::View<s16 *, Kokkos::HostSpace>;
-    using HostS32 = Kokkos::View<s32 *, Kokkos::HostSpace>;
-    using HostS64 = Kokkos::View<s64 *, Kokkos::HostSpace>;
-    using HostF32 = Kokkos::View<f32 *, Kokkos::HostSpace>;
-    using HostF64 = Kokkos::View<f64 *, Kokkos::HostSpace>;
+    using HostVertex = Kokkos::View<vertex_t *, HostMemory>;
+    using HostWeight = Kokkos::View<weight_t *, HostMemory>;
+    using HostPartition = Kokkos::View<partition_t *, HostMemory>;
+    using HostU8 = Kokkos::View<u8 *, HostMemory>;
+    using HostU16 = Kokkos::View<u16 *, HostMemory>;
+    using HostU32 = Kokkos::View<u32 *, HostMemory>;
+    using HostU64 = Kokkos::View<u64 *, HostMemory>;
+    using HostS8 = Kokkos::View<s8 *, HostMemory>;
+    using HostS16 = Kokkos::View<s16 *, HostMemory>;
+    using HostS32 = Kokkos::View<s32 *, HostMemory>;
+    using HostS64 = Kokkos::View<s64 *, HostMemory>;
+    using HostF32 = Kokkos::View<f32 *, HostMemory>;
+    using HostF64 = Kokkos::View<f64 *, HostMemory>;
 
     using DeviceVertex = Kokkos::View<vertex_t *, DeviceMemorySpace>;
     using DeviceWeight = Kokkos::View<weight_t *, DeviceMemorySpace>;

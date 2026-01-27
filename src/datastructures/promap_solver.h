@@ -38,8 +38,9 @@
 #include "../distance_oracles/distance_oracle_binary.h"
 #include "../distance_oracles/distance_oracle_matrix.h"
 #include "../refinement/promap_jet_label_propagation.h"
-#include "../initial_partitioning/kaffpa_initial_partitioning.h"
-#include "../initial_partitioning/metis_initial_partitioning.h"
+#include "../initial_partitioning/kaffpa_partitioning.h"
+#include "../initial_partitioning/global_multisection.h"
+#include "../initial_partitioning/metis_partitioning.h"
 #include "../utility/definitions.h"
 #include "../utility/promap_configuration.h"
 #include "../utility/profiler.h"
@@ -60,7 +61,6 @@ namespace GPU_HeiPa {
         std::vector<weight_t> distances;
         weight_t lmax = 0;
 
-        HostGraph host_g;
         KokkosMemoryStack mem_stack;
 
         std::vector<Graph> graphs;
@@ -145,86 +145,105 @@ namespace GPU_HeiPa {
         explicit ProMapSolver(ProMapConfiguration t_config) : config(std::move(t_config)) {
         }
 
-        HostPartition solve() {
+        HostPartition solve(HostGraph &host_g, int verbose_level = 1, f64 add_io_ms = 0.0) {
+            io_ms += add_io_ms;
             auto sp = get_time_point();
 
-            internal_solve();
+            internal_solve(host_g);
 
             auto p = get_time_point();
-            ScopedTimer _t_write("io", "Solver", "write_partition");
-            HostPartition host_partition = HostPartition(Kokkos::view_alloc(Kokkos::WithoutInitializing, "host_partition"), graphs.back().n);
-            Kokkos::deep_copy(host_partition, partition.map);
+            HostPartition host_partition;
+            //
+            {
+                ScopedTimer _t("misc", "Solver", "download_partition");
+                host_partition = HostPartition(Kokkos::view_alloc(Kokkos::WithoutInitializing, "host_partition"), graphs.back().n);
+                Kokkos::deep_copy(host_partition, partition.map);
+            }
 
-            misc_ms += get_milli_seconds(p, get_time_point());
-
-            write_partition(host_partition, graphs.back().n, config.mapping_out);
-            _t_write.stop();
-
-            auto p1 = get_time_point();
             // calc stats
-            weight_t final_comm_cost = comm_cost(graphs.back(), partition, d_oracle);
-            weight_t max_block_w = max_weight(partition);
-            size_t n_empty_partitions = 0;
-            size_t n_overloaded_partitions = 0;
-            weight_t sum_too_much = 0;
-            PartitionHost partition_host = to_host_partition(partition);
-            for (partition_t id = 0; id < config.k; ++id) {
-                n_empty_partitions += partition_host.bweights(id) == 0;
-                n_overloaded_partitions += partition_host.bweights(id) > lmax;
-                sum_too_much += std::max((weight_t) 0, partition_host.bweights(id) - lmax);
+            weight_t max_block_w;
+            size_t n_empty_partitions;
+            size_t n_overloaded_partitions;
+            weight_t sum_too_much;
+            PartitionHost partition_host;
+            if (verbose_level >= 2) {
+                ScopedTimer _t("misc", "Solver", "calc_stats");
+                max_block_w = max_weight(partition);
+                n_empty_partitions = 0;
+                n_overloaded_partitions = 0;
+                sum_too_much = 0;
+                partition_host = to_host_partition(partition);
+                for (partition_t id = 0; id < config.k; ++id) {
+                    n_empty_partitions += partition_host.bweights(id) == 0;
+                    n_overloaded_partitions += partition_host.bweights(id) > lmax;
+                    sum_too_much += std::max((weight_t) 0, partition_host.bweights(id) - lmax);
+                }
             }
 
             // free all memory
-            free_distance_oracle<d_oracle_t>(d_oracle, mem_stack);
-            free_partition(partition, mem_stack);
+            {
+                ScopedTimer _t("misc", "Solver", "free_memory");
 
-            free_graph(graphs.back(), mem_stack);
-            graphs.pop_back();
+                free_distance_oracle<d_oracle_t>(d_oracle, mem_stack);
+                free_partition(partition, mem_stack);
 
-            assert_is_empty(mem_stack);
-            destroy(mem_stack);
+                free_graph(graphs.back(), mem_stack);
+                graphs.pop_back();
 
-            misc_ms += get_milli_seconds(p1, get_time_point());
+                assert_is_empty(mem_stack);
+                destroy(mem_stack);
+            }
+
+            misc_ms += get_milli_seconds(p, get_time_point());
 
             auto ep = get_time_point();
             f64 duration = get_seconds(sp, ep);
 
-            std::cout << "Total time        : " << duration << std::endl;
-            std::cout << "#Vertices         : " << n << std::endl;
-            std::cout << "#Edges            : " << m << std::endl;
-            std::cout << "k                 : " << k << std::endl;
-            std::cout << "hierarchy         : " << to_str(hierarchy) << std::endl;
-            std::cout << "distances         : " << to_str(distances) << std::endl;
-            std::cout << "Lmax              : " << lmax << std::endl;
-            std::cout << "Init. comm-cost   : " << initial_comm_cost << std::endl;
-            std::cout << "Init. max block w : " << initial_max_block_weight << std::endl;
-            std::cout << "Final comm-cost   : " << final_comm_cost << std::endl;
-            std::cout << "Final max block w : " << max_block_w << std::endl;
+            if (verbose_level >= 1) {
+                std::cout << "Total time        : " << duration + (io_ms / 1000.0) << std::endl;
+                std::cout << "#Vertices         : " << n << std::endl;
+                std::cout << "#Edges            : " << m << std::endl;
+                std::cout << "k                 : " << k << std::endl;
+                std::cout << "hierarchy         : " << to_str(hierarchy) << std::endl;
+                std::cout << "distances         : " << to_str(distances) << std::endl;
+                std::cout << "Lmax              : " << lmax << std::endl;
+            }
+            if (verbose_level >= 2) {
+                std::cout << "Init. comm-cost   : " << initial_comm_cost << std::endl;
+                std::cout << "Init. max block w : " << initial_max_block_weight << std::endl;
+                std::cout << "Final comm-cost   : " << curr_comm_cost << std::endl;
+                std::cout << "Final max block w : " << max_block_w << std::endl;
 
-            std::cout << "#empty partitions : " << n_empty_partitions << std::endl;
-            std::cout << "#oload partitions : " << n_overloaded_partitions << std::endl;
-            std::cout << "Sum oload weights : " << sum_too_much << std::endl;
-            std::cout << "IO            : " << io_ms << std::endl;
-            std::cout << "Misc          : " << misc_ms << std::endl;
-            std::cout << "Coarsening    : " << coarsening_ms << std::endl;
-            std::cout << "Contraction   : " << contraction_ms << std::endl;
-            std::cout << "Init. Part.   : " << initial_partitioning_ms << std::endl;
-            std::cout << "Uncontraction : " << uncontraction_ms << std::endl;
-            std::cout << "Refinement    : " << refinement_ms << std::endl;
-            std::cout << "ALL           : " << io_ms + misc_ms + coarsening_ms + contraction_ms + initial_partitioning_ms + uncontraction_ms + refinement_ms << std::endl;
+                std::cout << "#empty partitions : " << n_empty_partitions << std::endl;
+                std::cout << "#oload partitions : " << n_overloaded_partitions << std::endl;
+                std::cout << "Sum oload weights : " << sum_too_much << std::endl;
+            }
+            if (verbose_level >= 1) {
+                std::cout << "IO            : " << io_ms << std::endl;
+                std::cout << "Misc          : " << misc_ms << std::endl;
+                std::cout << "Coarsening    : " << coarsening_ms << std::endl;
+                std::cout << "Contraction   : " << contraction_ms << std::endl;
+                std::cout << "Init. Part.   : " << initial_partitioning_ms << std::endl;
+                std::cout << "Uncontraction : " << uncontraction_ms << std::endl;
+                std::cout << "Refinement    : " << refinement_ms << std::endl;
+                std::cout << "ALL           : " << io_ms + misc_ms + coarsening_ms + contraction_ms + initial_partitioning_ms + uncontraction_ms + refinement_ms << std::endl;
+                std::cout << "ALL (no IO)   : " << misc_ms + coarsening_ms + contraction_ms + initial_partitioning_ms + uncontraction_ms + refinement_ms << std::endl;
+            }
 
-            #if ENABLE_PROFILER
-            print_all_levels(level_infos);
-            #endif
+            if (verbose_level >= 2) {
+                #if ENABLE_PROFILER
+                print_all_levels(level_infos);
+                #endif
+            }
 
             return host_partition;
         }
 
     private:
-        void internal_solve() {
-            initialize();
+        void internal_solve(HostGraph &host_g) {
+            initialize(host_g);
 
-            const partition_t c = 32;
+            const partition_t c = 8;
             const partition_t max_n = c * k;
 
             u32 level = 0;
@@ -278,14 +297,8 @@ namespace GPU_HeiPa {
             }
         }
 
-        void initialize() {
+        void initialize(HostGraph &host_g) {
             auto p = get_time_point();
-
-            host_g = from_file(config.graph_in);
-
-            io_ms += get_milli_seconds(p, get_time_point());
-
-            auto p1 = get_time_point();
 
             // Main stack: Graph + coarsening overhead
             mem_stack = initialize_kokkos_memory_stack(
@@ -305,17 +318,17 @@ namespace GPU_HeiPa {
 
             // initialize distance oracle
             {
-                ScopedTimer t{"io", "distance_oracle", "initialize"};
+                ScopedTimer t{"initialize", "distance_oracle", "initialize"};
                 d_oracle = initialize_distance_oracle<d_oracle_t>(k, hierarchy, distances, mem_stack);
             }
 
             // initialize partition
             {
-                ScopedTimer t{"io", "partition", "initialize"};
+                ScopedTimer t{"initialize", "partition", "initialize"};
                 partition = initialize_partition(n, k, lmax, mem_stack);
             }
 
-            misc_ms += get_milli_seconds(p1, get_time_point());
+            misc_ms += get_milli_seconds(p, get_time_point());
 
             assert_state_pre_partition(graphs.back());
         }
@@ -354,8 +367,7 @@ namespace GPU_HeiPa {
         void initial_partitioning() {
             auto p = get_time_point();
 
-            // Use METIS for initial partitioning
-            metis_initial_partition(graphs.back(), (int) k, config.imbalance, config.seed, partition);
+            global_multisection(graphs.back(), config.hierarchy, k, config.imbalance, config.seed, partition);
 
             recalculate_weights(partition, graphs.back());
 

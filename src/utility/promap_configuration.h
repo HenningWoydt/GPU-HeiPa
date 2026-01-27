@@ -46,6 +46,7 @@ namespace GPU_HeiPa {
             {"--statistics", "", "Output filepath to the statistics file.", "GPU-HeiProMap_stats.JSON", "", false},
             {"--seed", "-s", "Seed for more randomness.", "0", "", false},
             {"--distance-oracle", "", "Which Distance Oracle to use {matrix, division, binary}.", "binary", "", false},
+            {"--verbose-level", "", "Whether to print.", "2", "", false},
         };
 
     public:
@@ -71,6 +72,8 @@ namespace GPU_HeiPa {
 
         // random initialization
         u64 seed = 0;
+
+        int verbose_level = 1;
 
         // distance oracle
         std::string distance_oracle_string;
@@ -126,6 +129,11 @@ namespace GPU_HeiPa {
                 seed = std::stoull(get("--seed"));
             } else {
                 seed = std::random_device{}();
+            }
+
+            verbose_level = 2;
+            if (is_set("--verbose-level")) {
+                verbose_level = std::stoi(get("--verbose-level"));
             }
 
             distance_oracle_string = get("--distance-oracle");
