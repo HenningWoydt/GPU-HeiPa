@@ -43,7 +43,6 @@ namespace GPU_HeiPa {
             {"--distance", "-d", "Distance in the form d1:d2:...:dl .", "", "", false},
             {"--imbalance", "-e", "Allowed imbalance (for example 0.03).", "0.03", "", false},
             {"--config", "-c", "Broad Config.", "", "", false},
-            {"--statistics", "", "Output filepath to the statistics file.", "GPU-HeiProMap_stats.JSON", "", false},
             {"--seed", "-s", "Seed for more randomness.", "0", "", false},
             {"--distance-oracle", "", "Which Distance Oracle to use {matrix, division, binary}.", "binary", "", false},
             {"--verbose-level", "", "Whether to print.", "2", "", false},
@@ -53,7 +52,6 @@ namespace GPU_HeiPa {
         // graph information
         std::string graph_in;
         std::string mapping_out;
-        std::string statistics_out;
 
         // partition information
         std::string hierarchy_string;
@@ -110,7 +108,6 @@ namespace GPU_HeiPa {
             // extract info
             graph_in = get("--graph");
             mapping_out = get("--mapping");
-            statistics_out = get("--statistics");
 
             hierarchy_string = get("--hierarchy");
             hierarchy = convert<partition_t>(split(hierarchy_string, ':'));
@@ -206,7 +203,6 @@ namespace GPU_HeiPa {
 
             s += tabs + to_JSON_MACRO(graph_in);
             s += tabs + to_JSON_MACRO(mapping_out);
-            s += tabs + to_JSON_MACRO(statistics_out);
             s += tabs + to_JSON_MACRO(k);
             s += tabs + to_JSON_MACRO(imbalance);
             s += tabs + to_JSON_MACRO(config);

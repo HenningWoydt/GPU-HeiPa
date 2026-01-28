@@ -133,7 +133,7 @@ namespace GPU_HeiPa {
         return;
         #endif
         HostGraph host_g = to_host_graph(device_g);
-        HostVertex host_edges_u = HostVertex("edges_u", host_g.m);
+        ManagedHostVertex host_edges_u = ManagedHostVertex("edges_u", host_g.m);
         Kokkos::deep_copy(host_edges_u, device_g.edges_u);
         Kokkos::fence();
 
@@ -151,7 +151,7 @@ namespace GPU_HeiPa {
         return;
         #endif
         HostGraph host_g = to_host_graph(device_g);
-        HostVertex host_edges_u = HostVertex("edges_u", host_g.m);
+        ManagedHostVertex host_edges_u = ManagedHostVertex("edges_u", host_g.m);
         Kokkos::deep_copy(host_edges_u, device_g.edges_u);
         PartitionHost host_p_manager = to_host_partition(partition);
 

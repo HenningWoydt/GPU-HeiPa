@@ -186,7 +186,7 @@ namespace GPU_HeiPa {
         weight_t lmax = 0;
 
         HostPartition map;
-        HostWeight bweights;
+        ManagedHostWeight bweights;
     };
 
     inline PartitionHost to_host_partition(const Partition &partition) {
@@ -197,7 +197,7 @@ namespace GPU_HeiPa {
         host_partition.lmax = partition.lmax;
 
         host_partition.map = HostPartition("partition", partition.n);
-        host_partition.bweights = HostWeight("b_weights", partition.k);
+        host_partition.bweights = ManagedHostWeight("b_weights", partition.k);
         Kokkos::deep_copy(host_partition.map, partition.map);
         Kokkos::deep_copy(host_partition.bweights, partition.bweights);
         Kokkos::fence();

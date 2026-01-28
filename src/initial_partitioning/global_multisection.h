@@ -81,11 +81,12 @@ namespace GPU_HeiPa {
 
         // allocate memory
         for (partition_t id = 0; id < k; ++id) {
-            subgraphs[id].weights = HostWeight(Kokkos::view_alloc(Kokkos::WithoutInitializing, "weights"), subgraphs[id].n);
-            subgraphs[id].neighborhood = HostVertex(Kokkos::view_alloc(Kokkos::WithoutInitializing, "neighborhood"), subgraphs[id].n + 1);
-            subgraphs[id].neighborhood(0) = 0;
-            subgraphs[id].edges_v = HostVertex(Kokkos::view_alloc(Kokkos::WithoutInitializing, "edges_v"), subgraphs[id].m);
-            subgraphs[id].edges_w = HostWeight(Kokkos::view_alloc(Kokkos::WithoutInitializing, "edges_w"), subgraphs[id].m);
+            allocate_memory(subgraphs[id], subgraphs[id].n, subgraphs[id].m);
+            // subgraphs[id].weights = HostWeight(Kokkos::view_alloc(Kokkos::WithoutInitializing, "weights"), subgraphs[id].n);
+            // subgraphs[id].neighborhood = HostVertex(Kokkos::view_alloc(Kokkos::WithoutInitializing, "neighborhood"), subgraphs[id].n + 1);
+            // subgraphs[id].neighborhood(0) = 0;
+            // subgraphs[id].edges_v = HostVertex(Kokkos::view_alloc(Kokkos::WithoutInitializing, "edges_v"), subgraphs[id].m);
+            // subgraphs[id].edges_w = HostWeight(Kokkos::view_alloc(Kokkos::WithoutInitializing, "edges_w"), subgraphs[id].m);
 
             n_to_os[id].resize(max_n);
             o_to_ns[id].resize(max_n);

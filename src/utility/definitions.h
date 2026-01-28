@@ -55,8 +55,10 @@ namespace GPU_HeiPa {
     using HostMemory = Kokkos::CudaHostPinnedSpace;
     // using HostMemory = Kokkos::HostSpace;
 
-    using HostVertex = Kokkos::View<vertex_t *, HostMemory>;
-    using HostWeight = Kokkos::View<weight_t *, HostMemory>;
+    using HostVertex = Kokkos::View<vertex_t *, HostMemory, Kokkos::MemoryTraits<Kokkos::Unmanaged>>;
+    using ManagedHostVertex = Kokkos::View<vertex_t *, HostMemory>;
+    using HostWeight = Kokkos::View<weight_t *, HostMemory, Kokkos::MemoryTraits<Kokkos::Unmanaged>>;
+    using ManagedHostWeight = Kokkos::View<weight_t *, HostMemory>;
     using HostPartition = Kokkos::View<partition_t *, HostMemory>;
     using HostU8 = Kokkos::View<u8 *, HostMemory>;
     using HostU16 = Kokkos::View<u16 *, HostMemory>;

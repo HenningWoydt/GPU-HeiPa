@@ -73,7 +73,6 @@ namespace GPU_HeiPa {
         weight_t initial_comm_cost = 0;
         weight_t initial_max_block_weight = 0;
 
-        f64 io_ms = 0.0;
         f64 misc_ms = 0.0;
         f64 coarsening_ms = 0.0;
         f64 contraction_ms = 0.0;
@@ -145,8 +144,7 @@ namespace GPU_HeiPa {
         explicit ProMapSolver(ProMapConfiguration t_config) : config(std::move(t_config)) {
         }
 
-        HostPartition solve(HostGraph &host_g, int verbose_level = 1, f64 add_io_ms = 0.0) {
-            io_ms += add_io_ms;
+        HostPartition solve(HostGraph &host_g, int verbose_level = 1) {
             auto sp = get_time_point();
 
             internal_solve(host_g);
@@ -197,18 +195,21 @@ namespace GPU_HeiPa {
             misc_ms += get_milli_seconds(p, get_time_point());
 
             auto ep = get_time_point();
-            f64 duration = get_seconds(sp, ep);
+            f64 duration = get_milli_seconds(sp, ep);
 
             if (verbose_level >= 1) {
-                std::cout << "Total time        : " << duration + (io_ms / 1000.0) << std::endl;
+                std::cout << "------- Info -------" << std::endl;
+                std::cout << "Total solve time  : " << duration << std::endl;
                 std::cout << "#Vertices         : " << n << std::endl;
                 std::cout << "#Edges            : " << m << std::endl;
                 std::cout << "k                 : " << k << std::endl;
                 std::cout << "hierarchy         : " << to_str(hierarchy) << std::endl;
                 std::cout << "distances         : " << to_str(distances) << std::endl;
+                std::cout << "imbalance         : " << config.imbalance << std::endl;
                 std::cout << "Lmax              : " << lmax << std::endl;
             }
             if (verbose_level >= 2) {
+                std::cout << "------- Stat -------" << std::endl;
                 std::cout << "Init. comm-cost   : " << initial_comm_cost << std::endl;
                 std::cout << "Init. max block w : " << initial_max_block_weight << std::endl;
                 std::cout << "Final comm-cost   : " << curr_comm_cost << std::endl;
@@ -219,15 +220,14 @@ namespace GPU_HeiPa {
                 std::cout << "Sum oload weights : " << sum_too_much << std::endl;
             }
             if (verbose_level >= 1) {
-                std::cout << "IO            : " << io_ms << std::endl;
-                std::cout << "Misc          : " << misc_ms << std::endl;
-                std::cout << "Coarsening    : " << coarsening_ms << std::endl;
-                std::cout << "Contraction   : " << contraction_ms << std::endl;
-                std::cout << "Init. Part.   : " << initial_partitioning_ms << std::endl;
-                std::cout << "Uncontraction : " << uncontraction_ms << std::endl;
-                std::cout << "Refinement    : " << refinement_ms << std::endl;
-                std::cout << "ALL           : " << io_ms + misc_ms + coarsening_ms + contraction_ms + initial_partitioning_ms + uncontraction_ms + refinement_ms << std::endl;
-                std::cout << "ALL (no IO)   : " << misc_ms + coarsening_ms + contraction_ms + initial_partitioning_ms + uncontraction_ms + refinement_ms << std::endl;
+                std::cout << "------- Time -------" << std::endl;
+                std::cout << "Coarsening        : " << coarsening_ms << std::endl;
+                std::cout << "Contraction       : " << contraction_ms << std::endl;
+                std::cout << "Init. Part.       : " << initial_partitioning_ms << std::endl;
+                std::cout << "Uncontraction     : " << uncontraction_ms << std::endl;
+                std::cout << "Refinement        : " << refinement_ms << std::endl;
+                std::cout << "Misc              : " << misc_ms << std::endl;
+                std::cout << "ALL               : " << misc_ms + coarsening_ms + contraction_ms + initial_partitioning_ms + uncontraction_ms + refinement_ms << std::endl;
             }
 
             if (verbose_level >= 2) {
@@ -318,13 +318,13 @@ namespace GPU_HeiPa {
 
             // initialize distance oracle
             {
-                ScopedTimer t{"initialize", "distance_oracle", "initialize"};
+                ScopedTimer t{"misc", "distance_oracle", "initialize"};
                 d_oracle = initialize_distance_oracle<d_oracle_t>(k, hierarchy, distances, mem_stack);
             }
 
             // initialize partition
             {
-                ScopedTimer t{"initialize", "partition", "initialize"};
+                ScopedTimer t{"misc", "partition", "initialize"};
                 partition = initialize_partition(n, k, lmax, mem_stack);
             }
 

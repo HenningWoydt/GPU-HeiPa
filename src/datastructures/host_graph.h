@@ -40,11 +40,66 @@ namespace GPU_HeiPa {
         vertex_t m = 0;
         weight_t g_weight = 0;
 
+        HostU8 memory;
+        u64 n_bytes = 0;
+
         HostWeight weights;
         HostVertex neighborhood;
         HostVertex edges_v;
         HostWeight edges_w;
     };
+
+    static inline size_t round_up(size_t x, size_t a) {
+        return (x + (a - 1)) & ~(a - 1);
+    }
+
+    inline void allocate_memory(HostGraph &g, vertex_t n, vertex_t m) {
+        constexpr size_t ALIGN = 64;
+
+        g.n = n;
+        g.m = m;
+        g.g_weight = 0;
+
+        // bytes needed per array
+        const size_t bytes_weights = sizeof(weight_t) * (size_t) n;
+        const size_t bytes_neighborhood = sizeof(vertex_t) * (size_t) (n + 1);
+        const size_t bytes_edges_v = sizeof(vertex_t) * (size_t) m;
+        const size_t bytes_edges_w = sizeof(weight_t) * (size_t) m;
+
+        // layout with 64B alignment for each segment
+        size_t off = 0;
+
+        off = round_up(off, ALIGN);
+        const size_t off_weights = off;
+        off += bytes_weights;
+
+        off = round_up(off, ALIGN);
+        const size_t off_neighborhood = off;
+        off += bytes_neighborhood;
+
+        off = round_up(off, ALIGN);
+        const size_t off_edges_v = off;
+        off += bytes_edges_v;
+
+        off = round_up(off, ALIGN);
+        const size_t off_edges_w = off;
+        off += bytes_edges_w;
+
+        const size_t total_bytes = round_up(off, ALIGN);
+        g.n_bytes = total_bytes;
+
+        // allocate one owning chunk
+        g.memory = HostU8(Kokkos::view_alloc(Kokkos::WithoutInitializing, "HostGraph::memory"), g.n_bytes);
+        uint8_t *base = g.memory.data();
+
+        // create unmanaged views into the chunk
+        g.weights = HostWeight((weight_t *) (base + off_weights), n);
+        g.neighborhood = HostVertex((vertex_t *) (base + off_neighborhood), n + 1);
+        g.edges_v = HostVertex((vertex_t *) (base + off_edges_v), m);
+        g.edges_w = HostWeight((weight_t *) (base + off_edges_w), m);
+
+        g.neighborhood(0) = 0;
+    }
 
     inline HostGraph from_file(const std::string &file_path) {
         ScopedTimer _t_allocate("io", "CSRGraph", "allocate");
@@ -112,13 +167,16 @@ namespace GPU_HeiPa {
             while (*p == ' ') { ++p; }
         }
         g.g_weight = 0;
-        g.weights = HostWeight(Kokkos::view_alloc(Kokkos::WithoutInitializing, "weights"), g.n);
-        g.neighborhood = HostVertex(Kokkos::view_alloc(Kokkos::WithoutInitializing, "neighborhood"), g.n + 1);
-        g.neighborhood(0) = 0;
-        g.edges_v = HostVertex(Kokkos::view_alloc(Kokkos::WithoutInitializing, "edges_v"), g.m);
-        g.edges_w = HostWeight(Kokkos::view_alloc(Kokkos::WithoutInitializing, "edges_w"), g.m);
+        allocate_memory(g, g.n, g.m);
+
         has_v_weights = fmt[1] == '1';
         has_e_weights = fmt[2] == '1';
+
+        // then keep your existing pointer prefetch:
+        vertex_t *edges_v_ptr = g.edges_v.data();
+        weight_t *edges_w_ptr = g.edges_w.data();
+        weight_t *weights_ptr = g.weights.data();
+        vertex_t *neighborhood_ptr = g.neighborhood.data();
 
         _t_read_header.stop();
         ScopedTimer _t_read_edges("io", "CSRGraph", "read_edges");
@@ -126,12 +184,6 @@ namespace GPU_HeiPa {
         ++p;
         vertex_t u = 0;
         size_t curr_m = 0;
-
-        // Pre-fetch data pointers for better cache performance
-        vertex_t *edges_v_ptr = g.edges_v.data();
-        weight_t *edges_w_ptr = g.edges_w.data();
-        weight_t *weights_ptr = g.weights.data();
-        vertex_t *neighborhood_ptr = g.neighborhood.data();
 
         while (p < end) {
             // skip comment lines

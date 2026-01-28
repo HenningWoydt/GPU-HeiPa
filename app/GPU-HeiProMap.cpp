@@ -37,12 +37,12 @@ int main(int argc, char *argv[]) {
     auto sp = get_time_point();
     std::ios::sync_with_stdio(false);
     std::cout.tie(nullptr);
-    int verbose_level = 1;
+    int verbose_level = 1; {
+        ScopedTimer _t("io", "main", "Kokkos::initialize");
+        Kokkos::initialize();
+    }
 
-    ScopedTimer _t_guard("io", "main", "Kokkos::initialize");
-    Kokkos::initialize();
-    _t_guard.stop();
-
+    ProMapConfiguration config;
     if (argc == 1) {
         // ProMapConfiguration config;
         // config.print_help_message();
@@ -58,8 +58,6 @@ int main(int argc, char *argv[]) {
                 // {"--mapping", "../data/out/partition/rgg23.txt"},
                 // {"--statistics", "../data/out/statistics/rgg23.JSON"},
                 {"--graph", "../../ProMapRepo/data/mapping/rgg23.graph"}, // comm cost 9543754, 1098 ms
-                {"--mapping", "../data/out/partition/rgg23.txt"},
-                {"--statistics", "../data/out/statistics/rgg23.JSON"},
                 // {"--graph", "../../graph_collection/mapping/GAP-road.graph"},
                 // {"--mapping", "../data/out/partition/GAP-road.txt"},
                 // {"--statistics", "../data/out/statistics/GAP-road.JSON"},
@@ -103,45 +101,48 @@ int main(int argc, char *argv[]) {
                 std::strcpy(argv_temp[i], args[i].c_str());
             }
 
-            ProMapConfiguration config(argc_temp, argv_temp);
-            verbose_level = config.verbose_level;
-            _t_parse.stop();
-
-            HostGraph host_g = from_file(config.graph_in);
-            HostPartition host_partition;
-
-            f64 add_io_ms = get_milli_seconds(sp, get_time_point());
-            if (config.distance_oracle_string == "matrix") {
-                host_partition = ProMapSolver<DistanceOracleMatrix>(config).solve(host_g, verbose_level, add_io_ms);
-            } else if (config.distance_oracle_string == "binary") {
-                host_partition = ProMapSolver<DistanceOracleBinary>(config).solve(host_g, verbose_level, add_io_ms);
-            } else {
-                std::cerr << "Error: Invalid distance oracle string: " << config.distance_oracle_string << std::endl;
-            }
-
-            // write_partition(host_partition, host_g.n, config.mapping_out);
+            config = ProMapConfiguration(argc_temp, argv_temp);
 
             for (int i = 0; i < argc_temp; ++i) { delete[] argv_temp[i]; }
             delete[] argv_temp;
         }
     } else {
-        ProMapConfiguration config(argc, argv);
-        verbose_level = config.verbose_level;
-
+        ScopedTimer _t_parse("io", "main", "parse_args");
+        config = ProMapConfiguration(argc, argv);
+    }
+    verbose_level = config.verbose_level;
+    //
+    {
         HostGraph host_g = from_file(config.graph_in);
         HostPartition host_partition;
 
-        f64 add_io_ms = get_milli_seconds(sp, get_time_point());
+        f64 io_ms = get_milli_seconds(sp, get_time_point());
+
+        if (verbose_level >= 1) {
+            std::cout << "Read graph in     : " << io_ms << std::endl;
+        }
+
         if (config.distance_oracle_string == "matrix") {
-            host_partition = ProMapSolver<DistanceOracleMatrix>(config).solve(host_g, verbose_level, add_io_ms);
+            host_partition = ProMapSolver<DistanceOracleMatrix>(config).solve(host_g, verbose_level);
         } else if (config.distance_oracle_string == "binary") {
-            host_partition = ProMapSolver<DistanceOracleBinary>(config).solve(host_g, verbose_level, add_io_ms);
+            host_partition = ProMapSolver<DistanceOracleBinary>(config).solve(host_g, verbose_level);
         } else {
             std::cerr << "Error: Invalid distance oracle string: " << config.distance_oracle_string << std::endl;
         }
 
-        write_partition(host_partition, host_g.n, config.mapping_out);
+        if (config.is_set("--mapping")) {
+            ScopedTimer _t("io", "main", "write_partition");
+            auto p = get_time_point();
+
+            write_partition(host_partition, host_g.n, config.mapping_out);
+
+            if (verbose_level >= 1) {
+                io_ms = get_milli_seconds(p, get_time_point());
+                std::cout << "Write partition in: " << io_ms << std::endl;
+            }
+        }
     }
+
     Kokkos::fence();
     //
     {

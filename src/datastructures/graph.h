@@ -41,6 +41,10 @@ namespace GPU_HeiPa {
         vertex_t m = 0;
         weight_t g_weight = 0;
 
+        UnmanagedDeviceU8 memory;
+        u64 n_bytes = 0;
+        u64 n_pops = 5;
+
         UnmanagedDeviceWeight weights;
         UnmanagedDeviceVertex neighborhood;
         UnmanagedDeviceVertex edges_u;
@@ -50,33 +54,75 @@ namespace GPU_HeiPa {
 
     inline Graph from_HostGraph(const HostGraph &host_g,
                                 KokkosMemoryStack &mem_stack) {
+        constexpr size_t ALIGN = 64;
+
         Graph g;
         // initialize the graph
         {
-            ScopedTimer _t{"initialize", "from_HostGraph", "initialize"};
+            ScopedTimer _t{"misc", "from_HostGraph", "initialize"};
 
             g.n = host_g.n;
             g.m = host_g.m;
             g.g_weight = host_g.g_weight;
 
-            g.weights = UnmanagedDeviceWeight((weight_t *) get_chunk_front(mem_stack, sizeof(weight_t) * host_g.n), host_g.n);
-            g.neighborhood = UnmanagedDeviceVertex((vertex_t *) get_chunk_front(mem_stack, sizeof(vertex_t) * (host_g.n + 1)), host_g.n + 1);
-            g.edges_u = UnmanagedDeviceVertex((vertex_t *) get_chunk_front(mem_stack, sizeof(vertex_t) * host_g.m), host_g.m);
-            g.edges_v = UnmanagedDeviceVertex((vertex_t *) get_chunk_front(mem_stack, sizeof(vertex_t) * host_g.m), host_g.m);
-            g.edges_w = UnmanagedDeviceWeight((weight_t *) get_chunk_front(mem_stack, sizeof(weight_t) * host_g.m), host_g.m);
+            // bytes needed per array
+            const size_t bytes_weights = sizeof(weight_t) * (size_t) g.n;
+            const size_t bytes_neighborhood = sizeof(vertex_t) * (size_t) (g.n + 1);
+            const size_t bytes_edges_v = sizeof(vertex_t) * (size_t) g.m;
+            const size_t bytes_edges_w = sizeof(weight_t) * (size_t) g.m;
+            const size_t bytes_edges_u = sizeof(vertex_t) * (size_t) g.m;
+
+            // layout with 64B alignment for each segment
+            size_t off = 0;
+
+            off = round_up(off, ALIGN);
+            const size_t off_weights = off;
+            off += bytes_weights;
+
+            off = round_up(off, ALIGN);
+            const size_t off_neighborhood = off;
+            off += bytes_neighborhood;
+
+            off = round_up(off, ALIGN);
+            const size_t off_edges_v = off;
+            off += bytes_edges_v;
+
+            off = round_up(off, ALIGN);
+            const size_t off_edges_w = off;
+            off += bytes_edges_w;
+
+            off = round_up(off, ALIGN);
+            const size_t off_edges_u = off;
+            off += bytes_edges_u;
+
+            const size_t total_bytes = round_up(off, ALIGN);
+            g.n_bytes = total_bytes;
+
+            // allocate one owning chunk
+            g.memory = UnmanagedDeviceU8((u8 *) get_chunk_front(mem_stack, sizeof(u8) * g.n_bytes), g.n_bytes);
+            uint8_t *base = g.memory.data();
+            g.n_pops = 1;
+
+            // create unmanaged views into the chunk
+            g.weights = UnmanagedDeviceWeight((weight_t *)(base + off_weights), g.n);
+            g.neighborhood = UnmanagedDeviceVertex((vertex_t *)(base + off_neighborhood), g.n + 1);
+            g.edges_v = UnmanagedDeviceVertex((vertex_t *)(base + off_edges_v), g.m);
+            g.edges_w = UnmanagedDeviceWeight((weight_t *)(base + off_edges_w), g.m);
+            g.edges_u = UnmanagedDeviceVertex((vertex_t *)(base + off_edges_u), g.m);
         }
         // copy the structure to device
         {
-            ScopedTimer _t{"initialize", "from_HostGraph", "copy"};
-            Kokkos::deep_copy(g.weights, host_g.weights);
-            Kokkos::deep_copy(g.neighborhood, host_g.neighborhood);
-            Kokkos::deep_copy(g.edges_v, host_g.edges_v);
-            Kokkos::deep_copy(g.edges_w, host_g.edges_w);
+            ScopedTimer _t{"misc", "from_HostGraph", "copy"};
+            auto dev_prefix = Kokkos::subview(
+                g.memory, std::make_pair((size_t) 0, (size_t) host_g.n_bytes)
+            );
+            // host_g.memory is exactly host_g.n_bytes
+            Kokkos::deep_copy(dev_prefix, host_g.memory);
             KOKKOS_PROFILE_FENCE();
         }
         // create the third array
         {
-            ScopedTimer _t{"initialize", "from_HostGraph", "fill_edges_u"};
+            ScopedTimer _t{"misc", "from_HostGraph", "fill_edges_u"};
             Kokkos::parallel_for("fill_edges_u", g.n, KOKKOS_LAMBDA(const vertex_t u) {
                 u32 begin = g.neighborhood(u);
                 u32 end = g.neighborhood(u + 1);
@@ -343,10 +389,12 @@ namespace GPU_HeiPa {
         host_g.m = device_g.m;
         host_g.g_weight = device_g.g_weight;
 
-        host_g.weights = HostWeight(Kokkos::view_alloc(Kokkos::WithoutInitializing, "weights_host"), device_g.n);
-        host_g.neighborhood = HostVertex(Kokkos::view_alloc(Kokkos::WithoutInitializing, "neighborhood_host"), device_g.n + 1);
-        host_g.edges_v = HostVertex(Kokkos::view_alloc(Kokkos::WithoutInitializing, "edges_v_host"), device_g.m);
-        host_g.edges_w = HostWeight(Kokkos::view_alloc(Kokkos::WithoutInitializing, "edges_w_host"), device_g.m);
+        allocate_memory(host_g, host_g.n, host_g.m);
+
+        // host_g.weights = HostWeight(Kokkos::view_alloc(Kokkos::WithoutInitializing, "weights_host"), device_g.n);
+        // host_g.neighborhood = HostVertex(Kokkos::view_alloc(Kokkos::WithoutInitializing, "neighborhood_host"), device_g.n + 1);
+        // host_g.edges_v = HostVertex(Kokkos::view_alloc(Kokkos::WithoutInitializing, "edges_v_host"), device_g.m);
+        // host_g.edges_w = HostWeight(Kokkos::view_alloc(Kokkos::WithoutInitializing, "edges_w_host"), device_g.m);
 
         Kokkos::deep_copy(host_g.weights, device_g.weights);
         Kokkos::deep_copy(host_g.neighborhood, device_g.neighborhood);
@@ -359,11 +407,9 @@ namespace GPU_HeiPa {
 
     inline void free_graph(Graph &g,
                            KokkosMemoryStack &mem_stack) {
-        pop_front(mem_stack);
-        pop_front(mem_stack);
-        pop_front(mem_stack);
-        pop_front(mem_stack);
-        pop_front(mem_stack);
+        for (u64 i = 0; i < g.n_pops; ++i) {
+            pop_front(mem_stack);
+        }
     }
 
     inline void print_graph_stats(const HostGraph &g, std::ostream &os = std::cout) {
