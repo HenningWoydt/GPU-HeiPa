@@ -420,6 +420,10 @@ namespace GPU_HeiPa {
         if (mm.data && mm.size) ::munmap(mm.data, mm.size);
         if (mm.fd >= 0) ::close(mm.fd);
     }
+
+    static inline size_t round_up_64(size_t x, size_t a = 64) {
+        return (x + (a - 1)) & ~(a - 1);
+    }
 }
 
 #endif //GPU_HEIPA_UTIL_H

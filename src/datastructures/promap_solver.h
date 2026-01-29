@@ -159,10 +159,10 @@ namespace GPU_HeiPa {
             }
 
             // calc stats
-            weight_t max_block_w;
-            size_t n_empty_partitions;
-            size_t n_overloaded_partitions;
-            weight_t sum_too_much;
+            weight_t max_block_w = 0;
+            size_t n_empty_partitions = 0;
+            size_t n_overloaded_partitions = 0;
+            weight_t sum_too_much = 0;
             PartitionHost partition_host;
             if (verbose_level >= 2) {
                 ScopedTimer _t("misc", "Solver", "calc_stats");

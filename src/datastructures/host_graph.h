@@ -43,60 +43,42 @@ namespace GPU_HeiPa {
         HostU8 memory;
         u64 n_bytes = 0;
 
-        HostWeight weights;
-        HostVertex neighborhood;
-        HostVertex edges_v;
-        HostWeight edges_w;
+        UnmanagedHostWeight weights;
+        UnmanagedHostVertex neighborhood;
+        UnmanagedHostVertex edges_v;
+        UnmanagedHostWeight edges_w;
     };
 
-    static inline size_t round_up(size_t x, size_t a) {
-        return (x + (a - 1)) & ~(a - 1);
-    }
-
     inline void allocate_memory(HostGraph &g, vertex_t n, vertex_t m) {
-        constexpr size_t ALIGN = 64;
-
         g.n = n;
         g.m = m;
         g.g_weight = 0;
 
         // bytes needed per array
-        const size_t bytes_weights = sizeof(weight_t) * (size_t) n;
-        const size_t bytes_neighborhood = sizeof(vertex_t) * (size_t) (n + 1);
-        const size_t bytes_edges_v = sizeof(vertex_t) * (size_t) m;
-        const size_t bytes_edges_w = sizeof(weight_t) * (size_t) m;
+        size_t off_weights = 0;
+        size_t bytes_weights = round_up_64(sizeof(weight_t) * (size_t) n);
 
-        // layout with 64B alignment for each segment
-        size_t off = 0;
+        size_t off_neighborhood = off_weights + bytes_weights;
+        size_t bytes_neighborhood = round_up_64(sizeof(vertex_t) * (size_t) (n + 1));
 
-        off = round_up(off, ALIGN);
-        const size_t off_weights = off;
-        off += bytes_weights;
+        size_t off_edges_v = off_neighborhood + bytes_neighborhood;
+        size_t bytes_edges_v = round_up_64(sizeof(vertex_t) * (size_t) m);
 
-        off = round_up(off, ALIGN);
-        const size_t off_neighborhood = off;
-        off += bytes_neighborhood;
+        size_t off_edges_w = off_edges_v + bytes_edges_v;
+        size_t bytes_edges_w = round_up_64(sizeof(weight_t) * (size_t) m);
 
-        off = round_up(off, ALIGN);
-        const size_t off_edges_v = off;
-        off += bytes_edges_v;
-
-        off = round_up(off, ALIGN);
-        const size_t off_edges_w = off;
-        off += bytes_edges_w;
-
-        const size_t total_bytes = round_up(off, ALIGN);
-        g.n_bytes = total_bytes;
+        // total n bytes needed
+        g.n_bytes = off_edges_w + bytes_edges_w;
 
         // allocate one owning chunk
         g.memory = HostU8(Kokkos::view_alloc(Kokkos::WithoutInitializing, "HostGraph::memory"), g.n_bytes);
         uint8_t *base = g.memory.data();
 
         // create unmanaged views into the chunk
-        g.weights = HostWeight((weight_t *) (base + off_weights), n);
-        g.neighborhood = HostVertex((vertex_t *) (base + off_neighborhood), n + 1);
-        g.edges_v = HostVertex((vertex_t *) (base + off_edges_v), m);
-        g.edges_w = HostWeight((weight_t *) (base + off_edges_w), m);
+        g.weights = UnmanagedHostWeight((weight_t *) (base + off_weights), n);
+        g.neighborhood = UnmanagedHostVertex((vertex_t *) (base + off_neighborhood), n + 1);
+        g.edges_v = UnmanagedHostVertex((vertex_t *) (base + off_edges_v), m);
+        g.edges_w = UnmanagedHostWeight((weight_t *) (base + off_edges_w), m);
 
         g.neighborhood(0) = 0;
     }

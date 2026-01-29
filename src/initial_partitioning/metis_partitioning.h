@@ -70,27 +70,14 @@ namespace GPU_HeiPa {
             ubvec[i] = std::max((real_t) 1.0, (real_t) (1.0 + imbalance));
         }
 
-        std::vector<std::pair<vertex_t, weight_t> > edges;
-        edges.reserve(m);
         for (vertex_t old_u = 0; old_u < g.n; ++old_u) {
             vwgt[old_u] = (idx_t) g.weights(old_u);
             xadj[old_u + 1] = xadj[old_u];
 
             // Collect edges for this vertex
-            edges.clear();
             for (u32 i = g.neighborhood(old_u); i < g.neighborhood(old_u + 1); ++i) {
-                vertex_t v = g.edges_v(i);
-                weight_t w = g.edges_w(i);
-                edges.emplace_back(v, w);
-            }
-
-            // Sort edges by vertex ID for deterministic ordering
-            std::sort(edges.begin(), edges.end());
-
-            // Add sorted edges to arrays
-            for (const auto &edge: edges) {
-                adjncy[xadj[old_u + 1]] = (idx_t) edge.first;
-                adjwgt[xadj[old_u + 1]] = (idx_t) edge.second;
+                adjncy[xadj[old_u + 1]] = (idx_t) g.edges_v[i];
+                adjwgt[xadj[old_u + 1]] = (idx_t) g.edges_w[i];
                 xadj[old_u + 1] += 1;
             }
         }

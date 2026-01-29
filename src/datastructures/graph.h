@@ -54,8 +54,6 @@ namespace GPU_HeiPa {
 
     inline Graph from_HostGraph(const HostGraph &host_g,
                                 KokkosMemoryStack &mem_stack) {
-        constexpr size_t ALIGN = 64;
-
         Graph g;
         // initialize the graph
         {
@@ -66,37 +64,23 @@ namespace GPU_HeiPa {
             g.g_weight = host_g.g_weight;
 
             // bytes needed per array
-            const size_t bytes_weights = sizeof(weight_t) * (size_t) g.n;
-            const size_t bytes_neighborhood = sizeof(vertex_t) * (size_t) (g.n + 1);
-            const size_t bytes_edges_v = sizeof(vertex_t) * (size_t) g.m;
-            const size_t bytes_edges_w = sizeof(weight_t) * (size_t) g.m;
-            const size_t bytes_edges_u = sizeof(vertex_t) * (size_t) g.m;
+            size_t off_weights = 0;
+            size_t bytes_weights = round_up_64(sizeof(weight_t) * (size_t) g.n);
 
-            // layout with 64B alignment for each segment
-            size_t off = 0;
+            size_t off_neighborhood = off_weights + bytes_weights;
+            size_t bytes_neighborhood = round_up_64(sizeof(vertex_t) * (size_t) (g.n + 1));
 
-            off = round_up(off, ALIGN);
-            const size_t off_weights = off;
-            off += bytes_weights;
+            size_t off_edges_v = off_neighborhood + bytes_neighborhood;
+            size_t bytes_edges_v = round_up_64(sizeof(vertex_t) * (size_t) g.m);
 
-            off = round_up(off, ALIGN);
-            const size_t off_neighborhood = off;
-            off += bytes_neighborhood;
+            size_t off_edges_w = off_edges_v + bytes_edges_v;
+            size_t bytes_edges_w = round_up_64(sizeof(weight_t) * (size_t) g.m);
 
-            off = round_up(off, ALIGN);
-            const size_t off_edges_v = off;
-            off += bytes_edges_v;
+            size_t off_edges_u = off_edges_w + bytes_edges_w;
+            size_t bytes_edges_u = round_up_64(sizeof(vertex_t) * (size_t) g.m);
 
-            off = round_up(off, ALIGN);
-            const size_t off_edges_w = off;
-            off += bytes_edges_w;
-
-            off = round_up(off, ALIGN);
-            const size_t off_edges_u = off;
-            off += bytes_edges_u;
-
-            const size_t total_bytes = round_up(off, ALIGN);
-            g.n_bytes = total_bytes;
+            // total n bytes
+            g.n_bytes = off_edges_u + bytes_edges_u;
 
             // allocate one owning chunk
             g.memory = UnmanagedDeviceU8((u8 *) get_chunk_front(mem_stack, sizeof(u8) * g.n_bytes), g.n_bytes);
@@ -104,20 +88,17 @@ namespace GPU_HeiPa {
             g.n_pops = 1;
 
             // create unmanaged views into the chunk
-            g.weights = UnmanagedDeviceWeight((weight_t *)(base + off_weights), g.n);
-            g.neighborhood = UnmanagedDeviceVertex((vertex_t *)(base + off_neighborhood), g.n + 1);
-            g.edges_v = UnmanagedDeviceVertex((vertex_t *)(base + off_edges_v), g.m);
-            g.edges_w = UnmanagedDeviceWeight((weight_t *)(base + off_edges_w), g.m);
-            g.edges_u = UnmanagedDeviceVertex((vertex_t *)(base + off_edges_u), g.m);
+            g.weights = UnmanagedDeviceWeight((weight_t *) (base + off_weights), g.n);
+            g.neighborhood = UnmanagedDeviceVertex((vertex_t *) (base + off_neighborhood), g.n + 1);
+            g.edges_v = UnmanagedDeviceVertex((vertex_t *) (base + off_edges_v), g.m);
+            g.edges_w = UnmanagedDeviceWeight((weight_t *) (base + off_edges_w), g.m);
+            g.edges_u = UnmanagedDeviceVertex((vertex_t *) (base + off_edges_u), g.m);
         }
+        std::cout << "copying " << host_g.n_bytes << std::endl;
         // copy the structure to device
         {
             ScopedTimer _t{"misc", "from_HostGraph", "copy"};
-            auto dev_prefix = Kokkos::subview(
-                g.memory, std::make_pair((size_t) 0, (size_t) host_g.n_bytes)
-            );
-            // host_g.memory is exactly host_g.n_bytes
-            Kokkos::deep_copy(dev_prefix, host_g.memory);
+            Kokkos::deep_copy(Kokkos::subview(g.memory, std::make_pair((size_t) 0, (size_t) host_g.n_bytes)), host_g.memory);
             KOKKOS_PROFILE_FENCE();
         }
         // create the third array

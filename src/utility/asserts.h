@@ -88,7 +88,7 @@ namespace GPU_HeiPa {
     }
 
     inline void assert_edges_u(const HostGraph &host_g,
-                               const HostVertex &host_edges_u) {
+                               const UnmanagedHostVertex &host_edges_u) {
         u32 i = 0;
         for (vertex_t u = 0; u < host_g.n; ++u) {
             u32 begin = host_g.neighborhood[u];
@@ -133,7 +133,7 @@ namespace GPU_HeiPa {
         return;
         #endif
         HostGraph host_g = to_host_graph(device_g);
-        ManagedHostVertex host_edges_u = ManagedHostVertex("edges_u", host_g.m);
+        HostVertex host_edges_u = HostVertex("edges_u", host_g.m);
         Kokkos::deep_copy(host_edges_u, device_g.edges_u);
         Kokkos::fence();
 
@@ -151,7 +151,7 @@ namespace GPU_HeiPa {
         return;
         #endif
         HostGraph host_g = to_host_graph(device_g);
-        ManagedHostVertex host_edges_u = ManagedHostVertex("edges_u", host_g.m);
+        HostVertex host_edges_u = HostVertex("edges_u", host_g.m);
         Kokkos::deep_copy(host_edges_u, device_g.edges_u);
         PartitionHost host_p_manager = to_host_partition(partition);
 
