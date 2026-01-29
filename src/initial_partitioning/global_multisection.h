@@ -35,6 +35,7 @@
 #include "../datastructures/partition.h"
 #include "metis_partitioning.h"
 #include "kaffpa_partitioning.h"
+#include "recursive_bisection_kway_partitioner.h"
 
 namespace GPU_HeiPa {
     inline f64 determine_adaptive_imbalance(const f64 global_imbalance,
@@ -81,12 +82,7 @@ namespace GPU_HeiPa {
 
         // allocate memory
         for (partition_t id = 0; id < k; ++id) {
-            allocate_memory(subgraphs[id], subgraphs[id].n, subgraphs[id].m);
-            // subgraphs[id].weights = HostWeight(Kokkos::view_alloc(Kokkos::WithoutInitializing, "weights"), subgraphs[id].n);
-            // subgraphs[id].neighborhood = HostVertex(Kokkos::view_alloc(Kokkos::WithoutInitializing, "neighborhood"), subgraphs[id].n + 1);
-            // subgraphs[id].neighborhood(0) = 0;
-            // subgraphs[id].edges_v = HostVertex(Kokkos::view_alloc(Kokkos::WithoutInitializing, "edges_v"), subgraphs[id].m);
-            // subgraphs[id].edges_w = HostWeight(Kokkos::view_alloc(Kokkos::WithoutInitializing, "edges_w"), subgraphs[id].m);
+            allocate_memory(subgraphs[id], subgraphs[id].n, subgraphs[id].m, subgraphs[id].g_weight);
 
             n_to_os[id].resize(max_n);
             o_to_ns[id].resize(max_n);
@@ -153,13 +149,22 @@ namespace GPU_HeiPa {
         const partition_t k = hierarchy[curr_l];
         const f64 imb = determine_adaptive_imbalance(global_imbalance, global_g_weight, global_k, g.g_weight, k_rem[l - 1 - identifier.size()], l - identifier.size());
 
+        #if ASSERT_ENABLED
+        for (vertex_t u = 0; u < g.n; ++u) { temp_partition[u] = k; }
+        #endif
+
         // partition current graph into k_here blocks (writes temp_partition for vertices 0..g.n-1)
         {
             ScopedTimer _t("initial_partitioning", "global_multisection", "partition");
 
             // kaffpa_partition(g, (int) k, imb, seed, temp_partition, FAST);
-            metis_partition(g, (int) k, imb, seed, temp_partition, METIS_KWAY);
+            // metis_partition(g, (int) k, imb, seed, temp_partition, METIS_KWAY);
+            recursive_bisec_partition(g, k, imb, seed, temp_partition);
         }
+
+        #if ASSERT_ENABLED
+        for (vertex_t u = 0; u < g.n; ++u) { ASSERT(temp_partition[u] < k); }
+        #endif
 
         // leaf: last split (identifier already contains all previous split-ids)
         if (identifier.size() == l - 1) {
@@ -250,7 +255,7 @@ namespace GPU_HeiPa {
                             partition);
     }
 
-    inline void global_multisection(Graph &g,
+    inline void global_multisection(const Graph &g,
                                     const std::vector<partition_t> &hierarchy,
                                     partition_t k,
                                     f64 imbalance,

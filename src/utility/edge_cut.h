@@ -33,6 +33,42 @@
 #include "../datastructures/block_connectivity.h"
 
 namespace GPU_HeiPa {
+    inline weight_t edge_cut(const HostGraph &g,
+                             const std::vector<partition_t> &partition) {
+        weight_t sum = 0;
+
+        for (vertex_t u = 0; u < g.n; ++u) {
+            for (vertex_t i = g.neighborhood(u); i < g.neighborhood(u + 1); ++i) {
+                vertex_t v = g.edges_v(i);
+                weight_t w = g.edges_w(i);
+
+                if (partition[u] != partition[v]) {
+                    sum += w;
+                }
+            }
+        }
+
+        return sum / 2;
+    }
+
+    inline weight_t edge_cut(const HostGraph &g,
+                             const HostPartition &partition) {
+        weight_t sum = 0;
+
+        for (vertex_t u = 0; u < g.n; ++u) {
+            for (vertex_t i = g.neighborhood(u); i < g.neighborhood(u + 1); ++i) {
+                vertex_t v = g.edges_v(i);
+                weight_t w = g.edges_w(i);
+
+                if (partition[u] != partition[v]) {
+                    sum += w;
+                }
+            }
+        }
+
+        return sum / 2;
+    }
+
     inline weight_t edge_cut(const Graph &g,
                              const Partition &partition) {
         weight_t sum = 0;

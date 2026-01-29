@@ -49,10 +49,10 @@ namespace GPU_HeiPa {
         UnmanagedHostWeight edges_w;
     };
 
-    inline void allocate_memory(HostGraph &g, vertex_t n, vertex_t m) {
+    inline void allocate_memory(HostGraph &g, vertex_t n, vertex_t m, weight_t g_weight) {
         g.n = n;
         g.m = m;
-        g.g_weight = 0;
+        g.g_weight = g_weight;
 
         // bytes needed per array
         size_t off_weights = 0;
@@ -77,10 +77,9 @@ namespace GPU_HeiPa {
         // create unmanaged views into the chunk
         g.weights = UnmanagedHostWeight((weight_t *) (base + off_weights), n);
         g.neighborhood = UnmanagedHostVertex((vertex_t *) (base + off_neighborhood), n + 1);
+        g.neighborhood(0) = 0;
         g.edges_v = UnmanagedHostVertex((vertex_t *) (base + off_edges_v), m);
         g.edges_w = UnmanagedHostWeight((weight_t *) (base + off_edges_w), m);
-
-        g.neighborhood(0) = 0;
     }
 
     inline HostGraph from_file(const std::string &file_path) {
@@ -149,7 +148,7 @@ namespace GPU_HeiPa {
             while (*p == ' ') { ++p; }
         }
         g.g_weight = 0;
-        allocate_memory(g, g.n, g.m);
+        allocate_memory(g, g.n, g.m, 0);
 
         has_v_weights = fmt[1] == '1';
         has_e_weights = fmt[2] == '1';

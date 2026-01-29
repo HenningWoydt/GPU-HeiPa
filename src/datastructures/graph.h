@@ -94,7 +94,6 @@ namespace GPU_HeiPa {
             g.edges_w = UnmanagedDeviceWeight((weight_t *) (base + off_edges_w), g.m);
             g.edges_u = UnmanagedDeviceVertex((vertex_t *) (base + off_edges_u), g.m);
         }
-        std::cout << "copying " << host_g.n_bytes << std::endl;
         // copy the structure to device
         {
             ScopedTimer _t{"misc", "from_HostGraph", "copy"};
@@ -366,16 +365,7 @@ namespace GPU_HeiPa {
     inline HostGraph to_host_graph(const Graph &device_g) {
         HostGraph host_g;
 
-        host_g.n = device_g.n;
-        host_g.m = device_g.m;
-        host_g.g_weight = device_g.g_weight;
-
-        allocate_memory(host_g, host_g.n, host_g.m);
-
-        // host_g.weights = HostWeight(Kokkos::view_alloc(Kokkos::WithoutInitializing, "weights_host"), device_g.n);
-        // host_g.neighborhood = HostVertex(Kokkos::view_alloc(Kokkos::WithoutInitializing, "neighborhood_host"), device_g.n + 1);
-        // host_g.edges_v = HostVertex(Kokkos::view_alloc(Kokkos::WithoutInitializing, "edges_v_host"), device_g.m);
-        // host_g.edges_w = HostWeight(Kokkos::view_alloc(Kokkos::WithoutInitializing, "edges_w_host"), device_g.m);
+        allocate_memory(host_g, device_g.n, device_g.m, device_g.g_weight);
 
         Kokkos::deep_copy(host_g.weights, device_g.weights);
         Kokkos::deep_copy(host_g.neighborhood, device_g.neighborhood);
