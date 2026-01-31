@@ -45,6 +45,8 @@ namespace GPU_HeiPa {
                                 u64 seed,
                                 HostPartition &partition,
                                 MetisOption option) {
+        ScopedTimer _t("initial_partitioning", "global_multisection", "metis_partition");
+
         idx_t n = (idx_t) g.n;
         idx_t ncon = 1; // Number of constraints (typically 1 for vertex weights)
         vertex_t m = g.m;

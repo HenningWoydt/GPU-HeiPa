@@ -309,15 +309,10 @@ namespace GPU_HeiPa {
 
             Kokkos::parallel_for("materialize_edges", coarse_g.n, KOKKOS_LAMBDA(const vertex_t u_new) {
                 u32 out = coarse_g.neighborhood(u_new);
-                u32 end = coarse_g.neighborhood(u_new + 1);
 
-                u32 off = hash_offsets(u_new);
-                u32 size = hash_offsets(u_new + 1) - off;
-
-                for (u32 idx = 0; idx < size && out < end; ++idx) {
-                    u32 pos = off + idx;
-                    vertex_t v = hash_keys(pos);
-                    weight_t w = hash_vals(pos);
+                for (u32 idx = hash_offsets(u_new); idx < hash_offsets(u_new + 1); ++idx) {
+                    vertex_t v = hash_keys(idx);
+                    weight_t w = hash_vals(idx);
                     if (v != coarse_g.n) {
                         coarse_g.edges_v(out) = v;
                         coarse_g.edges_w(out) = w;

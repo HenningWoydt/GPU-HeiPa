@@ -155,11 +155,9 @@ namespace GPU_HeiPa {
 
         // partition current graph into k_here blocks (writes temp_partition for vertices 0..g.n-1)
         {
-            ScopedTimer _t("initial_partitioning", "global_multisection", "partition");
-
             // kaffpa_partition(g, (int) k, imb, seed, temp_partition, FAST);
-            // metis_partition(g, (int) k, imb, seed, temp_partition, METIS_KWAY);
-            recursive_bisec_partition(g, k, imb, seed, temp_partition);
+            metis_partition(g, (int) k, imb, seed, temp_partition, METIS_KWAY);
+            // recursive_bisec_partition(g, k, imb, seed, temp_partition);
         }
 
         #if ASSERT_ENABLED

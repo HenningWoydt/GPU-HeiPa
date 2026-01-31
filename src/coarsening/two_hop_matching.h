@@ -159,11 +159,12 @@ namespace GPU_HeiPa {
                                     UnmanagedDeviceVertex &matching,
                                     const Partition &partition,
                                     KokkosMemoryStack &mem_stack) {
-        vertex_t n_unmapped = thm.n;
-        vertex_t next_n_unmapped = n_unmapped;
+        const weight_t max_allowed = (weight_t) (6.0 * (f64) g.g_weight / (f64) thm.n);
 
-        UnmanagedDeviceVertex unmapped_v = UnmanagedDeviceVertex((vertex_t *) get_chunk_back(mem_stack, sizeof(vertex_t) * n_unmapped), n_unmapped);
-        UnmanagedDeviceVertex next_unmapped_v = UnmanagedDeviceVertex((vertex_t *) get_chunk_back(mem_stack, sizeof(vertex_t) * next_n_unmapped), next_n_unmapped);
+        UnmanagedDeviceVertex unmapped_v = UnmanagedDeviceVertex((vertex_t *) get_chunk_back(mem_stack, sizeof(vertex_t) * thm.n), thm.n);
+        UnmanagedDeviceVertex next_unmapped_v = UnmanagedDeviceVertex((vertex_t *) get_chunk_back(mem_stack, sizeof(vertex_t) * thm.n), thm.n);
+        vertex_t n_unmapped = thm.n;
+        vertex_t next_n_unmapped = thm.n;
 
         // init unmapped vertices
         {
@@ -174,7 +175,6 @@ namespace GPU_HeiPa {
             KOKKOS_PROFILE_FENCE();
         }
 
-        const weight_t max_allowed = (weight_t) (6.0 * (f64) g.g_weight / (f64) thm.n);
         u32 round = 0;
         u32 made_pairs = 1;
         while (made_pairs > 0 && n_unmapped > 0) {

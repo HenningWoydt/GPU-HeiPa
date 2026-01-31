@@ -42,7 +42,7 @@ namespace GPU_HeiPa {
                                  u64 seed,
                                  HostPartition &partition,
                                  int mode) {
-        ScopedTimer _t_copy("initial_partitioning", "KaFFPa", "copy");
+        ScopedTimer _t("initial_partitioning", "global_multisection", "kaffpa_partition");
 
         int n = (int) g.n;
         vertex_t m = g.m;
@@ -80,14 +80,7 @@ namespace GPU_HeiPa {
             }
         }
 
-        _t_copy.stop();
-        ScopedTimer _t_partition("initial_partitioning", "KaFFPa", "partition");
-
         kaffpa(&n, vwgt, xadj, adjcwgt, adjncy, &k, &imbalance, suppress_output, (int) seed, mode, &edge_cut, part);
-
-        _t_partition.stop();
-        ScopedTimer _t_upload("initial_partitioning", "KaFFPa", "upload");
-
 
         for (int i = 0; i < n; ++i) {
             partition(i) = (partition_t) part[i];
