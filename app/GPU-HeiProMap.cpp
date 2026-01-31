@@ -70,7 +70,7 @@ int main(int argc, char *argv[]) {
                 // {"--graph", "../../graph_collection/mapping/cfd2.mtx.graph"},
                 // {"--mapping", "../data/out/partition/cfd2.mtx.txt"},
                 // {"--statistics", "../data/out/statistics/cfd2.mtx.JSON"},
-                {"--hierarchy", "4:8:6"},
+                {"--hierarchy", "4:8:1"},
                 {"--distance", "1:10:100"},
                 {"--imbalance", "0.03"},
                 {"--config", "default"},
@@ -122,12 +122,16 @@ int main(int argc, char *argv[]) {
             std::cout << "Read graph in     : " << io_ms << std::endl;
         }
 
+        auto sp_solver = get_time_point();
         if (config.distance_oracle_string == "matrix") {
             host_partition = ProMapSolver<DistanceOracleMatrix>(config).solve(host_g, verbose_level);
         } else if (config.distance_oracle_string == "binary") {
             host_partition = ProMapSolver<DistanceOracleBinary>(config).solve(host_g, verbose_level);
         } else {
             std::cerr << "Error: Invalid distance oracle string: " << config.distance_oracle_string << std::endl;
+        }
+        if (verbose_level >= 1) {
+            std::cout << "Solved in         : " << get_milli_seconds(sp_solver, get_time_point()) << std::endl;
         }
 
         if (config.is_set("--mapping")) {

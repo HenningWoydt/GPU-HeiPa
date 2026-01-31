@@ -44,6 +44,11 @@ namespace GPU_HeiPa {
                                  int mode) {
         ScopedTimer _t("initial_partitioning", "global_multisection", "kaffpa_partition");
 
+        if (k == 1) {
+            for (vertex_t u = 0; u < g.n; ++u) {partition[u] = 0; }
+            return;
+        }
+
         int n = (int) g.n;
         vertex_t m = g.m;
         int *vwgt = (int *) malloc((u64) n * sizeof(int));

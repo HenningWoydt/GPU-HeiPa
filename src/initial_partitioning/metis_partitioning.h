@@ -47,6 +47,11 @@ namespace GPU_HeiPa {
                                 MetisOption option) {
         ScopedTimer _t("initial_partitioning", "global_multisection", "metis_partition");
 
+        if (k == 1) {
+            for (vertex_t u = 0; u < g.n; ++u) {partition[u] = 0; }
+            return;
+        }
+
         idx_t n = (idx_t) g.n;
         idx_t ncon = 1; // Number of constraints (typically 1 for vertex weights)
         vertex_t m = g.m;
