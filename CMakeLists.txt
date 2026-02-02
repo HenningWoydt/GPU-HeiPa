@@ -85,17 +85,17 @@ set(CMAKE_CXX_FLAGS_DEBUG "-g -march=native -pipe -Wall -Wextra -Wno-unused-vari
 file(GLOB_RECURSE SOURCES CONFIGURE_DEPENDS "src/*.cpp")
 file(GLOB_RECURSE HEADERS CONFIGURE_DEPENDS "src/*.h")
 
-# add_executable(GPU-HeiPa app/GPU-HeiPa.cpp ${SOURCES} ${HEADERS})
+add_executable(GPU-HeiPa app/GPU-HeiPa.cpp ${SOURCES} ${HEADERS})
 add_executable(GPU-HeiProMap app/GPU-HeiProMap.cpp ${SOURCES} ${HEADERS})
 
-# target_link_libraries(GPU-HeiPa
-#         PRIVATE
-#         ${KAHIP_LIBRARY}
-#         ${METIS_LIBRARY}
-#         ${GKLIB_LIBRARY}
-#         Kokkos::kokkos
-#         OpenMP::OpenMP_CXX
-# )
+target_link_libraries(GPU-HeiPa
+        PRIVATE
+        ${KAHIP_LIBRARY}
+        ${METIS_LIBRARY}
+        ${GKLIB_LIBRARY}
+        Kokkos::kokkos
+        OpenMP::OpenMP_CXX
+)
 
 target_link_libraries(GPU-HeiProMap
         PRIVATE

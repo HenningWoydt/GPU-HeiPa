@@ -37,7 +37,9 @@ int main(int argc, char *argv[]) {
     auto sp = get_time_point();
     std::ios::sync_with_stdio(false);
     std::cout.tie(nullptr);
-    int verbose_level = 1; {
+    int verbose_level = 1;
+    //
+    {
         ScopedTimer _t("io", "main", "Kokkos::initialize");
         Kokkos::initialize();
     }
@@ -49,7 +51,7 @@ int main(int argc, char *argv[]) {
         // return 0;
         //
         {
-            ScopedTimer _t_parse("io", "main", "parse_args");
+            ScopedTimer _t("io", "main", "parse_args");
             std::vector<std::pair<std::string, std::string> > input = {
                 // {"--graph", "../../graph_collection/mapping/rgg24.graph"},
                 // {"--mapping", "../data/out/partition/rgg24.txt"},
@@ -124,9 +126,9 @@ int main(int argc, char *argv[]) {
 
         auto sp_solver = get_time_point();
         if (config.distance_oracle_string == "matrix") {
-            host_partition = ProMapSolver<DistanceOracleMatrix>(config).solve(host_g, verbose_level);
+            host_partition = ProMapSolver<DistanceOracleMatrix>(config).solve(host_g);
         } else if (config.distance_oracle_string == "binary") {
-            host_partition = ProMapSolver<DistanceOracleBinary>(config).solve(host_g, verbose_level);
+            host_partition = ProMapSolver<DistanceOracleBinary>(config).solve(host_g);
         } else {
             std::cerr << "Error: Invalid distance oracle string: " << config.distance_oracle_string << std::endl;
         }
@@ -146,8 +148,8 @@ int main(int argc, char *argv[]) {
             }
         }
     }
-
     Kokkos::fence();
+
     //
     {
         ScopedTimer _t("io", "main", "Kokkos::finalize");

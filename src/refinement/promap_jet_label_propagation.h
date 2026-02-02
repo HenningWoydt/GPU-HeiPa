@@ -677,14 +677,15 @@ namespace GPU_HeiPa {
     }
 
     template<typename d_oracle_t>
-    inline weight_t promap_refine(Graph &g,
-                                  Partition &partition,
-                                  d_oracle_t &d_oracle,
-                                  partition_t k,
-                                  weight_t lmax,
-                                  u32 level,
-                                  weight_t curr_comm_cost,
-                                  KokkosMemoryStack &mem_stack) {
+    inline std::pair<weight_t, weight_t> promap_refine(Graph &g,
+                                                       Partition &partition,
+                                                       d_oracle_t &d_oracle,
+                                                       partition_t k,
+                                                       weight_t lmax,
+                                                       u32 level,
+                                                       weight_t curr_comm_cost,
+                                                       weight_t curr_weight,
+                                                       KokkosMemoryStack &mem_stack) {
         ProMapJetLabelPropagation lp = initialize_promap_lp(g.n, g.m, k, lmax, mem_stack);
 
         if (level == 0) { lp.conn_c = 0.25; }
@@ -701,14 +702,7 @@ namespace GPU_HeiPa {
         // assert_bc(bc, g, lp.partition, lp.k);
 
         weight_t best_comm_cost = curr_comm_cost;
-        weight_t best_weight = 0;
-        // initial maximum weight
-        {
-            ScopedTimer _t_edge_cut("refinement", "JetLabelPropagation", "get_max_weight");
-            best_weight = max_weight(lp.partition);
-            KOKKOS_PROFILE_FENCE();
-        }
-        weight_t curr_weight = best_weight;
+        weight_t best_weight = curr_weight;
 
         // init arrays
         {
@@ -737,7 +731,7 @@ namespace GPU_HeiPa {
                 balance_iterations++;
             }
 
-            if (lp.n_moves == 0 && curr_weight <= lp.lmax) { break; } // no move found, we can quit now
+            if (lp.n_moves == 0) { continue; } // no move found, we can quit now
 
             // move in block connectivity
             move_bc(bc, g, lp.partition, lp.id, lp.moves, lp.n_moves);
@@ -829,7 +823,7 @@ namespace GPU_HeiPa {
 
         assert_back_is_empty(mem_stack);
 
-        return best_comm_cost;
+        return std::make_pair(best_comm_cost, best_weight);;
     }
 }
 

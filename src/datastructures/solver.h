@@ -48,14 +48,12 @@ namespace GPU_HeiPa {
     class Solver {
     public:
         Configuration config;
-        std::chrono::time_point<std::chrono::system_clock> sp;
 
         vertex_t n = 0;
         vertex_t m = 0;
         partition_t k = 0;
         weight_t lmax = 0;
 
-        HostGraph host_g;
         KokkosMemoryStack mem_stack;
 
         std::vector<Graph> graphs;
@@ -68,7 +66,7 @@ namespace GPU_HeiPa {
         weight_t initial_edge_cut = 0;
         weight_t initial_max_block_weight = 0;
 
-        f64 io_ms = 0.0;
+        f64 misc_ms = 0.0;
         f64 coarsening_ms = 0.0;
         f64 contraction_ms = 0.0;
         f64 initial_partitioning_ms = 0.0;
@@ -138,71 +136,97 @@ namespace GPU_HeiPa {
             }
         }
 
-        explicit Solver(Configuration t_config, f64 add_io_ms = 0.0) : config(std::move(t_config)) {
-            io_ms += add_io_ms;
-            sp = get_time_point();
+        explicit Solver(Configuration t_config) : config(std::move(t_config)) {
         }
 
-        std::vector<partition_t> solve() {
-            internal_solve();
+        HostPartition solve(HostGraph &host_g) {
+            auto sp = get_time_point();
 
-            ScopedTimer _t_write("io", "Solver", "write_partition");
-            HostPartition host_partition = HostPartition(Kokkos::view_alloc(Kokkos::WithoutInitializing, "host_partition"), graphs.back().n);
-            Kokkos::deep_copy(host_partition, partition.map);
+            internal_solve(host_g);
 
-            write_partition(host_partition, graphs.back().n, config.mapping_out);
-            _t_write.stop();
+            auto p = get_time_point();
+            HostPartition host_partition;
+            //
+            {
+                ScopedTimer _t("misc", "Solver", "download_partition");
+                host_partition = HostPartition(Kokkos::view_alloc(Kokkos::WithoutInitializing, "host_partition"), graphs.back().n);
+                Kokkos::deep_copy(host_partition, partition.map);
+            }
 
-            auto ep = get_time_point();
-            f64 duration = get_seconds(sp, ep);
-
-            std::cout << "Total time        : " << duration << std::endl;
-            std::cout << "#Nodes            : " << graphs.back().n << std::endl;
-            std::cout << "#Edges            : " << graphs.back().m << std::endl;
-            std::cout << "k                 : " << config.k << std::endl;
-            std::cout << "Lmax              : " << lmax << std::endl;
-            std::cout << "Init. edge-cut    : " << initial_edge_cut << std::endl;
-            std::cout << "Init. max block w : " << initial_max_block_weight << std::endl;
-            std::cout << "Final edge-cut    : " << edge_cut(graphs.back(), partition) << std::endl;
-            std::cout << "Final max block w : " << max_weight(partition) << std::endl;
-
+            // calc stats
             size_t n_empty_partitions = 0;
             size_t n_overloaded_partitions = 0;
             weight_t sum_too_much = 0;
             PartitionHost partition_host = to_host_partition(partition);
-            for (partition_t id = 0; id < config.k; ++id) {
-                n_empty_partitions += partition_host.bweights(id) == 0;
-                n_overloaded_partitions += partition_host.bweights(id) > lmax;
-                sum_too_much += std::max((weight_t) 0, partition_host.bweights(id) - lmax);
+            if (config.verbose_level >= 2) {
+                ScopedTimer _t("misc", "Solver", "calc_stats");
+                for (partition_t id = 0; id < config.k; ++id) {
+                    n_empty_partitions += partition_host.bweights(id) == 0;
+                    n_overloaded_partitions += partition_host.bweights(id) > lmax;
+                    sum_too_much += std::max((weight_t) 0, partition_host.bweights(id) - lmax);
+                }
             }
-            std::cout << "#empty partitions : " << n_empty_partitions << std::endl;
-            std::cout << "#oload partitions : " << n_overloaded_partitions << std::endl;
-            std::cout << "Sum oload weights : " << sum_too_much << std::endl;
-            std::cout << "IO            : " << io_ms << std::endl;
-            std::cout << "Coarsening    : " << coarsening_ms << std::endl;
-            std::cout << "Contraction   : " << contraction_ms << std::endl;
-            std::cout << "Init. Part.   : " << initial_partitioning_ms << std::endl;
-            std::cout << "Uncontraction : " << uncontraction_ms << std::endl;
-            std::cout << "Refinement    : " << refinement_ms << std::endl;
 
-            #if ENABLE_PROFILER
-            print_all_levels(level_infos);
-            #endif
+            // free all memory
+            {
+                ScopedTimer _t("misc", "Solver", "free_memory");
 
-            free_partition(partition, mem_stack);
+                free_partition(partition, mem_stack);
 
-            free_graph(graphs.back(), mem_stack);
-            graphs.pop_back();
+                free_graph(graphs.back(), mem_stack);
+                graphs.pop_back();
 
-            assert_is_empty(mem_stack);
-            destroy(mem_stack);
+                assert_is_empty(mem_stack);
+                destroy(mem_stack);
+            }
 
-            return {};
+            misc_ms += get_milli_seconds(p, get_time_point());
+
+            auto ep = get_time_point();
+            f64 duration = get_milli_seconds(sp, ep);
+
+            if (config.verbose_level >= 1) {
+                std::cout << "------- Info -------" << std::endl;
+                std::cout << "Total solve time  : " << duration << std::endl;
+                std::cout << "#Vertices         : " << n << std::endl;
+                std::cout << "#Edges            : " << m << std::endl;
+                std::cout << "k                 : " << k << std::endl;
+                std::cout << "imbalance         : " << config.imbalance << std::endl;
+                std::cout << "Lmax              : " << lmax << std::endl;
+            }
+            if (config.verbose_level >= 2) {
+                std::cout << "------- Stat -------" << std::endl;
+                std::cout << "Init. edge-cut    : " << initial_edge_cut << std::endl;
+                std::cout << "Init. max block w : " << initial_max_block_weight << std::endl;
+                std::cout << "Final edge-cut    : " << curr_edge_cut << std::endl;
+                std::cout << "Final max block w : " << curr_max_block_weight << std::endl;
+
+                std::cout << "#empty partitions : " << n_empty_partitions << std::endl;
+                std::cout << "#oload partitions : " << n_overloaded_partitions << std::endl;
+                std::cout << "Sum oload weights : " << sum_too_much << std::endl;
+            }
+            if (config.verbose_level >= 1) {
+                std::cout << "------- Time -------" << std::endl;
+                std::cout << "Coarsening        : " << coarsening_ms << std::endl;
+                std::cout << "Contraction       : " << contraction_ms << std::endl;
+                std::cout << "Init. Part.       : " << initial_partitioning_ms << std::endl;
+                std::cout << "Uncontraction     : " << uncontraction_ms << std::endl;
+                std::cout << "Refinement        : " << refinement_ms << std::endl;
+                std::cout << "Misc              : " << misc_ms << std::endl;
+                std::cout << "ALL               : " << misc_ms + coarsening_ms + contraction_ms + initial_partitioning_ms + uncontraction_ms + refinement_ms << std::endl;
+            }
+            if (config.verbose_level >= 2) {
+                #if ENABLE_PROFILER
+                print_all_levels(level_infos);
+                #endif
+            }
+
+            return host_partition;
         }
 
     private:
-        void internal_solve() {
-            initialize();
+        void internal_solve(HostGraph &host_g) {
+            initialize(host_g);
 
             const partition_t c = 4;
             const partition_t max_n = c * k;
@@ -257,9 +281,9 @@ namespace GPU_HeiPa {
             }
         }
 
-        void initialize() {
+        void initialize(HostGraph &host_g) {
             auto p = get_time_point();
-            host_g = from_file(config.graph_in);
+
             // Main stack: Graph + coarsening overhead
             mem_stack = initialize_kokkos_memory_stack(
                 20 * host_g.n * sizeof(vertex_t) + // 20% buffer for vertices
@@ -272,12 +296,14 @@ namespace GPU_HeiPa {
             k = config.k;
             lmax = (weight_t) std::ceil((1.0 + config.imbalance) * ((f64) host_g.g_weight / (f64) config.k));
 
-            graphs.emplace_back(from_HostGraph(host_g, mem_stack)); {
-                ScopedTimer t{"io", "partition", "initialize"};
+            graphs.emplace_back(from_HostGraph(host_g, mem_stack));
+            //
+            {
+                ScopedTimer t{"misc", "partition", "initialize"};
                 partition = initialize_partition(n, k, lmax, mem_stack);
             }
 
-            io_ms += get_milli_seconds(p, get_time_point());
+            misc_ms += get_milli_seconds(p, get_time_point());
 
             assert_state_pre_partition(graphs.back());
         }
@@ -317,7 +343,7 @@ namespace GPU_HeiPa {
             auto p = get_time_point();
 
             // Use METIS for initial partitioning
-            metis_partition(graphs.back(), (int) k, config.imbalance, config.seed, partition);
+            metis_partition(graphs.back(), (int) k, config.imbalance, config.seed, partition, METIS_KWAY);
 
             recalculate_weights(partition, graphs.back());
 

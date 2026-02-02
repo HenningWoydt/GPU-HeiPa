@@ -37,43 +37,27 @@ int main(int argc, char *argv[]) {
     auto sp = get_time_point();
     std::ios::sync_with_stdio(false);
     std::cout.tie(nullptr);
+    int verbose_level = 1;
+    //
+    {
+        ScopedTimer _t("io", "main", "Kokkos::initialize");
+        Kokkos::initialize();
+    }
 
-    ScopedTimer _t_guard("io", "main", "Kokkos::initialize");
-    Kokkos::initialize();
-    _t_guard.stop();
-
+    Configuration config;
     if (argc == 1) {
         // Configuration config;
         // config.print_help_message();
         // return 0;
         {
-            ScopedTimer _t_parse("io", "main", "parse_args");
+            ScopedTimer _t("io", "main", "parse_args");
             std::vector<std::pair<std::string, std::string> > input = {
-                // {"--graph", "../../graph_collection/mapping/rgg24.graph"},
-                // {"--mapping", "../data/out/partition/rgg24.txt"},
-                // {"--statistics", "../data/out/statistics/rgg24.JSON"},
-                {"--graph", "../../GraPaRepo/data/mapping/rgg23.graph"},
-                {"--mapping", "../data/out/partition/rgg23.txt"},
-                {"--statistics", "../data/out/statistics/rgg23.JSON"},
-                // {"--graph", "../../graph_collection/mapping/mawi_201512020030.graph"},
-                // {"--mapping", "../data/out/partition/mawi_201512020030.txt"},
-                // {"--statistics", "../data/out/statistics/mawi_201512020030.JSON"},
-                // {"--graph", "../../graph_collection/mapping/GAP-road.graph"},
-                // {"--mapping", "../data/out/partition/GAP-road.txt"},
-                // {"--statistics", "../data/out/statistics/GAP-road.JSON"},
-                // {"--graph", "../../graph_collection/mapping/2cubes_sphere.mtx.graph"},
-                // {"--mapping", "../data/out/partition/2cubes_sphere.mtx.txt"},
-                // {"--statistics", "../data/out/statistics/2cubes_sphere.mtx.JSON"},
-                // {"--graph", "../../graph_collection/mapping/cop20k_A.mtx.graph"},
-                // {"--mapping", "../data/out/partition/cop20k_A.mtx.txt"},
-                // {"--statistics", "../data/out/statistics/cop20k_A.mtx.JSON"},
-                // {"--graph", "../../graph_collection/mapping/cfd2.mtx.graph"},
-                // {"--mapping", "../data/out/partition/cfd2.mtx.txt"},
-                // {"--statistics", "../data/out/statistics/cfd2.mtx.JSON"},
+                {"--graph", "../../ProMapRepo/data/mapping/rgg23.graph"},
                 {"--k", "32"},
                 {"--imbalance", "0.03"},
-                {"--config", "IM"},
+                {"--config", "default"},
                 {"--seed", "1"},
+                {"--verbose-level", "2"}
             };
 
             std::vector<std::string> args = {"GPU-HeiPa"};
@@ -98,33 +82,62 @@ int main(int argc, char *argv[]) {
                 std::strcpy(argv_temp[i], args[i].c_str());
             }
 
-            Configuration config(argc_temp, argv_temp);
-            _t_parse.stop();
-
-            auto p_temp = get_time_point();
-            f64 add_io_ms = get_milli_seconds(sp, p_temp);
-
-            Solver(config, add_io_ms).solve();
+            config = Configuration(argc_temp, argv_temp);
 
             for (int i = 0; i < argc_temp; ++i) { delete[] argv_temp[i]; }
             delete[] argv_temp;
         }
     } else {
-        Configuration config(argc, argv);
+        ScopedTimer _t("io", "main", "parse_args");
+        config = Configuration(argc, argv);
+    }
+    verbose_level = config.verbose_level;
+    //
+    {
+        HostGraph host_g = from_file(config.graph_in);
+        HostPartition host_partition;
 
-        auto p_temp = get_time_point();
-        f64 add_io_ms = get_milli_seconds(sp, p_temp);
-        Solver(config, add_io_ms).solve();
+        f64 io_ms = get_milli_seconds(sp, get_time_point());
+
+        if (verbose_level >= 1) {
+            std::cout << "Read graph in     : " << io_ms << std::endl;
+        }
+
+        auto sp_solver = get_time_point();
+        host_partition = Solver(config).solve(host_g);
+
+        if (verbose_level >= 1) {
+            std::cout << "Solved in         : " << get_milli_seconds(sp_solver, get_time_point()) << std::endl;
+        }
+
+        if (config.is_set("--mapping")) {
+            ScopedTimer _t("io", "main", "write_partition");
+            auto p = get_time_point();
+
+            write_partition(host_partition, host_g.n, config.mapping_out);
+
+            if (verbose_level >= 1) {
+                io_ms = get_milli_seconds(p, get_time_point());
+                std::cout << "Write partition in: " << io_ms << std::endl;
+            }
+        }
     }
     Kokkos::fence();
-    ScopedTimer _t_guard_end("io", "main", "Kokkos::finalize");
-    Kokkos::finalize();
-    _t_guard_end.stop();
 
-    Profiler::instance().print_table_ascii_colored(std::cout);
+    //
+    {
+        ScopedTimer _t("io", "main", "Kokkos::finalize");
+        Kokkos::finalize();
+    }
+
+    if (verbose_level >= 2) {
+        Profiler::instance().print_table_ascii_colored(std::cout);
+    }
 
     auto ep = get_time_point();
-    std::cout << "Total Time in GPU-HeiPa.cpp : " << get_seconds(sp, ep) << " seconds." << std::endl;
+    if (verbose_level >= 2) {
+        std::cout << "Total Time in GPU-HeiPa.cpp : " << get_seconds(sp, ep) << " seconds." << std::endl;
+    }
 
     return 0;
 }

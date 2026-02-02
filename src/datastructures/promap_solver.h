@@ -70,6 +70,7 @@ namespace GPU_HeiPa {
         Partition partition;
 
         weight_t curr_comm_cost = 0;
+        weight_t curr_max_block_weight = 0;
         weight_t initial_comm_cost = 0;
         weight_t initial_max_block_weight = 0;
 
@@ -144,7 +145,7 @@ namespace GPU_HeiPa {
         explicit ProMapSolver(ProMapConfiguration t_config) : config(std::move(t_config)) {
         }
 
-        HostPartition solve(HostGraph &host_g, int verbose_level = 1) {
+        HostPartition solve(HostGraph &host_g) {
             auto sp = get_time_point();
 
             internal_solve(host_g);
@@ -164,12 +165,9 @@ namespace GPU_HeiPa {
             size_t n_overloaded_partitions = 0;
             weight_t sum_too_much = 0;
             PartitionHost partition_host;
-            if (verbose_level >= 2) {
+            if (config.verbose_level >= 2) {
                 ScopedTimer _t("misc", "Solver", "calc_stats");
                 max_block_w = max_weight(partition);
-                n_empty_partitions = 0;
-                n_overloaded_partitions = 0;
-                sum_too_much = 0;
                 partition_host = to_host_partition(partition);
                 for (partition_t id = 0; id < config.k; ++id) {
                     n_empty_partitions += partition_host.bweights(id) == 0;
@@ -197,7 +195,7 @@ namespace GPU_HeiPa {
             auto ep = get_time_point();
             f64 duration = get_milli_seconds(sp, ep);
 
-            if (verbose_level >= 1) {
+            if (config.verbose_level >= 1) {
                 std::cout << "------- Info -------" << std::endl;
                 std::cout << "Total solve time  : " << duration << std::endl;
                 std::cout << "#Vertices         : " << n << std::endl;
@@ -208,7 +206,7 @@ namespace GPU_HeiPa {
                 std::cout << "imbalance         : " << config.imbalance << std::endl;
                 std::cout << "Lmax              : " << lmax << std::endl;
             }
-            if (verbose_level >= 2) {
+            if (config.verbose_level >= 2) {
                 std::cout << "------- Stat -------" << std::endl;
                 std::cout << "Init. comm-cost   : " << initial_comm_cost << std::endl;
                 std::cout << "Init. max block w : " << initial_max_block_weight << std::endl;
@@ -219,7 +217,7 @@ namespace GPU_HeiPa {
                 std::cout << "#oload partitions : " << n_overloaded_partitions << std::endl;
                 std::cout << "Sum oload weights : " << sum_too_much << std::endl;
             }
-            if (verbose_level >= 1) {
+            if (config.verbose_level >= 1) {
                 std::cout << "------- Time -------" << std::endl;
                 std::cout << "Coarsening        : " << coarsening_ms << std::endl;
                 std::cout << "Contraction       : " << contraction_ms << std::endl;
@@ -230,7 +228,7 @@ namespace GPU_HeiPa {
                 std::cout << "ALL               : " << misc_ms + coarsening_ms + contraction_ms + initial_partitioning_ms + uncontraction_ms + refinement_ms << std::endl;
             }
 
-            if (verbose_level >= 2) {
+            if (config.verbose_level >= 2) {
                 #if ENABLE_PROFILER
                 print_all_levels(level_infos);
                 #endif
@@ -374,6 +372,7 @@ namespace GPU_HeiPa {
             initial_comm_cost = comm_cost(graphs.back(), partition, d_oracle);
             curr_comm_cost = initial_comm_cost;
             initial_max_block_weight = max_weight(partition);
+            curr_max_block_weight = initial_max_block_weight;
 
             Kokkos::fence();
             initial_partitioning_ms += get_milli_seconds(p, get_time_point());
@@ -384,7 +383,9 @@ namespace GPU_HeiPa {
         void refinement(u32 level) {
             auto p = get_time_point();
 
-            curr_comm_cost = promap_refine(graphs.back(), partition, d_oracle, k, lmax, level, curr_comm_cost, mem_stack);
+            auto pair = promap_refine(graphs.back(), partition, d_oracle, k, lmax, level, curr_comm_cost, curr_max_block_weight,mem_stack);
+            curr_comm_cost = pair.first;
+            curr_max_block_weight = pair.second;
 
             Kokkos::fence();
             refinement_ms += get_milli_seconds(p, get_time_point());

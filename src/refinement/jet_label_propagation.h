@@ -394,7 +394,7 @@ namespace GPU_HeiPa {
                 weight_t u_id_w = lp.partition.bweights(u_id);
                 weight_t u_w = g.weights(u);
 
-                if (u_id_w <= lp.lmax) { return; }                                         // u_id not overloaded
+                if (u_id_w <= lp.lmax) { return; }                                      // u_id not overloaded
                 if ((f64) u_w >= HEAVY_ALPHA * ((f64) u_id_w - opt_weight)) { return; } // vertex is too heavy
 
                 partition_t best_id = u_id;

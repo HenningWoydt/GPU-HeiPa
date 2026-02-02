@@ -55,7 +55,8 @@ namespace GPU_HeiPa {
             {"--imbalance", "-e", "Allowed imbalance (for example 0.03).", "0.03", "", false},
             {"--config", "-c", "Broad Config.", "", "", false},
             {"--statistics", "", "Output filepath to the statistics file.", "GPU-HeiPa_stats.JSON", "", false},
-            {"--seed", "-s", "Seed for more randomness.", "0", "", false}
+            {"--seed", "-s", "Seed for more randomness.", "0", "", false},
+            {"--verbose-level", "", "Whether to print.", "2", "", false},
         };
 
     public:
@@ -73,6 +74,8 @@ namespace GPU_HeiPa {
 
         // random initialization
         u64 seed = 0;
+
+        int verbose_level = 1;
 
         // device space info
         std::string device_space;
@@ -120,6 +123,11 @@ namespace GPU_HeiPa {
                 seed = std::stoull(get("--seed"));
             } else {
                 seed = std::random_device{}();
+            }
+
+            verbose_level = 2;
+            if (is_set("--verbose-level")) {
+                verbose_level = std::stoi(get("--verbose-level"));
             }
 
             device_space = get_kokkos_execution_space_as_str();
