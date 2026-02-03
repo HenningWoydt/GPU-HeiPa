@@ -1,5 +1,5 @@
 /*******************************************************************************
- * MIT License
+* MIT License
  *
  * This file is part of GPU-HeiPa.
  *
@@ -27,238 +27,494 @@
 #ifndef GPU_HEIPA_JET_LABEL_PROPAGATION_H
 #define GPU_HEIPA_JET_LABEL_PROPAGATION_H
 
-#include <filesystem>
+#include <limits>
+#include <Kokkos_Core.hpp>
 
 #include "../utility/definitions.h"
-#include "../utility/kokkos_util.h"
-#include "../utility/edge_cut.h"
-#include "../utility/macros.h"
-#include "../datastructures/partition.h"
-#include "../datastructures/block_connectivity.h"
 
 namespace GPU_HeiPa {
-    constexpr u32 MAX_BUCKETS = 50;   // replace MAX_SLOTS in bucket math
-    constexpr u32 MID_BUCKET = 25;    // bucket for zero gain
-    constexpr f32 BUCKET_BASE = 1.5f; // geometric spacing for |gain|/weight
-    constexpr u32 TARGET_PER_SHARD = 4096;
-
     constexpr u32 N_MAX_ITERATIONS = 12;
     constexpr u32 N_MAX_WEAK_ITERATIONS = 2;
-    constexpr f64 PHI = 0.9999;
+    constexpr f64 PHI = 0.999;
     constexpr f64 HEAVY_ALPHA = 1.5;
 
-    KOKKOS_INLINE_FUNCTION
-    u32 gain_bucket(weight_t gain, weight_t vwgt) {
-        #if defined(KOKKOS_ENABLE_CUDA) || defined(KOKKOS_ENABLE_HIP)
-        f32 w = (f32) (vwgt > 0 ? vwgt : 1);
-        f32 r = (f32) gain / w;
-        if (r > 0.0f) return 0;
-        if (r == 0.0f) return 1;
-        r = -r;
+    constexpr weight_t GAIN_MIN = std::numeric_limits<weight_t>::lowest();
+    constexpr partition_t NULL_PART = -1;
+    constexpr partition_t HASH_RECLAIM = -2;
+    constexpr partition_t NO_MOVE = -3;
 
-        // b = MID + round(log_base(r)), with base = 1.5
-        f32 t = logf(r) / logf(BUCKET_BASE);
-        int b = (int) MID_BUCKET + (int) floorf(t + 0.5f);
-        if (b < 2) b = 2;
-        if (b > (int) MAX_BUCKETS - 1) b = (int) MAX_BUCKETS - 1;
-        return (u32) b;
-        #else
-        // Normalize by vertex weight (avoid div-by-zero)
-        f32 g = static_cast<f32>(gain);
-        f32 w = static_cast<f32>(vwgt > 0 ? vwgt : 1);
-        f32 r = g / w;
+    constexpr vertex_t MAX_SECTIONS = 128;
+    constexpr int MAX_BUCKETS = 50;
+    constexpr int MID_BUCKETS = 25;
 
-        // Positive gain: best
-        if (r > 0.0f) return 0;
-        // Exact tie: middle left (keep 1 == no-loss "tie" like your current mapping?)
-        if (r == 0.0f) return 1;
+    struct LabelPropagation {
+        vertex_t n = 0;
+        vertex_t m = 0;
+        partition_t k = 0;
+        weight_t lmax = 0;
+        vertex_t min_size = 0;
 
-        // Negative normalized gain -> spread around MID_BUCKET via base 1.5
-        r = -r;
+        Partition partition{};
 
-        // Start from the mid bucket (loss ≈ weight)
-        u32 b = MID_BUCKET;
+        UnmanagedDeviceWeight gain1, temp_gain, gain_cache, evict_start, evict_adjust;
+        UnmanagedDeviceVertex vtx1, vtx2;
+        UnmanagedDevicePartition dest_part, underloaded_blocks;
+        UnmanagedDeviceU32 zeros;
 
-        // Move left for small losses, right for large losses.
-        // We avoid logf for portability; the loop is tiny (≤ ~10 steps typically).
-        if (r < 1.0f) {
-            while (r < 1.0f && b > 2) {
-                // keep 0=pos, 1=tie reserved
-                r *= BUCKET_BASE;
-                --b;
+        DeviceScalarU32 idx;
+
+        HostScalarPinnedVertex scan_host;
+        HostScalarPinnedWeight cut_change1, cut_change2, max_part;
+        HostPinnedWeight reduce_locs;
+        DeviceScalarPartition n_underloaded_blocks;
+        DeviceScalarWeight max_vwgt;
+    };
+
+    inline LabelPropagation initialize_label_propagation(const vertex_t t_n,
+                                                         const vertex_t t_m,
+                                                         const partition_t t_k,
+                                                         const weight_t t_lmax,
+                                                         KokkosMemoryStack &mem_stack) {
+        ScopedTimer _t("refinement", "JetLabelPropagation", "allocate");
+
+        LabelPropagation lp;
+
+        lp.n = t_n;
+        lp.m = t_m;
+        lp.k = t_k;
+        lp.lmax = t_lmax;
+        lp.min_size = t_k * MAX_SECTIONS * MAX_BUCKETS;
+
+        lp.partition = initialize_partition(t_n, t_k, t_lmax, mem_stack);
+
+        lp.gain1 = UnmanagedDeviceWeight((weight_t *) get_chunk_back(mem_stack, sizeof(weight_t) * std::max(lp.n, lp.min_size)), std::max(lp.n, lp.min_size));
+        lp.temp_gain = UnmanagedDeviceWeight((weight_t *) get_chunk_back(mem_stack, sizeof(weight_t) * lp.n), lp.n);
+        lp.gain_cache = UnmanagedDeviceWeight((weight_t *) get_chunk_back(mem_stack, sizeof(weight_t) * lp.n), lp.n);
+        lp.evict_start = UnmanagedDeviceWeight((weight_t *) get_chunk_back(mem_stack, sizeof(weight_t) * (lp.k + 1)), (lp.k + 1));
+        lp.evict_adjust = UnmanagedDeviceWeight((weight_t *) get_chunk_back(mem_stack, sizeof(weight_t) * lp.k), lp.k);
+
+        lp.vtx1 = UnmanagedDeviceVertex((vertex_t *) get_chunk_back(mem_stack, sizeof(vertex_t) * lp.n), lp.n);
+        lp.vtx2 = UnmanagedDeviceVertex((vertex_t *) get_chunk_back(mem_stack, sizeof(vertex_t) * std::max(lp.n, lp.min_size)), std::max(lp.n, lp.min_size));
+
+        lp.dest_part = UnmanagedDevicePartition((partition_t *) get_chunk_back(mem_stack, sizeof(partition_t) * lp.n), lp.n);
+        lp.underloaded_blocks = UnmanagedDevicePartition((partition_t *) get_chunk_back(mem_stack, sizeof(partition_t) * lp.k), lp.k);
+
+        lp.zeros = UnmanagedDeviceU32((u32 *) get_chunk_back(mem_stack, sizeof(u32) * lp.n), lp.n);
+        Kokkos::deep_copy(lp.zeros, 0);
+
+        lp.idx = DeviceScalarU32("idx");
+
+        lp.scan_host = HostScalarPinnedVertex("scan host");
+        lp.n_underloaded_blocks = DeviceScalarPartition("total undersized");
+        lp.max_vwgt = DeviceScalarWeight("max vwgt allowed");
+        lp.reduce_locs = HostPinnedWeight("reduce to here", 3);
+        lp.cut_change1 = Kokkos::subview(lp.reduce_locs, 0);
+        lp.cut_change2 = Kokkos::subview(lp.reduce_locs, 1);
+        lp.max_part = Kokkos::subview(lp.reduce_locs, 2);
+
+        return lp;
+    }
+
+    inline void free_LabelPropagation(const LabelPropagation &lp,
+                                      KokkosMemoryStack &mem_stack) {
+        pop_back(mem_stack);
+        pop_back(mem_stack);
+        pop_back(mem_stack);
+        pop_back(mem_stack);
+        pop_back(mem_stack);
+        pop_back(mem_stack);
+        pop_back(mem_stack);
+        pop_back(mem_stack);
+        pop_back(mem_stack);
+        pop_back(mem_stack);
+
+        free_partition(lp.partition, mem_stack);
+    }
+
+    inline weight_t get_max_weight(const UnmanagedDeviceWeight &ps,
+                                   partition_t k,
+                                   HostScalarPinnedWeight &result) {
+        Kokkos::parallel_reduce("get max part size (store in view)", k, KOKKOS_LAMBDA(const s32 i, weight_t &update) {
+            if (ps(i) > update) {
+                update = ps(i);
             }
-            if (b < 2) b = 2;
-        } else {
-            while (r > 1.0f && b < (MAX_BUCKETS - 1)) {
-                r /= BUCKET_BASE;
-                ++b;
-            }
-            if (b > MAX_BUCKETS - 1) b = MAX_BUCKETS - 1;
+        }, Kokkos::Max(result));
+        Kokkos::fence();
+
+        return result();
+    }
+
+    struct BlockConn {
+        vertex_t n = 0;
+        u32 size = 0;
+
+        UnmanagedDeviceU32 row;
+        UnmanagedDeviceU32 sizes;
+
+        UnmanagedDevicePartition ids;
+        UnmanagedDeviceWeight weights;
+
+        UnmanagedDeviceU32 lock;
+        UnmanagedDevicePartition dest_cache;
+    };
+
+    inline BlockConn init_BlockConn(const LabelPropagation &lp,
+                                    const Graph &g,
+                                    KokkosMemoryStack &mem_stack) {
+        BlockConn bc;
+        //
+        {
+            ScopedTimer _t("refinement", "BlockConnectivity_fs", "allocate_rows");
+
+            bc.n = g.n;
+            bc.row = UnmanagedDeviceU32((u32 *) get_chunk_back(mem_stack, sizeof(u32) * (g.n + 1)), g.n + 1);
+            bc.sizes = UnmanagedDeviceU32((u32 *) get_chunk_back(mem_stack, sizeof(u32) * g.n), g.n);
+
+            KOKKOS_PROFILE_FENCE();
         }
-        return b;
-        #endif
+
+        // set rows
+        {
+            ScopedTimer _t("refinement", "BlockConnectivity_fs", "set_rows");
+
+            Kokkos::parallel_scan("set_rows", g.n + 1, KOKKOS_LAMBDA(const u32 i, u32 &running, const bool final) {
+                if (i == 0) {
+                    // first slot is 0
+                    if (final) bc.row(0) = 0;
+                    return;
+                }
+
+                const vertex_t u = i - 1;
+                const u32 len = g.neighborhood(u + 1) - g.neighborhood(u);
+                const u32 c = len < lp.partition.k ? len : lp.partition.k;
+
+                // write inclusive row[i] = running + c
+                if (final) {
+                    bc.row(i) = running + c;
+                    bc.sizes(u) = 0; // c;
+                }
+
+                running += c;
+            });
+            Kokkos::deep_copy(bc.size, Kokkos::subview(bc.row, g.n));
+
+            KOKKOS_PROFILE_FENCE();
+        }
+
+        // allocate rest
+        {
+            ScopedTimer _t("refinement", "BlockConnectivity_fs", "allocate");
+
+            bc.ids = UnmanagedDevicePartition((partition_t *) get_chunk_back(mem_stack, sizeof(partition_t) * bc.size), bc.size);
+            bc.weights = UnmanagedDeviceWeight((weight_t *) get_chunk_back(mem_stack, sizeof(weight_t) * bc.size), bc.size);
+            Kokkos::deep_copy(DeviceExecutionSpace(), bc.ids, NULL_PART);
+            Kokkos::deep_copy(DeviceExecutionSpace(), bc.weights, 0);
+
+            bc.lock = UnmanagedDeviceU32((u32 *) get_chunk_back(mem_stack, sizeof(u32) * bc.n), bc.n);
+            bc.dest_cache = UnmanagedDevicePartition((partition_t *) get_chunk_back(mem_stack, sizeof(partition_t) * bc.n), bc.n);
+            Kokkos::deep_copy(DeviceExecutionSpace(), bc.lock, 0);
+            Kokkos::deep_copy(DeviceExecutionSpace(), bc.dest_cache, NULL_PART);
+
+            KOKKOS_PROFILE_FENCE();
+        }
+
+        // first fill of the structure - around 50% faster than Jets
+        ScopedTimer _t("refinement", "BlockConnectivity_fs", "fill");
+
+        Kokkos::parallel_for("fill", g.m, KOKKOS_LAMBDA(const u32 i) {
+            vertex_t u = g.edges_u(i);
+            vertex_t v = g.edges_v(i);
+            weight_t w = g.edges_w(i);
+
+            u32 r_beg = bc.row(u);
+            u32 r_end = bc.row(u + 1);
+
+            partition_t v_id = lp.partition.map(v);
+
+            for (u32 j = r_beg; j < r_end; j++) {
+                partition_t val = Kokkos::atomic_compare_exchange(&bc.ids(j), NULL_PART, v_id);
+                if (val == NULL_PART) {
+                    Kokkos::atomic_add(&bc.weights(j), w);
+                    Kokkos::atomic_inc(&bc.sizes(u));
+                    return;
+                }
+                if (val == v_id) {
+                    Kokkos::atomic_add(&bc.weights(j), w);
+                    return;
+                }
+            }
+        });
+        KOKKOS_PROFILE_FENCE();
+
+        return bc;
+    }
+
+    inline void free_BlockConn(BlockConn &bc,
+                               KokkosMemoryStack &mem_stack) {
+        ScopedTimer _t("refinement", "BlockConnectivity", "free");
+
+        pop_back(mem_stack);
+        pop_back(mem_stack);
+        pop_back(mem_stack);
+        pop_back(mem_stack);
+        pop_back(mem_stack);
+        pop_back(mem_stack);
+    }
+
+    inline void update_large(const LabelPropagation &lp, const Graph &g, const BlockConn &bc, const DeviceVertex &moves) {
+        u32 total_moves = (u32) moves.extent(0);
+
+        Kokkos::parallel_for("mark", TeamPolicy(total_moves, Kokkos::AUTO), KOKKOS_LAMBDA(const TeamMember &t) {
+            u32 i = t.league_rank();
+            vertex_t u = moves(i);
+            Kokkos::parallel_for(Kokkos::TeamThreadRange(t, g.neighborhood(u), g.neighborhood(u + 1)), [=](const u32 j) {
+                vertex_t v = g.edges_v(j);
+                lp.zeros(v) = 1;
+            });
+        });
+
+        //recompute conn tables for each vertex adjacent to a moved vertex
+        Kokkos::parallel_for("rebuild", TeamPolicy(g.n, Kokkos::AUTO).set_scratch_size(0, Kokkos::PerTeam(lp.k * sizeof(weight_t) + lp.k * sizeof(partition_t) + 4 * sizeof(partition_t))), KOKKOS_LAMBDA(const TeamMember &t) {
+            vertex_t u = t.league_rank();
+
+            if (lp.zeros(u) == 1) {
+                u32 r_beg = bc.row(u);
+                u32 r_end = bc.row(u + 1);
+                u32 r_len = r_end - r_beg;
+
+                // reset global memory
+                Kokkos::parallel_for(Kokkos::TeamThreadRange(t, 0, r_len), [&](const u32 i) { bc.weights(r_beg + i) = 0; });
+                Kokkos::parallel_for(Kokkos::TeamThreadRange(t, 0, r_len), [&](const u32 i) { bc.ids(r_beg + i) = NULL_PART; });
+
+                // build the row
+                weight_t *s_weights = (weight_t *) t.team_shmem().get_shmem(sizeof(weight_t) * r_len);
+                partition_t *s_ids = (partition_t *) t.team_shmem().get_shmem(sizeof(partition_t) * r_len);
+                u32 *n_needed_slots = (u32 *) t.team_shmem().get_shmem(sizeof(u32));
+
+                // reset weights and ids
+                Kokkos::parallel_for(Kokkos::TeamThreadRange(t, 0, r_len), [&](const vertex_t j) { s_weights[j] = 0; });
+                Kokkos::parallel_for(Kokkos::TeamThreadRange(t, 0, r_len), [&](const vertex_t j) { s_ids[j] = NULL_PART; });
+                *n_needed_slots = 0;
+                t.team_barrier();
+
+                // construct conn table from scratch in shared memory
+                Kokkos::parallel_for(Kokkos::TeamThreadRange(t, g.neighborhood(u), g.neighborhood(u + 1)), [&](const u32 &i) {
+                    vertex_t v = g.edges_v(i);
+                    weight_t w = g.edges_w(i);
+                    partition_t v_id = lp.partition.map(v);
+                    u32 idx = (u32) v_id % r_len;
+
+                    if (r_len == (u32) lp.k) {
+                        if (NULL_PART == Kokkos::atomic_compare_exchange(s_ids + idx, NULL_PART, v_id)) { Kokkos::atomic_add(n_needed_slots, 1); }
+                    } else {
+                        while (true) {
+                            partition_t id = Kokkos::atomic_compare_exchange(s_ids + idx, NULL_PART, v_id);
+                            if (id == v_id) { break; }
+                            if (id == NULL_PART) {
+                                Kokkos::atomic_add(n_needed_slots, 1);
+                                break;
+                            }
+                            idx = (idx + 1) % r_len;
+                        }
+                    }
+                    Kokkos::atomic_add(s_weights + idx, w);
+                });
+                t.team_barrier();
+
+                u32 old_size = r_len;
+                u32 new_size = *n_needed_slots + ((*n_needed_slots / 4) < 3 ? 3 : (*n_needed_slots / 4));
+
+                if (new_size < old_size) {
+                    bc.sizes(u) = new_size;
+                    Kokkos::parallel_for(Kokkos::TeamThreadRange(t, 0, old_size), [&](const u32 &i) {
+                        partition_t id = s_ids[i];
+                        if (id != NULL_PART) {
+                            u32 idx = (u32) id % new_size;
+
+                            while (true) {
+                                partition_t found_id = Kokkos::atomic_compare_exchange(&bc.ids(r_beg + idx), NULL_PART, id);
+                                if (found_id == NULL_PART || found_id == id) { break; }
+                                idx = (idx + 1) % new_size;
+                            }
+
+                            bc.weights(r_beg + idx) = s_weights[i];
+                        }
+                    });
+                } else {
+                    bc.sizes(u) = old_size;
+                    //copy conn table into global memory
+                    Kokkos::parallel_for(Kokkos::TeamThreadRange(t, 0, old_size), [&](const u32 i) { bc.weights(r_beg + i) = s_weights[i]; });
+                    Kokkos::parallel_for(Kokkos::TeamThreadRange(t, 0, old_size), [&](const u32 i) { bc.ids(r_beg + i) = s_ids[i]; });
+                }
+
+                // reset cache and memory
+                Kokkos::single(Kokkos::PerTeam(t), [=]() {
+                    lp.zeros(u) = 0;
+                    bc.dest_cache(u) = NULL_PART;
+                });
+            }
+        });
+    }
+
+    inline void update_small(const LabelPropagation &lp, const Graph &g, const BlockConn &bc, const DeviceVertex &moves) {
+        u32 total_moves = (u32) moves.extent(0);
+
+        Kokkos::parallel_for("remove_weight", TeamPolicy(total_moves, Kokkos::AUTO), KOKKOS_LAMBDA(const TeamMember &t) {
+            vertex_t u = moves(t.league_rank());
+            partition_t old_u_id = lp.dest_part(u);
+
+            Kokkos::parallel_for(Kokkos::TeamThreadRange(t, g.neighborhood(u), g.neighborhood(u + 1)), [=](const u32 i) {
+                vertex_t v = g.edges_v(i);
+                weight_t w = g.edges_w(i);
+
+                u32 r_beg = bc.row(v);
+                u32 r_len = bc.sizes(v);
+
+                // find correct idx
+                partition_t idx = old_u_id % r_len;
+                while (bc.ids(r_beg + idx) != old_u_id) { idx = (idx + 1) % r_len; }
+
+                // remove weight
+                weight_t id_w = Kokkos::atomic_fetch_add(&bc.weights(r_beg + idx), -w);
+
+                if (r_len != lp.k && id_w == w) { bc.ids(r_beg + idx) = HASH_RECLAIM; }
+            });
+        });
+
+        Kokkos::parallel_for("add_weight", TeamPolicy(total_moves, Kokkos::AUTO), KOKKOS_LAMBDA(const TeamMember &t) {
+            vertex_t u = moves(t.league_rank());
+            partition_t new_u_id = lp.partition.map(u);
+
+            Kokkos::parallel_for(Kokkos::TeamThreadRange(t, g.neighborhood(u), g.neighborhood(u + 1)), [=](const u32 i) {
+                vertex_t v = g.edges_v(i);
+                weight_t w = g.edges_w(i);
+
+                bc.dest_cache(v) = NULL_PART; // reset the cache
+
+                u32 r_beg = bc.row(v);
+                u32 r_len = bc.sizes(v);
+
+                u32 idx = new_u_id % r_len;
+
+                // first pass look for new_u_id
+                bool success = false;
+                for (u32 j = 0; j < r_len; j++) {
+                    idx = (new_u_id + j) % r_len;
+                    partition_t id = bc.ids(r_beg + idx);
+
+                    if (id == new_u_id) {
+                        success = true;
+                        break;
+                    }
+                    if (id == NULL_PART) { break; }
+                }
+
+
+                if (!success) {
+                    for (u32 j = 0; j < r_len; j++) {
+                        idx = (new_u_id + j) % r_len;
+                        partition_t id = bc.ids(r_beg + idx);
+
+                        if (id == new_u_id) {
+                            success = true;
+                            break;
+                        }
+
+                        if (id == NULL_PART || id == HASH_RECLAIM) {
+                            partition_t found_id = Kokkos::atomic_compare_exchange(&bc.ids(r_beg + idx), id, new_u_id);
+                            if (found_id == new_u_id || found_id == NULL_PART || found_id == HASH_RECLAIM) {
+                                success = true;
+                                break;
+                            }
+                        }
+                    }
+                }
+
+                if (!success) {
+                    idx = r_len;
+                    while (true) {
+                        partition_t id = bc.ids(r_beg + idx);
+
+                        if (id == new_u_id) {
+                            success = true;
+                            break;
+                        }
+
+                        if (id == NULL_PART || id == HASH_RECLAIM) {
+                            partition_t found_id = Kokkos::atomic_compare_exchange(&bc.ids(r_beg + idx), id, new_u_id);
+                            if (found_id == id) {
+                                Kokkos::atomic_add(&bc.sizes(v), 1);
+                                break;
+                            }
+                            if (found_id == new_u_id) { break; }
+                        }
+
+                        idx++;
+                    }
+                }
+                Kokkos::atomic_add(&bc.weights(r_beg + idx), w);
+            });
+        });
     }
 
     KOKKOS_INLINE_FUNCTION
-    u32 gain_bucket_new(weight_t g, weight_t vwgt) {
-        if (g > 0) { return 0; }
-        if (g == 0) { return 1; }
-
+    vertex_t gain_bucket(const weight_t &gx, const weight_t &vwgt) {
         //cast to float so we can approximate log_1.5
-        f64 gain = (f64) -g / (f64) vwgt;
-        u32 gain_type = MID_BUCKET;
-
-        if (gain < 1.0) {
-            while (gain < 1.0) {
-                gain *= 1.5;
-                gain_type--;
-
-                if (gain_type < 2) {
-                    return 2;
-                }
-            }
+        f64 gain = (f64) gx / (f64) vwgt;
+        vertex_t gain_type = 0;
+        if (gain > 0.0) {
+            gain_type = 0;
+        } else if (gain == 0.0) {
+            gain_type = 1;
         } else {
-            while (gain > 1.0) {
-                gain /= 1.5;
-                gain_type++;
-
-                if (gain_type >= MAX_BUCKETS) {
-                    return MAX_BUCKETS - 1;
+            gain_type = MID_BUCKETS;
+            gain = abs(gain);
+            if (gain < 1.0) {
+                while (gain < 1.0) {
+                    gain *= 1.5;
+                    gain_type -= 1;
+                }
+                if (gain_type < 2) {
+                    gain_type = 2;
+                }
+            } else {
+                while (gain > 1.0) {
+                    gain /= 1.5;
+                    gain_type += 1;
+                }
+                if (gain_type > MAX_BUCKETS) {
+                    gain_type = MAX_BUCKETS - 1;
                 }
             }
         }
         return gain_type;
     }
 
-    struct JetLabelPropagation {
-        vertex_t n = 0;
-        vertex_t m = 0;
-        partition_t k = 0;
-        weight_t lmax = 0;
-
-        u32 sections = 1; // adaptive mini buckets per (part,bucket)
-        Partition partition;
-
-        Kokkos::View<weight_t, DeviceMemorySpace> temp_cut_delta;
-
-        UnmanagedDeviceWeight save_gains;
-        UnmanagedDeviceWeight pre_gain;
-        UnmanagedDevicePartition dest_part;
-
-        UnmanagedDevicePartition id;
-
-        UnmanagedDeviceU32 bid;
-        UnmanagedDeviceWeight evict_start;
-        UnmanagedDeviceWeight evict_adjust;
-        Kokkos::View<weight_t, DeviceMemorySpace> max_vwgt;
-
-        u32 temp_n_moves = 0;
-        Kokkos::View<u32, DeviceMemorySpace> temp_moves_idx;
-        UnmanagedDeviceVertex temp_moves;
-        u32 n_moves = 0;
-        Kokkos::View<u32, DeviceMemorySpace> moves_idx;
-        UnmanagedDeviceVertex moves;
-
-        UnmanagedDeviceWeight bucket_sizes;
-        UnmanagedDeviceWeight bucket_offsets;
-
-        Kokkos::View<u32, DeviceMemorySpace> n_underloaded_blocks;
-        UnmanagedDevicePartition underloaded_blocks;
-
-        UnmanagedDeviceWeight save_atomic;
-    };
-
-    inline JetLabelPropagation initialize_lp(const vertex_t t_n,
-                                             const vertex_t t_m,
-                                             const partition_t t_k,
-                                             const weight_t t_lmax,
-                                             KokkosMemoryStack &mem_stack) {
-        ScopedTimer _t("refinement", "JetLabelPropagation", "allocate");
-
-        JetLabelPropagation lp;
-
-        lp.n = t_n;
-        lp.m = t_m;
-        lp.k = t_k;
-        lp.lmax = t_lmax;
-
-        lp.partition = initialize_partition(t_n, t_k, t_lmax, mem_stack);
-
-        lp.temp_cut_delta = Kokkos::View<weight_t, DeviceMemorySpace>("temp_cut_delta");
-
-        lp.save_gains = UnmanagedDeviceWeight((weight_t *) get_chunk_back(mem_stack, sizeof(weight_t) * t_n), t_n);
-        lp.pre_gain = UnmanagedDeviceWeight((weight_t *) get_chunk_back(mem_stack, sizeof(weight_t) * t_n), t_n);
-        lp.dest_part = UnmanagedDevicePartition((partition_t *) get_chunk_back(mem_stack, sizeof(partition_t) * t_n), t_n);
-
-        lp.id = UnmanagedDevicePartition((partition_t *) get_chunk_back(mem_stack, sizeof(partition_t) * t_n), t_n);
-
-        lp.bid = UnmanagedDeviceU32((u32 *) get_chunk_back(mem_stack, sizeof(u32) * t_n), t_n);
-        lp.evict_start = UnmanagedDeviceWeight((weight_t *) get_chunk_back(mem_stack, sizeof(weight_t) * (t_k + 1)), t_k + 1);
-        lp.evict_adjust = UnmanagedDeviceWeight((weight_t *) get_chunk_back(mem_stack, sizeof(weight_t) * t_k), t_k);
-        lp.max_vwgt = Kokkos::View<weight_t, DeviceMemorySpace>("max_vwgt");
-
-        lp.temp_moves_idx = Kokkos::View<u32, DeviceMemorySpace>("temp_moves_idx");
-        lp.temp_moves = UnmanagedDeviceVertex((vertex_t *) get_chunk_back(mem_stack, sizeof(vertex_t) * t_n), t_n);
-        lp.moves_idx = Kokkos::View<u32, DeviceMemorySpace>("moves_idx");
-        lp.moves = UnmanagedDeviceVertex((vertex_t *) get_chunk_back(mem_stack, sizeof(vertex_t) * t_n), t_n);
-
-        // compute sections so that k * MAX_BUCKETS * sections ≈ n / TARGET_PER_SHARD
-        u64 shards = (t_n + TARGET_PER_SHARD - 1) / TARGET_PER_SHARD;
-        u64 per_part = MAX_BUCKETS; // buckets per part
-        u64 s = (shards + (t_k * per_part - 1)) / (t_k * per_part);
-        lp.sections = s == 0 ? 1 : (u32) s;
-
-        size_t t_minibuckets = (size_t) t_k * MAX_BUCKETS * lp.sections;
-        lp.bucket_sizes = UnmanagedDeviceWeight((weight_t *) get_chunk_back(mem_stack, sizeof(weight_t) * (t_minibuckets + 1)), t_minibuckets + 1);
-        lp.bucket_offsets = UnmanagedDeviceWeight((weight_t *) get_chunk_back(mem_stack, sizeof(weight_t) * (t_minibuckets + 1)), t_minibuckets + 1);
-
-        lp.n_underloaded_blocks = Kokkos::View<u32, DeviceMemorySpace>("n_underloaded_blocks");
-        lp.underloaded_blocks = UnmanagedDevicePartition((partition_t *) get_chunk_back(mem_stack, sizeof(partition_t) * t_k), t_k);
-
-        lp.save_atomic = UnmanagedDeviceWeight((weight_t *) get_chunk_back(mem_stack, sizeof(weight_t) * t_n), t_n);
-
-        return lp;
-    }
-
-    inline void free_lp(JetLabelPropagation &lp,
-                        KokkosMemoryStack &mem_stack) {
-        free_partition(lp.partition, mem_stack);
-
-        ScopedTimer _t("refinement", "JetLabelPropagation", "free");
-
-        pop_back(mem_stack);
-        pop_back(mem_stack);
-        pop_back(mem_stack);
-        pop_back(mem_stack);
-        pop_back(mem_stack);
-        pop_back(mem_stack);
-        pop_back(mem_stack);
-        pop_back(mem_stack);
-        pop_back(mem_stack);
-        pop_back(mem_stack);
-        pop_back(mem_stack);
-        pop_back(mem_stack);
-        pop_back(mem_stack);
-    }
-
-    inline void jetlp(JetLabelPropagation &lp,
-                      Graph &g,
-                      BlockConnectivity &bc,
-                      const f64 conn_c) {
-        // for each vertex determine best block
+    inline DeviceVertex jet_lp(LabelPropagation &lp,
+                               const Graph &g,
+                               const BlockConn &bc,
+                               f64 conn_c) {
+        vertex_t num_pos = 0;
+        //
         {
             ScopedTimer _t("refinement", "jetlp", "best_block");
-            Kokkos::deep_copy(lp.temp_moves_idx, 0);
+            Kokkos::deep_copy(lp.idx, 0);
 
-            Kokkos::parallel_for("best_block", bc.n, KOKKOS_LAMBDA(const vertex_t u) {
+            Kokkos::parallel_for("best_block", g.n, KOKKOS_LAMBDA(const vertex_t u) {
+                partition_t temp_u_dest_part;
+                weight_t temp_u_gain_cache;
+
                 if (bc.dest_cache(u) != NULL_PART) {
+                    // cached for this vertex
                     lp.dest_part(u) = bc.dest_cache(u);
+
+                    temp_u_dest_part = bc.dest_cache(u);
+                    temp_u_gain_cache = lp.gain_cache(u);
                 } else {
                     partition_t u_id = lp.partition.map(u);
                     partition_t best_id = NO_MOVE;
-
-                    weight_t own_conn = 0;
                     weight_t best_conn = 0;
+                    weight_t own_conn = 0;
 
                     u32 r_beg = bc.row(u);
                     u32 r_len = bc.sizes(u);
@@ -284,30 +540,34 @@ namespace GPU_HeiPa {
                     weight_t gain = 0;
 
                     if (best_id != NO_MOVE) {
-                        if ((best_conn >= own_conn) || (own_conn - best_conn) < Kokkos::floor(conn_c * (f64) own_conn)) {
+                        if (best_conn >= own_conn || ((own_conn - best_conn) < floor(conn_c * own_conn))) {
                             gain = best_conn - own_conn;
                         } else {
                             best_id = NO_MOVE;
                         }
                     }
-
+                    lp.gain_cache(u) = gain;
                     bc.dest_cache(u) = best_id;
                     lp.dest_part(u) = best_id;
-                    lp.save_gains(u) = gain;
+
+                    temp_u_dest_part = best_id;
+                    temp_u_gain_cache = gain;
                 }
 
-                if (lp.dest_part(u) != NO_MOVE && bc.lock(u) == 0) {
-                    lp.pre_gain(u) = lp.save_gains(u);
-
-                    u32 idx = Kokkos::atomic_fetch_inc(&lp.temp_moves_idx());
-                    lp.temp_moves(idx) = u;
+                if (temp_u_dest_part != NO_MOVE && bc.lock(u) == 0) {
+                    u32 idx = Kokkos::atomic_fetch_inc(&lp.idx());
+                    lp.vtx1(idx) = u;
+                    lp.gain1(u) = temp_u_gain_cache;
                 } else {
-                    lp.pre_gain(u) = min_sentinel<weight_t>();
+                    lp.gain1(u) = GAIN_MIN;
                     bc.lock(u) = 0;
                 }
             });
 
-            Kokkos::deep_copy(lp.temp_n_moves, lp.temp_moves_idx);
+            Kokkos::fence();
+            u32 t;
+            Kokkos::deep_copy(t, lp.idx);
+            num_pos = (vertex_t) t;
 
             KOKKOS_PROFILE_FENCE();
         }
@@ -315,70 +575,300 @@ namespace GPU_HeiPa {
         // use afterburner
         {
             ScopedTimer _t("refinement", "jetlp", "afterburner");
-
-            Kokkos::deep_copy(lp.moves_idx, 0);
-
-            Kokkos::parallel_for("afterburner", lp.temp_n_moves, KOKKOS_LAMBDA(const u32 i) {
-                vertex_t u = lp.temp_moves(i);
-                weight_t u_gain = lp.pre_gain(u);
+            Kokkos::deep_copy(lp.idx, 0);
+            Kokkos::parallel_for("afterburner heuristic", TeamPolicy(num_pos, Kokkos::AUTO), KOKKOS_LAMBDA(const TeamMember &t) {
+                vertex_t u = lp.vtx1(t.league_rank());
+                weight_t u_gain = lp.gain1(u);
                 partition_t old_u_id = lp.partition.map(u);
                 partition_t new_u_id = lp.dest_part(u);
 
-                weight_t update = 0;
-                for (u32 j = g.neighborhood(u); j < g.neighborhood(u + 1); ++j) {
-                    vertex_t v = g.edges_v(j);
-
-                    weight_t v_gain = lp.pre_gain(v);
+                weight_t change = 0;
+                Kokkos::parallel_reduce(Kokkos::TeamThreadRange(t, g.neighborhood(u), g.neighborhood(u + 1)), [&](const u32 i, weight_t &update) {
+                    vertex_t v = g.edges_v(i);
+                    weight_t v_gain = lp.gain1(v);
 
                     if (v_gain > u_gain || (v_gain == u_gain && v < u)) {
-                        partition_t v_old_id = lp.partition.map(v);
                         partition_t v_new_id = lp.dest_part(v);
-                        weight_t w = g.edges_w(j);
+                        partition_t v_old_id = lp.partition.map(v);
+                        weight_t w = g.edges_w(i);
 
-                        if (v_new_id == old_u_id) { update -= w; }
-                        if (v_new_id == new_u_id) { update += w; }
-
-                        if (v_old_id == old_u_id) { update += w; }
-                        if (v_old_id == new_u_id) { update -= w; }
+                        if (v_new_id == old_u_id) { update -= w; } else if (v_new_id == new_u_id) { update += w; }
+                        if (v_old_id == old_u_id) { update += w; } else if (v_old_id == new_u_id) { update -= w; }
                     }
-                }
-
-                if (u_gain + update >= 0) {
-                    bc.lock(u) = 1;
-                    lp.id(u) = new_u_id;
-
-                    u32 idx = Kokkos::atomic_fetch_inc(&lp.moves_idx());
-                    lp.moves(idx) = u;
-                }
+                }, change);
+                t.team_barrier();
+                Kokkos::single(Kokkos::PerTeam(t), [&]() {
+                    if (u_gain + change >= 0) {
+                        bc.lock(u) = 1;
+                        u32 idx = Kokkos::atomic_fetch_inc(&lp.idx());
+                        lp.vtx2(idx) = u;
+                    }
+                });
             });
-
-            Kokkos::deep_copy(lp.n_moves, lp.moves_idx);
+            Kokkos::fence();
+            u32 t;
+            Kokkos::deep_copy(t, lp.idx);
+            num_pos = (vertex_t) t;
 
             KOKKOS_PROFILE_FENCE();
         }
+        return Kokkos::subview(lp.vtx2, std::make_pair(0, num_pos));
     }
 
-    inline void jetrw(JetLabelPropagation &lp,
-                      Graph &g,
-                      BlockConnectivity &bc) {
-        weight_t opt_weight = (weight_t) ((f64) g.g_weight / (f64) lp.k);
-        weight_t max_b_w = (weight_t) (lp.lmax * 0.99);
+    inline DeviceVertex rebalance_strong(LabelPropagation &lp, const Graph &g, const BlockConn &bc) {
+        weight_t opt_weight = (g.g_weight + lp.k - 1) / lp.k;
+        weight_t max_b_w = std::max(opt_weight + 1, (weight_t) ((f64) lp.lmax * 0.99));
+
+        vertex_t sections = MAX_SECTIONS;
+        vertex_t section_size = (g.n + sections * lp.k) / (sections * lp.k);
+        if (section_size < 4096) {
+            section_size = 4096;
+            sections = (g.n + section_size * lp.k) / (section_size * lp.k);
+        }
+        vertex_t t_minibuckets = MAX_BUCKETS * lp.k * sections;
+
+        //use minibuckets within each gain bucket to reduce atomic contention
+        //because the number of gain buckets is small
+        auto bucket_sizes = Kokkos::subview(lp.gain1, std::make_pair(0, t_minibuckets + 1));
+        Kokkos::deep_copy(DeviceExecutionSpace(), bucket_sizes, 0);
+
+        auto bid = lp.vtx2;
+
+        // Determine maximum allowed vertex weight
+        {
+            ScopedTimer _t("refinement", "jetrs", "find_max_vwgt");
+
+            Kokkos::parallel_reduce("find max size", lp.k, KOKKOS_LAMBDA(const partition_t id, weight_t &update) {
+                weight_t size = lp.partition.bweights(id);
+                if (size < max_b_w) {
+                    weight_t cap = max_b_w - size;
+                    if (cap > update) {
+                        update = cap;
+                    }
+                }
+            }, Kokkos::Max(lp.max_vwgt));
+
+            KOKKOS_PROFILE_FENCE();
+        }
+        //
+        {
+            ScopedTimer _t("refinement", "jetrs", "score_candidates");
+
+            Kokkos::parallel_for("assign move scores part1", g.n, KOKKOS_LAMBDA(const vertex_t u) {
+                partition_t u_id = lp.partition.map(u);
+                bid(u) = -1;
+
+                if (lp.partition.bweights(u_id) > lp.lmax && g.weights(u) <= 2 * lp.max_vwgt() && g.weights(u) < 2 * (lp.partition.bweights(u_id) - opt_weight)) {
+                    weight_t own_conn = 0;
+                    weight_t count = 0;
+                    weight_t sum_conn = 0;
+
+                    u32 r_beg = bc.row(u);
+                    u32 r_len = bc.sizes(u);
+                    u32 r_end = r_beg + r_len;
+                    for (vertex_t i = r_beg; i < r_end; i++) {
+                        partition_t id = bc.ids(i);
+                        if (id == u_id) {
+                            own_conn = bc.weights(i);
+                            continue;
+                        }
+                        if (id != NULL_PART && id != HASH_RECLAIM && lp.partition.bweights(id) < max_b_w) {
+                            sum_conn += bc.weights(i);
+                            count += 1;
+                        }
+                    }
+
+                    if (count == 0) count = 1;
+                    weight_t gain = (sum_conn / count) - own_conn;
+                    vertex_t gain_type = gain_bucket(gain, Kokkos::min(g.weights(u), lp.partition.bweights(u_id) - lp.lmax));
+
+                    //add to count of appropriate bucket
+                    if (gain_type < MAX_BUCKETS) {
+                        vertex_t g_id = (MAX_BUCKETS * u_id + gain_type) * sections + (u % sections) + 1;
+                        bid(u) = g_id;
+                        lp.temp_gain(u) = Kokkos::atomic_fetch_add(&bucket_sizes(g_id), g.weights(u));
+                    }
+                }
+            });
+
+            KOKKOS_PROFILE_FENCE();
+        }
+
+        const vertex_t width = MAX_BUCKETS * sections;
+        auto bucket_offsets = bucket_sizes;
+        DeviceVertex only_moves;
+        //
+        {
+            ScopedTimer _t("refinement", "jetrs", "get_evictions");
+
+            //exclusive prefix sum to compute offsets
+            //bucket_sizes is an alias of bucket_offsets
+            if (t_minibuckets < 10000) {
+                Kokkos::parallel_for("scan score buckets", TeamPolicy(1, 1024), KOKKOS_LAMBDA(const TeamMember &t) {
+                    //this scan is small so do it within a team instead of an entire grid to save kernel launch time
+                    Kokkos::parallel_scan(Kokkos::TeamThreadRange(t, 0, t_minibuckets + 1), [&](const vertex_t i, weight_t &update, const bool final) {
+                        weight_t x = bucket_sizes(i);
+                        if (final) {
+                            bucket_offsets(i) = update;
+                        }
+                        update += x;
+                    });
+                });
+            } else {
+                Kokkos::parallel_scan("scan score buckets", Policy(0, t_minibuckets + 1), KOKKOS_LAMBDA(const vertex_t &i, weight_t &update, const bool final) {
+                    weight_t x = bucket_sizes(i);
+                    if (final) {
+                        bucket_offsets(i) = update;
+                    }
+                    update += x;
+                });
+            }
+            auto moves = lp.vtx1;
+
+            Kokkos::deep_copy(lp.evict_adjust, 0);
+            Kokkos::parallel_scan("filter scores below cutoff", g.n, KOKKOS_LAMBDA(const vertex_t i, vertex_t &update, const bool final) {
+                vertex_t b = bid(i);
+                if (b != -1) {
+                    partition_t p = lp.partition.map(i);
+                    vertex_t begin_bucket = p * width;
+                    weight_t score = lp.temp_gain(i) + bucket_offsets(b) - bucket_offsets(begin_bucket);
+                    weight_t limit = lp.partition.bweights(p) - lp.lmax;
+                    if (score < limit) {
+                        if (final) {
+                            if (score + g.weights(i) >= limit) {
+                                lp.evict_adjust(p) = score + g.weights(i);
+                            }
+                            moves(update) = i;
+                        }
+                        update++;
+                    }
+                }
+            }, lp.scan_host);
+            Kokkos::fence();
+
+            vertex_t num_moves = lp.scan_host();
+            only_moves = Kokkos::subview(moves, std::make_pair(0, num_moves));
+        }
+        vertex_t num_moves = (vertex_t) only_moves.extent(0);
+
+        // the rest of this method determines the destination part for each evicted vtx
+        //assign consecutive chunks of vertices to undersized parts using scan result
+        //
+        {
+            ScopedTimer _t("refinement", "jetrs", "cookie_cutter");
+
+            Kokkos::parallel_for("cookie cutter", TeamPolicy(1, Kokkos::AUTO), KOKKOS_LAMBDA(const TeamMember &t) {
+                Kokkos::parallel_scan(Kokkos::TeamThreadRange(t, 0, lp.k), [&](const partition_t p, weight_t &update, const bool final) {
+                    weight_t add = lp.evict_adjust(p);
+                    vertex_t begin_bucket = MAX_BUCKETS * p * sections;
+                    if (add == 0) {
+                        // evict_adjust(p) isn't set if there aren't enough evictions to balance part p
+                        add = bucket_offsets(begin_bucket + MAX_BUCKETS * sections) - bucket_offsets(begin_bucket);
+                    }
+                    if (final) {
+                        lp.evict_adjust(p) = bucket_offsets(begin_bucket) - update;
+                    }
+                    update += add;
+                    if (final && p + 1 == lp.k) {
+                        lp.max_vwgt() = update;
+                    }
+                });
+                Kokkos::parallel_scan(Kokkos::TeamThreadRange(t, 0, lp.k), [&](const partition_t p, weight_t &update, const bool final) {
+                    if (final && p == 0) {
+                        lp.evict_start(0) = 0;
+                    }
+                    if (max_b_w > lp.partition.bweights(p)) {
+                        update += max_b_w - lp.partition.bweights(p);
+                    }
+                    if (final) {
+                        lp.evict_start(p + 1) = update;
+                    }
+                });
+            });
+
+            KOKKOS_PROFILE_FENCE();
+        }
+        //
+        {
+            ScopedTimer _t("refinement", "jetrs", "adjust_scores");
+
+            Kokkos::parallel_for("adjust scores", num_moves, KOKKOS_LAMBDA(const vertex_t x) {
+                vertex_t v = only_moves(x);
+                partition_t p = lp.partition.map(v);
+                vertex_t b = bid(v);
+                weight_t score = lp.temp_gain(v) + bucket_offsets(b) - lp.evict_adjust(p);
+                lp.temp_gain(v) = score;
+            });
+
+            KOKKOS_PROFILE_FENCE();
+        }
+        //
+        {
+            ScopedTimer _t("refinement", "jetrs", "select_destinations");
+
+            Kokkos::parallel_for("select destination parts (rs)", num_moves, KOKKOS_LAMBDA(const vertex_t i) {
+                int p = 0;
+                vertex_t v = only_moves(i);
+                while (p < lp.k) {
+                    //find chunk that contains i
+                    while (p <= lp.k && lp.evict_start(p) <= lp.temp_gain(v)) {
+                        p++;
+                    }
+                    p--;
+                    if (p < lp.k && g.weights(v) / 2 <= lp.evict_start(p + 1) - lp.temp_gain(v)) {
+                        // at least half of vtx weight lies in chunk p
+                        lp.dest_part(v) = p;
+                        return;
+                    } else if (p < lp.k) {
+                        lp.temp_gain(v) = Kokkos::atomic_fetch_add(&lp.max_vwgt(), g.weights(v));
+                    }
+                }
+                lp.dest_part(v) = lp.partition.map(v);
+            });
+
+            KOKKOS_PROFILE_FENCE();
+        }
+        return only_moves;
+    }
+
+    inline DeviceVertex rebalance_weak(LabelPropagation &lp, Graph &g, const BlockConn &bc) {
+        weight_t opt_weight = (g.g_weight + lp.k - 1) / lp.k;
+        weight_t max_b_w = (weight_t) ((f64) lp.lmax * 0.99);
         if (max_b_w < lp.lmax - 100) { max_b_w = lp.lmax - 100; }
-        u32 t_minibuckets = lp.k * MAX_BUCKETS * lp.sections;
-        u32 width = MAX_BUCKETS * lp.sections;
+
+        vertex_t sections = MAX_SECTIONS;
+        vertex_t section_size = (g.n + sections * lp.k) / (sections * lp.k);
+        if (section_size < 4096) {
+            section_size = 4096;
+            sections = (g.n + section_size * lp.k) / (section_size * lp.k);
+        }
+        vertex_t t_minibuckets = MAX_BUCKETS * lp.k * sections;
+
+        //use minibuckets within each gain bucket to reduce atomic contention
+        //because the number of gain buckets is small
+        auto bucket_offsets = Kokkos::subview(lp.gain1, std::make_pair(0, t_minibuckets + 1));
+        const auto &bucket_sizes = bucket_offsets;
+        Kokkos::deep_copy(DeviceExecutionSpace(), bucket_sizes, 0);
 
         // determine underloaded blocks
         {
             ScopedTimer _t("refinement", "jetrw", "underloaded_blocks");
 
-            Kokkos::deep_copy(lp.n_underloaded_blocks, 0);
-
-            Kokkos::parallel_for("underloaded_blocks", lp.k, KOKKOS_LAMBDA(const partition_t id) {
-                if (lp.partition.bweights(id) < max_b_w) {
-                    u32 idx = Kokkos::atomic_fetch_inc(&lp.n_underloaded_blocks());
-                    lp.underloaded_blocks(idx) = id;
-                }
-            });
+            Kokkos::parallel_for("init undersized parts list", TeamPolicy(1, Kokkos::AUTO), KOKKOS_LAMBDA(const TeamMember &t) {
+                                     //this scan is small so do it within a team instead of an entire grid to save kernel launch time
+                                     Kokkos::parallel_scan(Kokkos::TeamThreadRange(t, 0, lp.k), [&](const partition_t i, partition_t &update, const bool final) {
+                                         if (lp.partition.bweights(i) < max_b_w) {
+                                             if (final) {
+                                                 lp.underloaded_blocks(update) = i;
+                                             }
+                                             update++;
+                                         }
+                                         if (final && i + 1 == lp.k) {
+                                             lp.n_underloaded_blocks() = update;
+                                         }
+                                     });
+                                 }
+            );
 
             KOKKOS_PROFILE_FENCE();
         }
@@ -386,358 +876,249 @@ namespace GPU_HeiPa {
         // determine best block
         {
             ScopedTimer _t("refinement", "jetrw", "best_block");
-            Kokkos::deep_copy(lp.temp_moves_idx, 0);
-            Kokkos::deep_copy(lp.bucket_sizes, 0);
 
-            Kokkos::parallel_for("best_block", bc.n, KOKKOS_LAMBDA(const vertex_t u) {
-                partition_t u_id = lp.partition.map(u);
-                weight_t u_id_w = lp.partition.bweights(u_id);
-                weight_t u_w = g.weights(u);
-
-                if (u_id_w <= lp.lmax) { return; }                                      // u_id not overloaded
-                if ((f64) u_w >= HEAVY_ALPHA * ((f64) u_id_w - opt_weight)) { return; } // vertex is too heavy
-
-                partition_t best_id = u_id;
-                weight_t best_id_w = -max_sentinel<weight_t>();
-                weight_t own_conn = 0;
-
-                u32 r_beg = bc.row(u);
-                u32 r_len = bc.sizes(u);
-                u32 r_end = r_beg + r_len;
-                for (u32 i = r_beg; i < r_end; ++i) {
-                    partition_t id = bc.ids(i);
-                    weight_t w = bc.weights(i);
-
-                    own_conn = id == u_id ? w : own_conn;
-
-                    if (id == NULL_PART) { continue; }                      // no valid entry
-                    if (lp.partition.bweights(id) >= max_b_w) { continue; } // dont move into non underloaded partition
-
-                    if (w > best_id_w) {
-                        best_id = id;
-                        best_id_w = w;
-                    }
-                }
-
-                weight_t gain = best_id_w - own_conn;
-
-                if (gain <= 0) {
-                    if (lp.n_underloaded_blocks() == 0) {
-                        // no good move but also no underloaded block
-                        return;
-                    }
-
-                    best_id = lp.underloaded_blocks(u % lp.n_underloaded_blocks());
-                    gain = -own_conn;
-                }
-
-                if (best_id != u_id) {
-                    u32 b = gain_bucket(gain, u_w);
-                    u32 g_id = (MAX_BUCKETS * u_id + b) * lp.sections + (u % lp.sections);
-
-                    lp.save_atomic(u) = Kokkos::atomic_fetch_add(&lp.bucket_sizes(g_id), u_w); // prefix inside this bucket
-                    lp.id(u) = best_id;
-                    lp.bid(u) = g_id;
-
-                    u32 idx = Kokkos::atomic_fetch_inc(&lp.temp_moves_idx());
-                    lp.temp_moves(idx) = u;
-                }
-            });
-
-            Kokkos::deep_copy(lp.temp_n_moves, lp.temp_moves_idx);
-            KOKKOS_PROFILE_FENCE();
-        }
-
-        // determine bucket offsets
-        {
-            ScopedTimer _t("refinement", "jetrw", "bucket_offsets");
-
-            // prefix sum for bucket offsets
-            Kokkos::parallel_scan("bucket_offsets", t_minibuckets + 1, KOKKOS_LAMBDA(const u32 i, weight_t &upd, const bool final_pass) {
-                weight_t val = lp.bucket_sizes(i);
-                if (final_pass) lp.bucket_offsets(i) = upd; // write old prefix
-                upd += val;
-            });
-            KOKKOS_PROFILE_FENCE();
-        }
-
-        // pick prefix
-        {
-            ScopedTimer _t("refinement", "jetrw", "pick_evictions");
-
-            Kokkos::deep_copy(lp.moves_idx, 0);
-
-            Kokkos::parallel_for("jetrw_pick_evictions", lp.temp_n_moves, KOKKOS_LAMBDA(const u32 i) {
-                vertex_t u = lp.temp_moves(i);
-                u32 b_id = lp.bid(u);
-
+            Kokkos::parallel_for("select destination parts (rw)", g.n, KOKKOS_LAMBDA(const vertex_t u) {
                 partition_t u_id = lp.partition.map(u);
 
-                // Per-part bucket range start
-                u32 p_begin = u_id * width;
+                if (lp.partition.bweights(u_id) > lp.lmax && g.weights(u) < 1.5 * (lp.partition.bweights(u_id) - opt_weight)) {
+                    partition_t best_id = u_id;
+                    weight_t best_id_w = 0;
+                    weight_t own_conn = 0;
 
-                // Jet's score computation
-                weight_t score = lp.save_atomic(u) + lp.bucket_offsets(b_id) - lp.bucket_offsets(p_begin);
+                    u32 r_beg = bc.row(u);
+                    u32 r_len = bc.sizes(u);
+                    u32 r_end = r_beg + r_len;
+                    for (vertex_t j = r_beg; j < r_end; j++) {
+                        partition_t id = bc.ids(j);
+                        weight_t w = bc.weights(j);
 
-                // Limit = overweight of part u_id
-                weight_t limit = lp.partition.bweights(u_id) - lp.lmax;
-                if (score < limit) {
-                    u32 idx = Kokkos::atomic_fetch_inc(&lp.moves_idx());
-                    lp.moves(idx) = u;
+                        if (id > NULL_PART && lp.partition.bweights(id) < max_b_w) {
+                            if (w > best_id_w) {
+                                best_id = id;
+                                best_id_w = w;
+                            }
+                        }
+                        if (id == u_id) {
+                            own_conn = bc.weights(j);
+                        }
+                    }
+                    if (best_id_w > 0) {
+                        lp.dest_part(u) = best_id;
+                        lp.temp_gain(u) = best_id_w - own_conn;
+                    } else {
+                        //choose arbitrary undersized part
+                        best_id = lp.underloaded_blocks(u % lp.n_underloaded_blocks());
+                        lp.dest_part(u) = best_id;
+                        lp.temp_gain(u) = -own_conn;
+                    }
+                } else {
+                    lp.dest_part(u) = u_id;
                 }
             });
 
-            Kokkos::deep_copy(lp.n_moves, lp.moves_idx);
+            KOKKOS_PROFILE_FENCE();
+        }
+
+        auto bid = lp.vtx2;
+        //
+        {
+            ScopedTimer _t("refinement", "jetrw", "assign_move_scores");
+
+            Kokkos::parallel_for("assign move scores", g.n, KOKKOS_LAMBDA(const vertex_t u) {
+                partition_t u_id = lp.partition.map(u);
+                partition_t best_id = lp.dest_part(u);
+                bid(u) = -1;
+                if (u_id != best_id) {
+                    weight_t gain = lp.temp_gain(u);
+                    vertex_t gain_type = gain_bucket(gain, g.weights(u));
+                    vertex_t g_id = (MAX_BUCKETS * u_id + gain_type) * sections + (u % sections);
+                    bid(u) = g_id;
+                    lp.temp_gain(u) = Kokkos::atomic_fetch_add(&bucket_sizes(g_id), g.weights(u));
+                }
+            });
 
             KOKKOS_PROFILE_FENCE();
         }
+
+        const vertex_t width = MAX_BUCKETS * sections;
+        //
+        {
+            ScopedTimer _t("refinement", "jetrw", "scan_score_buckets");
+
+            auto bucket_sizes = Kokkos::subview(lp.gain1, std::make_pair(0, t_minibuckets + 1));
+            auto bucket_offsets = bucket_sizes;
+            //exclusive prefix sum to compute offsets
+            //bucket_sizes is an alias of bucket_offsets
+            {
+                if (t_minibuckets < 10000) {
+                    Kokkos::parallel_for("scan score buckets", TeamPolicy(1, 1024), KOKKOS_LAMBDA(const TeamMember &t) {
+                        //this scan is small so do it within a team instead of an entire grid to save kernel launch time
+                        Kokkos::parallel_scan(Kokkos::TeamThreadRange(t, 0, t_minibuckets + 1), [&](const vertex_t i, weight_t &update, const bool final) {
+                            weight_t x = bucket_sizes(i);
+                            if (final) {
+                                bucket_offsets(i) = update;
+                            }
+                            update += x;
+                        });
+                    });
+                } else {
+                    Kokkos::parallel_scan("scan score buckets", Policy(0, t_minibuckets + 1), KOKKOS_LAMBDA(const vertex_t &i, weight_t &update, const bool final) {
+                        weight_t x = bucket_sizes(i);
+                        if (final) {
+                            bucket_offsets(i) = update;
+                        }
+                        update += x;
+                    });
+                }
+            }
+
+            KOKKOS_PROFILE_FENCE();
+        }
+
+        auto moves = lp.vtx1;
+        //
+        {
+            auto save_atomic = lp.temp_gain;
+            auto bid = lp.vtx2;
+
+            ScopedTimer _t("refinement", "jetrw", "filter_scores");
+
+            Kokkos::parallel_scan("filter scores below cutoff", Policy(0, g.n), KOKKOS_LAMBDA(const vertex_t i, vertex_t &update, const bool final) {
+                vertex_t b = bid(i);
+                if (b != -1) {
+                    partition_t p = lp.partition.map(i);
+                    vertex_t begin_bucket = p * width;
+                    weight_t score = save_atomic(i) + bucket_offsets(b) - bucket_offsets(begin_bucket);
+                    weight_t limit = lp.partition.bweights(p) - lp.lmax;
+                    if (score < limit) {
+                        if (final) {
+                            moves(update) = i;
+                        }
+                        update++;
+                    }
+                }
+            }, lp.scan_host);
+            Kokkos::fence();
+            KOKKOS_PROFILE_FENCE();
+        }
+        vertex_t num_moves = lp.scan_host();
+        DeviceVertex only_moves = Kokkos::subview(moves, std::make_pair(0, num_moves));
+        return only_moves;
     }
 
-    inline void jetrs(JetLabelPropagation &lp,
-                      Graph &g,
-                      BlockConnectivity &bc) {
-        weight_t opt_weight = (weight_t) ((f64) g.g_weight / (f64) lp.k);
-        weight_t max_b_w = std::max(opt_weight + 1, (weight_t) (lp.lmax * 0.99));
-        u32 t_minibuckets = lp.k * MAX_BUCKETS * lp.sections;
-        u32 width = MAX_BUCKETS * lp.sections;
+    KOKKOS_INLINE_FUNCTION
+    static weight_t lookup(const partition_t *keys, const weight_t *vals, const partition_t target, const u32 size) {
+        for (u32 i = 0; i < size; i++) {
+            u32 idx = ((u32) target + i) % size;
 
-        // Determine maximum allowed vertex weight
-        {
-            ScopedTimer _t("refinement", "jetrs", "find_max_vwgt");
-
-            Kokkos::parallel_reduce("find_max_vwgt", lp.k, KOKKOS_LAMBDA(const partition_t id, weight_t &update) {
-                weight_t size = lp.partition.bweights(id);
-                weight_t cap = max_b_w - size;
-                if (size < max_b_w && cap > update) {
-                    update = cap;
-                }
-            }, Kokkos::Max<weight_t, Kokkos::DefaultExecutionSpace>(lp.max_vwgt));
-            KOKKOS_PROFILE_FENCE();
+            if (keys[idx] == target) { return vals[idx]; }
+            if (keys[idx] == NULL_PART) { return 0; }
         }
-        //
-        {
-            ScopedTimer _t("refinement", "jetrs", "score_candidates");
-
-            Kokkos::deep_copy(lp.temp_moves_idx, 0);
-            Kokkos::deep_copy(lp.bucket_sizes, 0);
-
-            Kokkos::parallel_for("jetrs_score_candidates", bc.n, KOKKOS_LAMBDA(const vertex_t u) {
-                partition_t u_id = lp.partition.map(u);
-                weight_t u_w = g.weights(u);
-                weight_t u_id_w = lp.partition.bweights(u_id);
-
-                if (u_id_w <= lp.lmax) return;               // block not overloaded
-                if (u_w > 2 * (u_id_w - opt_weight)) return; // too heavy
-                if (u_w > 2 * lp.max_vwgt()) return;         // too heavy
-
-                weight_t own_conn = 0;
-                weight_t sum_other = 0;
-                u32 count_other = 0;
-
-                u32 r_beg = bc.row(u);
-                u32 r_len = bc.sizes(u);
-                u32 r_end = r_beg + r_len;
-
-                // Build average connectivity to "underloaded" blocks (< max_b_w)
-                for (u32 i = r_beg; i < r_end; ++i) {
-                    partition_t id = bc.ids(i);
-                    weight_t w = bc.weights(i);
-
-                    own_conn = (id == u_id) ? w : own_conn;
-
-                    if (id == NULL_PART) continue;                      // invalid entry
-                    if (id == u_id) continue;                           // don't move to self
-                    if (lp.partition.bweights(id) >= max_b_w) continue; // don't count overloaded destinations
-
-                    sum_other += w;
-                    count_other += 1;
-                }
-
-                if (count_other == 0) count_other = 1;
-
-                weight_t g_u = ((weight_t) ((f64) sum_other / (f64) count_other)) - own_conn;
-
-                // Map to gain bucket
-                u32 b = gain_bucket(g_u, Kokkos::min(u_w, u_id_w - lp.lmax));
-                if (b >= MAX_BUCKETS) return;
-
-                // minibucket id
-                u32 g_id = (MAX_BUCKETS * u_id + b) * lp.sections + (u % lp.sections) + 1;
-
-                // atomic prefix inside minibucket
-                lp.save_atomic(u) = Kokkos::atomic_fetch_add(&lp.bucket_sizes(g_id), u_w);
-                lp.bid(u) = g_id;
-
-                u32 idx = Kokkos::atomic_fetch_inc(&lp.temp_moves_idx());
-                lp.temp_moves(idx) = u;
-            });
-
-            Kokkos::deep_copy(lp.temp_n_moves, lp.temp_moves_idx);
-
-            KOKKOS_PROFILE_FENCE();
-        }
-
-        // --- 3. Prefix-sum over buckets (Jet: bucket_offsets) --------------------
-        {
-            ScopedTimer _t("refinement", "jetrs", "bucket_offsets");
-
-            Kokkos::parallel_scan("jetrs_bucket_offsets", t_minibuckets + 1, KOKKOS_LAMBDA(const u32 i, weight_t &upd, const bool final_pass) {
-                weight_t val = lp.bucket_sizes(i);
-                if (final_pass) lp.bucket_offsets(i) = upd;
-                upd += val;
-            });
-            KOKKOS_PROFILE_FENCE();
-        }
-
-        // --- 4. Select evicted vertices (Jet: get_evictions<true>) ---------------
-        //
-        {
-            ScopedTimer _t("refinement", "jetrs", "pick_evictions");
-
-            Kokkos::deep_copy(lp.evict_adjust, 0);
-            Kokkos::deep_copy(lp.moves_idx, 0);
-
-            Kokkos::parallel_for("jetrs_pick_evictions", lp.temp_n_moves, KOKKOS_LAMBDA(const u32 i) {
-                vertex_t u = lp.temp_moves(i);
-                u32 b_id = lp.bid(u);
-
-                partition_t u_id = lp.partition.map(u);
-                weight_t u_w = g.weights(u);
-
-                // Per-part bucket range start
-                u32 p_begin = u_id * width;
-
-                // Jet's score computation
-                weight_t score = lp.save_atomic(u) + lp.bucket_offsets(b_id) - lp.bucket_offsets(p_begin);
-
-                // Limit = overweight of part u_id
-                weight_t limit = lp.partition.bweights(u_id) - lp.lmax;
-                if (score < limit) {
-                    // Jet: if this vertex straddles the limit, record tighter adjust
-                    if (score + u_w >= limit) {
-                        lp.evict_adjust(u_id) = score + u_w;
-                    }
-                    u32 idx = Kokkos::atomic_fetch_add(&lp.moves_idx(), 1);
-                    lp.moves(idx) = u;
-                }
-            });
-
-            Kokkos::deep_copy(lp.n_moves, lp.moves_idx);
-
-            std::swap(lp.n_moves, lp.temp_n_moves);
-            std::swap(lp.moves, lp.temp_moves);
-
-            KOKKOS_PROFILE_FENCE();
-        }
-
-        if (lp.temp_n_moves == 0) {
-            return;
-        }
-
-        // --- 5. Cookie-cutter destination assignment (Jet) -----------------------
-        // evict_start: prefix over per-part capacity
-        //
-        {
-            ScopedTimer _t("refinement", "jetrs", "cookie_cutter");
-
-            // Team policy with a single team, like Jet
-            Kokkos::parallel_for("jetrs_cookie_cutter", Kokkos::TeamPolicy<Kokkos::DefaultExecutionSpace>(1, Kokkos::AUTO), KOKKOS_LAMBDA(const Kokkos::TeamPolicy<Kokkos::DefaultExecutionSpace>::member_type &t) {
-                // First scan: adjust evict_adjust and set max_vwgt
-                Kokkos::parallel_scan(Kokkos::TeamThreadRange(t, 0, lp.k), [&](const partition_t p, weight_t &upd, const bool final_pass) {
-                    weight_t add = lp.evict_adjust(p);
-                    u32 begin_bucket = MAX_BUCKETS * p * lp.sections;
-                    if (add == 0) {
-                        add = lp.bucket_offsets(begin_bucket + width) - lp.bucket_offsets(begin_bucket);
-                    }
-                    if (final_pass) {
-                        lp.evict_adjust(p) = lp.bucket_offsets(begin_bucket) - upd;
-                    }
-                    upd += add;
-                    if (final_pass && p + 1 == lp.k) {
-                        lp.max_vwgt() = upd;
-                    }
-                });
-
-                // Second scan: construct evict_start (capacity prefix)
-                Kokkos::parallel_scan(Kokkos::TeamThreadRange(t, 0, lp.k), [&](const partition_t p, weight_t &upd, const bool final_pass) {
-                    if (final_pass && p == 0) {
-                        lp.evict_start(0) = 0;
-                    }
-                    if (max_b_w > lp.partition.bweights(p)) {
-                        upd += max_b_w - lp.partition.bweights(p);
-                    }
-                    if (final_pass) {
-                        lp.evict_start(p + 1) = upd;
-                    }
-                });
-            });
-            KOKKOS_PROFILE_FENCE();
-        }
-
-        // Adjust scores with evict_adjust (Jet: "adjust scores")
-        {
-            ScopedTimer _t("refinement", "jetrs", "adjust_scores");
-
-            Kokkos::parallel_for("jetrs_adjust_scores", lp.temp_n_moves, KOKKOS_LAMBDA(const u32 i) {
-                vertex_t u = lp.temp_moves(i);
-                partition_t u_id = lp.partition.map(u);
-                u32 b_id = lp.bid(u);
-
-                weight_t score = lp.save_atomic(u) + lp.bucket_offsets(b_id) - lp.evict_adjust(u_id);
-                lp.save_atomic(u) = score;
-            });
-            KOKKOS_PROFILE_FENCE();
-        }
-
-        // Final destination selection (Jet's "select destination parts (rs)")
-        {
-            ScopedTimer _t("refinement", "jetrs", "select_destinations");
-
-            Kokkos::deep_copy(lp.moves_idx, 0);
-
-            Kokkos::parallel_for("jetrs_select_dest", lp.temp_n_moves, KOKKOS_LAMBDA(const u32 i) {
-                vertex_t u = lp.temp_moves(i);
-                weight_t u_w = g.weights(u);
-                partition_t old_p = lp.partition.map(u);
-
-                int p = 0;
-
-                while (p < (int) lp.k) {
-                    // Find chunk p where this score lies
-                    while (p <= (int) lp.k && lp.evict_start(p) <= lp.save_atomic(u)) { ++p; }
-                    --p;
-                    if (p < (int) lp.k && (u_w / 2) <= (lp.evict_start(p + 1) - lp.save_atomic(u))) {
-                        u32 idx = Kokkos::atomic_fetch_inc(&lp.moves_idx());
-                        lp.moves(idx) = u;
-
-                        lp.id(u) = (partition_t) p;
-                        return;
-                    }
-                    if (p < (int) lp.k) {
-                        // overflow: push to the end via max_vwgt
-                        lp.save_atomic(u) = Kokkos::atomic_fetch_add(&lp.max_vwgt(), u_w);
-                    }
-                }
-            });
-
-            Kokkos::deep_copy(lp.n_moves, lp.moves_idx);
-
-            KOKKOS_PROFILE_FENCE();
-        }
+        return 0;
     }
 
-    inline std::pair<weight_t, weight_t> refine(Graph &g,
-                                                Partition &partition,
-                                                partition_t k,
-                                                weight_t lmax,
-                                                u32 level,
-                                                weight_t curr_edge_cut,
-                                                weight_t curr_weight,
-                                                KokkosMemoryStack &mem_stack) {
-        JetLabelPropagation lp = initialize_lp(g.n, g.m, k, lmax, mem_stack);
+    inline void perform_moves(LabelPropagation &lp,
+                              const Graph &g,
+                              const BlockConn &bc,
+                              const DeviceVertex &moves,
+                              weight_t &curr_max_weight,
+                              weight_t &curr_cut) {
+        u32 n_moves = (u32) moves.extent(0);
 
-        f64 conn_c = 0.75;
-        if (level == 0) { conn_c = 0.25; }
+        // first change in cut
+        {
+            ScopedTimer _t("refinement", "JetLabelPropagation", "cut_change_1");
+
+            Kokkos::parallel_reduce("cut_change_1", n_moves, KOKKOS_LAMBDA(const u32 &i, weight_t &gain_update) {
+                vertex_t u = moves(i);
+                partition_t old_id = lp.partition.map(u);
+                partition_t new_id = lp.dest_part(u);
+
+                u32 beg = bc.row(u);
+                u32 len = bc.sizes(u);
+                weight_t old_conn = lookup(bc.ids.data() + beg, bc.weights.data() + beg, old_id, len);
+                weight_t new_conn = lookup(bc.ids.data() + beg, bc.weights.data() + beg, new_id, len);
+                gain_update += new_conn - old_conn;
+            }, lp.cut_change1);
+
+            KOKKOS_PROFILE_FENCE();
+        }
+
+        // update mapping
+        {
+            ScopedTimer _t("refinement", "JetLabelPropagation", "update_mapping");
+
+            Kokkos::parallel_for("update_mapping", n_moves, KOKKOS_LAMBDA(const u32 i) {
+                vertex_t u = moves(i);
+                partition_t old_id = lp.partition.map(u);
+                partition_t new_id = lp.dest_part(u);
+
+                bc.dest_cache(u) = NULL_PART;
+                Kokkos::atomic_add(&lp.partition.bweights(old_id), -g.weights(u));
+                Kokkos::atomic_add(&lp.partition.bweights(new_id), g.weights(u));
+
+                lp.partition.map(u) = new_id;
+                lp.dest_part(u) = old_id;
+            });
+
+            KOKKOS_PROFILE_FENCE();
+        }
+
+        // update block conn
+        {
+            ScopedTimer _t("refinement", "JetLabelPropagation", "update_block_conn");
+
+            if (n_moves > (u32) g.n / 10) {
+                update_large(lp, g, bc, moves);
+            } else {
+                update_small(lp, g, bc, moves);
+            }
+
+            KOKKOS_PROFILE_FENCE();
+        }
+
+        // second change in cut
+        {
+            ScopedTimer _t("refinement", "JetLabelPropagation", "cut_change_2");
+
+            Kokkos::parallel_reduce("cut_change_2", n_moves, KOKKOS_LAMBDA(const vertex_t &i, weight_t &gain_update) {
+                vertex_t u = moves(i);
+                partition_t old_id = lp.dest_part(u);
+                partition_t new_id = lp.partition.map(u);
+
+                u32 beg = bc.row(u);
+                u32 len = bc.sizes(u);
+                weight_t p_con = lookup(bc.ids.data() + beg, bc.weights.data() + beg, old_id, len);
+                weight_t b_con = lookup(bc.ids.data() + beg, bc.weights.data() + beg, new_id, len);
+                gain_update += b_con - p_con;
+            }, lp.cut_change2);
+
+            KOKKOS_PROFILE_FENCE();
+        }
+
+        // update max weight
+        {
+            ScopedTimer _t("refinement", "JetLabelPropagation", "update_max_weight");
+
+            curr_max_weight = get_max_weight(lp.partition.bweights, lp.k, lp.max_part);
+
+            KOKKOS_PROFILE_FENCE();
+        }
+
+        // update cut
+        curr_cut -= (lp.cut_change2() + lp.cut_change1()) / 2;
+    }
+
+
+    inline std::pair<weight_t, weight_t> jet_refine(Graph &g,
+                                                    Partition &partition,
+                                                    partition_t k,
+                                                    weight_t lmax,
+                                                    u32 level,
+                                                    weight_t curr_edge_cut,
+                                                    weight_t curr_max_weight,
+                                                    KokkosMemoryStack &mem_stack) {
+        LabelPropagation lp = initialize_label_propagation(g.n, g.m, k, lmax, mem_stack);
 
         // copy partition
         {
@@ -746,153 +1127,74 @@ namespace GPU_HeiPa {
             KOKKOS_PROFILE_FENCE();
         }
 
-        // initial build of block connectivity
-        BlockConnectivity bc = from_scratch(g, lp.partition, mem_stack);
-
         weight_t best_edge_cut = curr_edge_cut;
-        weight_t best_weight = curr_weight;
+        weight_t best_max_weight = curr_max_weight;
 
-        u32 balance_iterations = 0;
+        ASSERT(curr_edge_cut == get_total_cut(g, curr_partition.map) / 2);
+        ASSERT(curr_weight == max_weight(curr_partition));
+
+        BlockConn bc = init_BlockConn(lp, g, mem_stack);
+
+        f64 filter_ratio = 0.75;
+        if (level == 0) { filter_ratio = 0.25; }
+
+        u32 balance_iteration = 0;
         u32 iteration = 0;
         while (iteration < N_MAX_ITERATIONS) {
             iteration += 1;
 
-            if (curr_weight <= lp.lmax) {
-                jetlp(lp, g, bc, conn_c);
-                // assert_bc(bc, g, lp.partition, lp.k);
-                balance_iterations = 0;
+            DeviceVertex moves;
+            if (curr_max_weight <= lmax) {
+                moves = jet_lp(lp, g, bc, filter_ratio);
+                balance_iteration = 0;
             } else {
-                if (balance_iterations < N_MAX_WEAK_ITERATIONS) {
-                    jetrw(lp, g, bc);
-                    // assert_bc(bc, g, lp.partition, lp.k);
+                if (balance_iteration < N_MAX_WEAK_ITERATIONS) {
+                    moves = rebalance_weak(lp, g, bc);
                 } else {
-                    jetrs(lp, g, bc);
-                    // assert_bc(bc, g, lp.partition, lp.k);
+                    moves = rebalance_strong(lp, g, bc);
                 }
-                balance_iterations++;
+                balance_iteration++;
             }
 
-            if (lp.n_moves == 0) { continue; }
+            u32 n_moves = (u32) moves.extent(0);
+            if (n_moves == 0) { continue; }
 
-            // 1) compute cut change from "old" connectivity
-            {
-                ScopedTimer _t("refinement", "JetLabelPropagation", "temp_cut_delta");
+            perform_moves(lp, g, bc, moves, curr_max_weight, curr_edge_cut);
 
-                Kokkos::parallel_reduce("temp_cut_delta", lp.n_moves, KOKKOS_LAMBDA(const u32 i, weight_t &local) {
-                    vertex_t u = lp.moves(i);
-                    partition_t old_b = lp.partition.map(u); // current block
-                    partition_t new_b = lp.id(u);            // selected destination
-
-                    MY_KOKKOS_ASSERT(old_b != new_b);
-
-                    // connectivity of u to its old / new blocks BEFORE moving
-                    weight_t old_con = 0;
-                    weight_t new_con = 0;
-
-                    u32 r_beg = bc.row(u);
-                    u32 r_len = bc.sizes(u);
-                    u32 r_end = r_beg + r_len;
-                    for (u32 j = r_beg; j < r_end; ++j) {
-                        partition_t id = bc.ids(j);
-                        weight_t w = bc.weights(j);
-
-                        old_con = id == old_b ? w : old_con;
-                        new_con = id == new_b ? w : new_con;
-                    }
-
-                    // Jet uses (b_con - p_con). Sign/factor must match your cut definition.
-                    local += (new_con - old_con);
-                }, lp.temp_cut_delta);
-
-                KOKKOS_PROFILE_FENCE();
-            }
-
-            // move in block connectivity
-            move_bc(bc, g, lp.partition, lp.id, lp.moves, lp.n_moves);
-
-            // 5) compute cut change from "new" connectivity
-            {
-                ScopedTimer _t("refinement", "JetLabelPropagation", "cut_delta");
-
-                weight_t cut_delta = 0;
-                Kokkos::parallel_reduce("cut_delta", lp.n_moves, KOKKOS_LAMBDA(const u32 i, weight_t &local) {
-                    vertex_t u = lp.moves(i);
-                    weight_t u_w = g.weights(u);
-                    partition_t u_old_id = lp.partition.map(u);
-                    partition_t u_new_id = lp.id(u);
-
-                    MY_KOKKOS_ASSERT(u_old_id != u_new_id);
-                    MY_KOKKOS_ASSERT(u_old_id < lp.partition.k);
-                    MY_KOKKOS_ASSERT(u_new_id < lp.partition.k);
-
-                    // connectivity AFTER connectivity update
-                    weight_t old_con = 0;
-                    weight_t new_con = 0;
-
-                    u32 r_beg = bc.row(u);
-                    u32 r_len = bc.sizes(u);
-                    u32 r_end = r_beg + r_len;
-                    for (u32 j = r_beg; j < r_end; ++j) {
-                        partition_t id = bc.ids(j);
-                        weight_t w = bc.weights(j);
-
-                        old_con = id == u_old_id ? w : old_con;
-                        new_con = id == u_new_id ? w : new_con;
-                    }
-
-                    local += (new_con - old_con);
-
-                    if (i == 0) { local += lp.temp_cut_delta(); }
-
-                    lp.partition.map(u) = u_new_id;
-                    Kokkos::atomic_add(&lp.partition.bweights(u_old_id), -u_w);
-                    Kokkos::atomic_add(&lp.partition.bweights(u_new_id), u_w);
-                }, cut_delta);
-
-                curr_edge_cut -= cut_delta / 2;
-
-                KOKKOS_PROFILE_FENCE();
-            }
-
-            // recalculate max weight
-            {
-                ScopedTimer _t("refinement", "JetLabelPropagation", "get_max_weight");
-                curr_weight = max_weight(lp.partition);
-                KOKKOS_PROFILE_FENCE();
-            }
-
-            if (best_weight > lp.lmax && curr_weight < best_weight) {
+            if (best_max_weight > lmax && curr_max_weight < best_max_weight) {
                 // copy the partition
                 {
                     ScopedTimer _t("refinement", "JetLabelPropagation", "copy_partition");
 
                     copy_into(partition, lp.partition, g.n);
                     best_edge_cut = curr_edge_cut;
-                    best_weight = curr_weight;
+                    best_max_weight = curr_max_weight;
                     iteration = 0;
 
                     KOKKOS_PROFILE_FENCE();
                 }
-            } else if (curr_edge_cut < best_edge_cut && (curr_weight <= lp.lmax || curr_weight < best_weight)) {
-                if ((f64) curr_edge_cut < PHI * (f64) best_edge_cut) { iteration = 0; } {
+            } else if (curr_edge_cut < best_edge_cut && (curr_max_weight <= lmax || curr_max_weight < best_max_weight)) {
+                if ((f64) curr_edge_cut < PHI * (f64) best_edge_cut) { iteration = 0; }
+                //
+                {
                     ScopedTimer _t("refinement", "JetLabelPropagation", "copy_partition");
 
                     copy_into(partition, lp.partition, g.n);
                     best_edge_cut = curr_edge_cut;
-                    best_weight = curr_weight;
+                    best_max_weight = curr_max_weight;
 
                     KOKKOS_PROFILE_FENCE();
                 }
             }
+
+            ASSERT(curr_edge_cut == get_total_cut(g, curr_partition.map) / 2);
+            ASSERT(curr_weight == max_weight(curr_partition));
         }
 
-        free_bc(bc, mem_stack);
-        free_lp(lp, mem_stack);
+        free_BlockConn(bc, mem_stack);
+        free_LabelPropagation(lp, mem_stack);
 
-        assert_back_is_empty(mem_stack);
-
-        return std::make_pair(best_edge_cut, best_weight);
+        return std::make_pair(best_edge_cut, best_max_weight);
     }
 }
-
 #endif //GPU_HEIPA_JET_LABEL_PROPAGATION_H

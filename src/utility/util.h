@@ -163,8 +163,9 @@ namespace GPU_HeiPa {
         return header;
     }
 
+    template<typename T>
     inline void str_to_ints(const std::string &str,
-                            std::vector<u64> &ints) {
+                            std::vector<T> &ints) {
         ints.resize(str.size());
 
         size_t idx = 0;
@@ -176,57 +177,13 @@ namespace GPU_HeiPa {
                 idx += curr_number != 0;
                 curr_number = 0;
             } else {
-                curr_number = curr_number * 10 + (u64) (c - '0');
+                curr_number = curr_number * 10 + (T) (c - '0');
             }
         }
 
         ints[idx] = curr_number;
         idx += curr_number != 0;
         ints.resize(idx);
-    }
-
-    inline void str_to_ints(const std::string &str,
-                            std::vector<int> &ints) {
-        ints.resize(str.size());
-
-        size_t idx = 0;
-        int curr_number = 0;
-
-        for (const char c: str) {
-            if (c == ' ') {
-                ints[idx] = curr_number;
-                idx += curr_number != 0;
-                curr_number = 0;
-            } else {
-                curr_number = curr_number * 10 + (int) (c - '0');
-            }
-        }
-
-        ints[idx] = curr_number;
-        idx += curr_number != 0;
-        ints.resize(idx);
-    }
-
-    inline size_t str_to_ints(const std::string &str,
-                              std::vector<vertex_t> &ints) noexcept {
-        size_t idx = 0;
-        vertex_t curr_number = 0;
-
-        for (const char c: str) {
-            if (c == ' ') {
-                ints[idx] = curr_number;
-                idx += curr_number != 0;
-                curr_number = 0;
-            } else {
-                // curr_number = curr_number * 10 + (vertex_t) (c - '0');
-                curr_number = (curr_number << 3) + (curr_number << 1) + (vertex_t) (c - '0');
-            }
-        }
-
-        ints[idx] = curr_number;
-        idx += curr_number != 0;
-
-        return idx;
     }
 
     inline bool read_vertex(char *&p, const char *end, vertex_t &v) noexcept {
@@ -369,6 +326,28 @@ namespace GPU_HeiPa {
             out.write(buf.data(), static_cast<std::streamsize>(buf.size()));
 
         out.flush(); // optional
+    }
+
+    inline HostPartition read_partition(const std::string &file_path) {
+        std::vector<partition_t> partition;
+
+        std::ifstream f(file_path);
+        if (!f) {
+            std::cerr << "Cannot open partition file " << file_path << "\n";
+            std::exit(EXIT_FAILURE);
+        }
+
+        partition_t p;
+        while (f >> p) { partition.push_back(p); }
+
+        vertex_t n = (vertex_t) partition.size();
+        HostPartition par = HostPartition("partition", n);
+
+        for (vertex_t u = 0; u < n; ++u) {
+            par[u] = partition[u];
+        }
+
+        return par;
     }
 
     // Suggested shape of your helper

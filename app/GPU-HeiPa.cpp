@@ -52,7 +52,8 @@ int main(int argc, char *argv[]) {
         {
             ScopedTimer _t("io", "main", "parse_args");
             std::vector<std::pair<std::string, std::string> > input = {
-                {"--graph", "../../ProMapRepo/data/mapping/rgg23.graph"},
+                {"--graph", "../../ProMapRepo/data/mapping/rgg23.graph"},    // 100.054 in 540ms
+                // {"--graph", "../../ProMapRepo/data/mapping/cfd2.mtx.graph"}, // 92.920 in 40ms
                 {"--k", "32"},
                 {"--imbalance", "0.03"},
                 {"--config", "default"},
@@ -95,7 +96,6 @@ int main(int argc, char *argv[]) {
     //
     {
         HostGraph host_g = from_file(config.graph_in);
-        HostPartition host_partition;
 
         f64 io_ms = get_milli_seconds(sp, get_time_point());
 
@@ -104,7 +104,7 @@ int main(int argc, char *argv[]) {
         }
 
         auto sp_solver = get_time_point();
-        host_partition = Solver(config).solve(host_g);
+        HostPartition host_partition = Solver(config).solve(host_g);
 
         if (verbose_level >= 1) {
             std::cout << "Solved in         : " << get_milli_seconds(sp_solver, get_time_point()) << std::endl;

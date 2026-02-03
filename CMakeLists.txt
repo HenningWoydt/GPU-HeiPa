@@ -94,6 +94,7 @@ target_link_libraries(GPU-HeiPa
         ${METIS_LIBRARY}
         ${GKLIB_LIBRARY}
         Kokkos::kokkos
+        Kokkos::kokkoskernels
         OpenMP::OpenMP_CXX
 )
 
@@ -103,5 +104,6 @@ target_link_libraries(GPU-HeiProMap
         ${METIS_LIBRARY}
         ${GKLIB_LIBRARY}
         Kokkos::kokkos
+        Kokkos::kokkoskernels
         OpenMP::OpenMP_CXX
 )

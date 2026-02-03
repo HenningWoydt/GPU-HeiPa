@@ -125,7 +125,7 @@ namespace GPU_HeiPa {
                                        bool force_color = false,
                                        bool use_basic_colors = false) const {
             #if !ENABLE_PROFILER
-            os << "Profiler disabled (ENABLE_PROFILER=0).\n";
+            // os << "Profiler disabled (ENABLE_PROFILER=0).\n";
             return;
             #endif
             if (total_.total_ms <= 0.0) {

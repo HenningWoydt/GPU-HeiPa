@@ -30,7 +30,6 @@
 #include "definitions.h"
 #include "../datastructures/graph.h"
 #include "../datastructures/partition.h"
-#include "../datastructures/block_connectivity.h"
 
 namespace GPU_HeiPa {
     inline weight_t edge_cut(const HostGraph &g,

@@ -236,6 +236,78 @@ namespace GPU_HeiPa {
 
         return g;
     }
+
+    inline HostGraph from_edge_list_file(const std::string &edge_list_file_path,
+                                         const std::string &vertex_weight_file_path) {
+        std::ifstream ef(edge_list_file_path);
+        if (!ef) {
+            std::cerr << "Cannot open edge list file " << edge_list_file_path << "\n";
+            std::exit(EXIT_FAILURE);
+        }
+
+        // --- read header ---
+        vertex_t n_rows, n_cols;
+        vertex_t m;
+        ef >> n_rows >> n_cols >> m;
+
+        if (n_rows != n_cols) {
+            std::cerr << "Non-square graph (" << n_rows << " x " << n_cols << ")\n";
+            std::exit(EXIT_FAILURE);
+        }
+
+        HostGraph g;
+        allocate_memory(g, n_rows, m, 0);
+
+        // --- read vertex weights ---
+        {
+            std::ifstream vf(vertex_weight_file_path);
+            if (!vf) {
+                std::cerr << "Cannot open vertex weight file "
+                        << vertex_weight_file_path << "\n";
+                std::exit(EXIT_FAILURE);
+            }
+
+            g.g_weight = 0;
+            for (vertex_t u = 0; u < g.n; ++u) {
+                vf >> g.weights(u);
+                g.g_weight += g.weights(u);
+            }
+        }
+
+        // --- temporary degree counter ---
+        std::vector<vertex_t> degree(g.n, 0);
+
+        // store edges temporarily
+        std::vector<vertex_t> src(m), dst(m);
+        std::vector<weight_t> wgt(m);
+
+        for (vertex_t i = 0; i < m; ++i) {
+            ef >> src[i] >> dst[i] >> wgt[i];
+            ASSERT(src[i] < g.n);
+            ASSERT(dst[i] < g.n);
+            ++degree[src[i]];
+        }
+
+        // --- build CSR offsets ---
+        g.neighborhood(0) = 0;
+        for (vertex_t u = 0; u < g.n; ++u) {
+            g.neighborhood(u + 1) = g.neighborhood(u) + degree[u];
+        }
+
+        // --- fill CSR ---
+        std::vector<vertex_t> cursor(g.n);
+        for (vertex_t u = 0; u < g.n; ++u)
+            cursor[u] = g.neighborhood(u);
+
+        for (vertex_t i = 0; i < m; ++i) {
+            vertex_t u = src[i];
+            vertex_t pos = cursor[u]++;
+            g.edges_v(pos) = dst[i];
+            g.edges_w(pos) = wgt[i];
+        }
+
+        return g;
+    }
 }
 
 #endif //GPU_HEIPA_HOST_GRAPH_H

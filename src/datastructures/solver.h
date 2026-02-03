@@ -29,6 +29,10 @@
 
 #include <vector>
 
+#include <Kokkos_Core.hpp>
+#include <KokkosSparse_CrsMatrix.hpp>
+#include <KokkosSparse_StaticCrsGraph.hpp>
+
 #include "graph.h"
 #include "host_graph.h"
 #include "kokkos_memory_stack.h"
@@ -36,7 +40,7 @@
 #include "partition.h"
 #include "../coarsening/two_hop_matching.h"
 #include "../refinement/jet_label_propagation.h"
-#include "../initial_partitioning/kaffpa_partitioning.h"
+#include "../refinement/jet_label_propagation.h"
 #include "../initial_partitioning/metis_partitioning.h"
 #include "../utility/definitions.h"
 #include "../utility/configuration.h"
@@ -228,7 +232,7 @@ namespace GPU_HeiPa {
         void internal_solve(HostGraph &host_g) {
             initialize(host_g);
 
-            const partition_t c = 4;
+            const partition_t c = 8;
             const partition_t max_n = c * k;
 
             u32 level = 0;
@@ -286,8 +290,8 @@ namespace GPU_HeiPa {
 
             // Main stack: Graph + coarsening overhead
             mem_stack = initialize_kokkos_memory_stack(
-                20 * host_g.n * sizeof(vertex_t) + // 20% buffer for vertices
-                10 * host_g.m * sizeof(vertex_t),  // Graph + coarsening overhead
+                20 * (size_t) host_g.n * sizeof(vertex_t) + // 20% buffer for vertices
+                10 * (size_t) host_g.m * sizeof(vertex_t),  // Graph + coarsening overhead
                 "Stack"
             );
 
@@ -343,7 +347,7 @@ namespace GPU_HeiPa {
             auto p = get_time_point();
 
             // Use METIS for initial partitioning
-            metis_partition(graphs.back(), (int) k, config.imbalance, config.seed, partition, METIS_KWAY);
+            metis_partition(graphs.back(), (int) k, config.imbalance, config.seed, partition, METIS_RECURSIVE);
 
             recalculate_weights(partition, graphs.back());
 
@@ -361,12 +365,15 @@ namespace GPU_HeiPa {
         void refinement(u32 level) {
             auto p = get_time_point();
 
-            auto pair = refine(graphs.back(), partition, k, lmax, level, curr_edge_cut, curr_max_block_weight, mem_stack);
+            auto pair = jet_refine(graphs.back(), partition, k, lmax, level, curr_edge_cut, curr_max_block_weight, mem_stack);
             curr_edge_cut = pair.first;
             curr_max_block_weight = pair.second;
 
             Kokkos::fence();
             refinement_ms += get_milli_seconds(p, get_time_point());
+
+            ASSERT(curr_edge_cut == edge_cut(graphs.back(), partition));
+            ASSERT(curr_max_block_weight == max_weight(partition));
 
             #if ENABLE_PROFILER
             level_infos[level].t_refinement = get_milli_seconds(p, get_time_point());
