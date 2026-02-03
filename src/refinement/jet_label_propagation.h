@@ -38,11 +38,6 @@ namespace GPU_HeiPa {
     constexpr f64 PHI = 0.999;
     constexpr f64 HEAVY_ALPHA = 1.5;
 
-    constexpr weight_t GAIN_MIN = std::numeric_limits<weight_t>::lowest();
-    constexpr partition_t NULL_PART = -1;
-    constexpr partition_t HASH_RECLAIM = -2;
-    constexpr partition_t NO_MOVE = -3;
-
     constexpr vertex_t MAX_SECTIONS = 128;
     constexpr int MAX_BUCKETS = 50;
     constexpr int MID_BUCKETS = 25;

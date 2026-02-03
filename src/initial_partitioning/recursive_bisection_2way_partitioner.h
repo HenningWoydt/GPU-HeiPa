@@ -33,7 +33,7 @@
 
 #include "../utility/definitions.h"
 #include "../utility/macros.h"
-#include "../utility/random_engine.h"
+#include "../utility/edge_cut.h"
 
 namespace GPU_HeiPa {
     struct ComponentInfo {

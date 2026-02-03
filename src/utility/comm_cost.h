@@ -30,7 +30,6 @@
 #include "definitions.h"
 #include "../datastructures/graph.h"
 #include "../datastructures/partition.h"
-#include "../datastructures/block_connectivity.h"
 #include "../distance_oracles/distance_oracle_helpers.h"
 
 namespace GPU_HeiPa {

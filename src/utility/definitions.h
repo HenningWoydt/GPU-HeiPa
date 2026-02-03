@@ -49,6 +49,11 @@ namespace GPU_HeiPa {
     typedef s32 weight_t;
     typedef s32 partition_t;  // TODO: swap back to u32
 
+    constexpr weight_t GAIN_MIN = std::numeric_limits<weight_t>::lowest();
+    constexpr partition_t NULL_PART = -1;
+    constexpr partition_t HASH_RECLAIM = -2;
+    constexpr partition_t NO_MOVE = -3;
+
     using DeviceExecutionSpace = Kokkos::DefaultExecutionSpace;
     using DeviceMemorySpace = Kokkos::DefaultExecutionSpace::memory_space;
     using HostMemory = Kokkos::CudaHostPinnedSpace;

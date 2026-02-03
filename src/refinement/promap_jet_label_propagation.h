@@ -36,6 +36,8 @@
 #include "jet_label_propagation.h"
 
 namespace GPU_HeiPa {
+    constexpr u32 TARGET_PER_SHARD = 4096;
+
     struct ProMapJetLabelPropagation {
         vertex_t n = 0;
         vertex_t m = 0;
