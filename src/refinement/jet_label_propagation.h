@@ -571,34 +571,31 @@ namespace GPU_HeiPa {
         {
             ScopedTimer _t("refinement", "jetlp", "afterburner");
             Kokkos::deep_copy(lp.idx, 0);
-            Kokkos::parallel_for("afterburner heuristic", TeamPolicy(num_pos, Kokkos::AUTO), KOKKOS_LAMBDA(const TeamMember &t) {
-                vertex_t u = lp.vtx1(t.league_rank());
+            Kokkos::parallel_for("afterburner heuristic", num_pos, KOKKOS_LAMBDA(const u32 i) {
+                vertex_t u = lp.vtx1(i);
                 weight_t u_gain = lp.gain1(u);
                 partition_t old_u_id = lp.partition.map(u);
                 partition_t new_u_id = lp.dest_part(u);
 
                 weight_t change = 0;
-                Kokkos::parallel_reduce(Kokkos::TeamThreadRange(t, g.neighborhood(u), g.neighborhood(u + 1)), [&](const u32 i, weight_t &update) {
-                    vertex_t v = g.edges_v(i);
+                for (u32 j = g.neighborhood(u); j < g.neighborhood(u + 1); ++j) {
+                    vertex_t v = g.edges_v(j);
                     weight_t v_gain = lp.gain1(v);
 
                     if (v_gain > u_gain || (v_gain == u_gain && v < u)) {
                         partition_t v_new_id = lp.dest_part(v);
                         partition_t v_old_id = lp.partition.map(v);
-                        weight_t w = g.edges_w(i);
+                        weight_t w = g.edges_w(j);
 
-                        if (v_new_id == old_u_id) { update -= w; } else if (v_new_id == new_u_id) { update += w; }
-                        if (v_old_id == old_u_id) { update += w; } else if (v_old_id == new_u_id) { update -= w; }
+                        if (v_new_id == old_u_id) { change -= w; } else if (v_new_id == new_u_id) { change += w; }
+                        if (v_old_id == old_u_id) { change += w; } else if (v_old_id == new_u_id) { change -= w; }
                     }
-                }, change);
-                t.team_barrier();
-                Kokkos::single(Kokkos::PerTeam(t), [&]() {
-                    if (u_gain + change >= 0) {
-                        bc.lock(u) = 1;
-                        u32 idx = Kokkos::atomic_fetch_inc(&lp.idx());
-                        lp.vtx2(idx) = u;
-                    }
-                });
+                }
+                if (u_gain + change >= 0) {
+                    bc.lock(u) = 1;
+                    u32 idx = Kokkos::atomic_fetch_inc(&lp.idx());
+                    lp.vtx2(idx) = u;
+                }
             });
             Kokkos::fence();
             u32 t;
