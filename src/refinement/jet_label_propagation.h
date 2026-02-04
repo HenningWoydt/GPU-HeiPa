@@ -823,7 +823,7 @@ namespace GPU_HeiPa {
         return Kokkos::subview(lp.vtx1, std::make_pair((u32) 0, num_moves));
     }
 
-    inline UnmanagedDeviceVertex rebalance_weak(LabelPropagation &lp, const Graph &g, const BlockConn &bc) {
+    inline DeviceVertex rebalance_weak(LabelPropagation &lp, Graph &g, const BlockConn &bc) {
         weight_t opt_weight = (g.g_weight + (weight_t) (lp.k - 1)) / (weight_t) lp.k;
         weight_t max_b_w = (weight_t) ((f64) lp.lmax * 0.99);
         if (max_b_w < lp.lmax - 100) { max_b_w = lp.lmax - 100; }
@@ -841,7 +841,7 @@ namespace GPU_HeiPa {
         {
             ScopedTimer _t("refinement", "jetrw", "underloaded_blocks");
 
-            Kokkos::parallel_for("init undersized parts list", Kokkos::TeamPolicy<>(1, Kokkos::AUTO), KOKKOS_LAMBDA(const Kokkos::TeamPolicy<>::member_type &t) {
+            Kokkos::parallel_for("init undersized parts list", Kokkos::TeamPolicy<DeviceExecutionSpace>(1, Kokkos::AUTO), KOKKOS_LAMBDA(const Kokkos::TeamPolicy<DeviceExecutionSpace>::member_type &t) {
                 //this scan is small so do it within a team instead of an entire grid to save kernel launch time
                 Kokkos::parallel_scan(Kokkos::TeamThreadRange(t, 0, lp.k), [&](const partition_t i, partition_t &update, const bool final) {
                     if (lp.partition.bweights(i) < max_b_w) {
@@ -859,20 +859,16 @@ namespace GPU_HeiPa {
             KOKKOS_PROFILE_FENCE();
         }
 
-        u32 num_moves;
         // determine best block
         {
             ScopedTimer _t("refinement", "jetrw", "best_block");
 
-            Kokkos::parallel_for("best_block", g.n, KOKKOS_LAMBDA(const vertex_t u) {
+            Kokkos::parallel_for("select destination parts (rw)", g.n, KOKKOS_LAMBDA(const vertex_t u) {
                 partition_t u_id = lp.partition.map(u);
-                weight_t u_id_w = lp.partition.bweights(u_id);
 
-                partition_t best_id = u_id;
-                weight_t gain = 0;
-
-                if (u_id_w > lp.lmax && g.weights(u) < 1.5 * (u_id_w - opt_weight)) {
-                    weight_t best_conn = 0;
+                if (lp.partition.bweights(u_id) > lp.lmax && g.weights(u) < 1.5 * (lp.partition.bweights(u_id) - opt_weight)) {
+                    partition_t best_id = u_id;
+                    weight_t best_id_w = 0;
                     weight_t own_conn = 0;
 
                     u32 r_beg = bc.row(u);
@@ -880,69 +876,63 @@ namespace GPU_HeiPa {
                     u32 r_end = r_beg + r_len;
                     for (vertex_t j = r_beg; j < r_end; j++) {
                         partition_t id = bc.ids(j);
-                        weight_t conn = bc.weights(j);
-                        weight_t id_w = lp.partition.bweights(id);
+                        weight_t w = bc.weights(j);
 
-                        own_conn = id == u_id ? conn : own_conn;
-
-                        if (id != NULL_PART && id != HASH_RECLAIM && id_w < max_b_w && conn > best_conn) {
-                            best_id = id;
-                            best_conn = conn;
+                        if (id != NULL_PART && id != HASH_RECLAIM && lp.partition.bweights(id) < max_b_w) {
+                            if (w > best_id_w) {
+                                best_id = id;
+                                best_id_w = w;
+                            }
+                        }
+                        if (id == u_id) {
+                            own_conn = bc.weights(j);
                         }
                     }
-
-                    gain = best_conn - own_conn;
-                    if (best_conn <= 0) {
+                    if (best_id_w > 0) {
+                        lp.dest_part(u) = best_id;
+                        lp.temp_gain(u) = best_id_w - own_conn;
+                    } else {
                         //choose arbitrary undersized part
                         best_id = lp.underloaded_blocks(u % lp.n_underloaded_blocks());
-                        gain = -own_conn;
+                        lp.dest_part(u) = best_id;
+                        lp.temp_gain(u) = -own_conn;
                     }
-                    lp.temp_gain(u) = gain;
+                } else {
+                    lp.dest_part(u) = u_id;
                 }
-                lp.dest_part(u) = best_id;
             });
-
-            KOKKOS_PROFILE_FENCE();
-        }
-
-        // filter scores
-        {
-            ScopedTimer _t("refinement", "jetrw", "filter_scores_scan");
-
-            Kokkos::deep_copy(Kokkos::subview(lp.gain1, std::make_pair((vertex_t) 0, t_minibuckets + 1)), 0);
-
-            Kokkos::parallel_scan("filter_scores_scan", g.n, KOKKOS_LAMBDA(const vertex_t u, vertex_t &update, const bool final) {
-                partition_t u_id = lp.partition.map(u);
-
-                partition_t best_id = lp.dest_part(u);
-                weight_t gain = lp.temp_gain(u);
-
-                if (u_id != best_id) {
-                    vertex_t gain_type = gain_bucket(gain, g.weights(u));
-                    vertex_t g_id = (MAX_BUCKETS * u_id + gain_type) * sections + (u % sections);
-
-                    if (final) {
-                        lp.vtx2(u) = g_id;
-                        lp.temp_gain(u) = Kokkos::atomic_fetch_add(&lp.gain1(g_id), g.weights(u));
-
-                        lp.vtx3(update) = u;
-                    }
-                    ++update;
-                }
-            }, lp.scan_host);
-            Kokkos::fence();
-
-            num_moves = (u32) lp.scan_host();
 
             KOKKOS_PROFILE_FENCE();
         }
 
         //
         {
-            ScopedTimer _t("refinement", "jetrw", "prefix_sum_score_buckets");
+            ScopedTimer _t("refinement", "jetrw", "assign_move_scores");
+
+            Kokkos::deep_copy(Kokkos::subview(lp.gain1, std::make_pair((vertex_t) 0, t_minibuckets + 1)), 0);
+
+            Kokkos::parallel_for("assign move scores", g.n, KOKKOS_LAMBDA(const vertex_t u) {
+                partition_t u_id = lp.partition.map(u);
+                partition_t best_id = lp.dest_part(u);
+                lp.vtx2(u) = NO_BLOCK_ID;
+                if (u_id != best_id) {
+                    weight_t gain = lp.temp_gain(u);
+                    vertex_t gain_type = gain_bucket(gain, g.weights(u));
+                    vertex_t g_id = (MAX_BUCKETS * u_id + gain_type) * sections + (u % sections);
+                    lp.vtx2(u) = g_id;
+                    lp.temp_gain(u) = Kokkos::atomic_fetch_add(&lp.gain1(g_id), g.weights(u));
+                }
+            });
+
+            KOKKOS_PROFILE_FENCE();
+        }
+
+        //
+        {
+            ScopedTimer _t("refinement", "jetrw", "scan_score_buckets");
 
             if (t_minibuckets < 10000) {
-                Kokkos::parallel_for("prefix_sum_score_buckets", Kokkos::TeamPolicy<>(1, 1024), KOKKOS_LAMBDA(const Kokkos::TeamPolicy<>::member_type &t) {
+                Kokkos::parallel_for("scan score buckets", Kokkos::TeamPolicy<DeviceExecutionSpace>(1, 1024), KOKKOS_LAMBDA(const Kokkos::TeamPolicy<DeviceExecutionSpace>::member_type &t) {
                     //this scan is small so do it within a team instead of an entire grid to save kernel launch time
                     Kokkos::parallel_scan(Kokkos::TeamThreadRange(t, 0, t_minibuckets + 1), [&](const vertex_t i, weight_t &update, const bool final) {
                         weight_t x = lp.gain1(i);
@@ -953,7 +943,7 @@ namespace GPU_HeiPa {
                     });
                 });
             } else {
-                Kokkos::parallel_scan("prefix_sum_score_buckets", t_minibuckets + 1, KOKKOS_LAMBDA(const vertex_t &i, weight_t &update, const bool final) {
+                Kokkos::parallel_scan("scan score buckets", t_minibuckets + 1, KOKKOS_LAMBDA(const vertex_t &i, weight_t &update, const bool final) {
                     weight_t x = lp.gain1(i);
                     if (final) {
                         lp.gain1(i) = update;
@@ -964,35 +954,32 @@ namespace GPU_HeiPa {
 
             KOKKOS_PROFILE_FENCE();
         }
+
         //
         {
             ScopedTimer _t("refinement", "jetrw", "filter_scores");
 
-            Kokkos::parallel_scan("filter_scores_scan", num_moves, KOKKOS_LAMBDA(const u32 i, vertex_t &update, const bool final) {
-                vertex_t u = lp.vtx3(i);
-                vertex_t b_id = lp.vtx2(u);
-
-                partition_t u_id = lp.partition.map(u);
-                vertex_t begin_bucket = u_id * width;
-
-                weight_t score = lp.temp_gain(u) + lp.gain1(b_id) - lp.gain1(begin_bucket);
-                weight_t limit = lp.partition.bweights(u_id) - lp.lmax;
-
-                if (score < limit) {
-                    if (final) {
-                        lp.vtx1(update) = u;
+            Kokkos::parallel_scan("filter scores below cutoff", g.n, KOKKOS_LAMBDA(const vertex_t i, vertex_t &update, const bool final) {
+                vertex_t b = lp.vtx2(i);
+                if (b != NO_BLOCK_ID) {
+                    partition_t p = lp.partition.map(i);
+                    vertex_t begin_bucket = p * width;
+                    weight_t score = lp.temp_gain(i) + lp.gain1(b) - lp.gain1(begin_bucket);
+                    weight_t limit = lp.partition.bweights(p) - lp.lmax;
+                    if (score < limit) {
+                        if (final) {
+                            lp.vtx1(update) = i;
+                        }
+                        update++;
                     }
-                    ++update;
                 }
             }, lp.scan_host);
             Kokkos::fence();
-
-            num_moves = (u32) lp.scan_host();
-
             KOKKOS_PROFILE_FENCE();
         }
-
-        return Kokkos::subview(lp.vtx1, std::make_pair((u32) 0, num_moves));
+        vertex_t num_moves = lp.scan_host();
+        DeviceVertex only_moves = Kokkos::subview(lp.vtx1, std::make_pair((vertex_t) 0, num_moves));
+        return only_moves;
     }
 
     KOKKOS_INLINE_FUNCTION

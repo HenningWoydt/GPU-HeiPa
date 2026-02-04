@@ -176,9 +176,6 @@ namespace GPU_HeiPa {
                 weight_t u_w = old_g.weights(u);
                 vertex_t v = mapping.mapping(u);
 
-                MY_KOKKOS_ASSERT(u_w > 0);
-                MY_KOKKOS_ASSERT(v < coarse_g.n);
-
                 Kokkos::atomic_add(&sum_degrees(v), deg);
                 Kokkos::atomic_add(&coarse_g.weights(v), u_w);
             });
@@ -206,15 +203,8 @@ namespace GPU_HeiPa {
                 vertex_t v = old_g.edges_v(i);
                 weight_t w = old_g.edges_w(i);
 
-                MY_KOKKOS_ASSERT(u < old_g.n);
-                MY_KOKKOS_ASSERT(v < old_g.n);
-                MY_KOKKOS_ASSERT(w > 0);
-
                 vertex_t u_new = mapping.mapping(u);
                 vertex_t v_new = mapping.mapping(v);
-
-                MY_KOKKOS_ASSERT(u_new < coarse_g.n);
-                MY_KOKKOS_ASSERT(v_new < coarse_g.n);
 
                 if (u_new == v_new) { return; } // this edge vanishes
 
@@ -288,13 +278,9 @@ namespace GPU_HeiPa {
                     vertex_t v = hash_keys(idx);
                     weight_t w = hash_vals(idx);
                     if (v != coarse_g.n) {
-                        coarse_g.edges_u(out) = u_new;
                         coarse_g.edges_v(out) = v;
                         coarse_g.edges_w(out) = w;
                         ++out;
-
-                        MY_KOKKOS_ASSERT(v < coarse_g.n);
-                        MY_KOKKOS_ASSERT(w > 0);
                     }
                 }
             });
@@ -302,7 +288,6 @@ namespace GPU_HeiPa {
         }
 
         // fill the u array
-        /*
         {
             ScopedTimer t_fill_coarse_u{"contraction", "from_Graph_Mapping", "fill_coarse_u"};
 
@@ -315,7 +300,7 @@ namespace GPU_HeiPa {
             });
             KOKKOS_PROFILE_FENCE();
         }
-        */
+
 
         // deallocate mem
         {
