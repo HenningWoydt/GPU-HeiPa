@@ -30,6 +30,7 @@
 #include <unordered_map>
 #include <vector>
 #include <string>
+#include <cstring>
 #include <algorithm>
 #include <chrono>
 #include <sstream>
@@ -41,17 +42,44 @@
 #include "util.h"
 
 namespace GPU_HeiPa {
-    // ===== Helpers (keep with your class or in an anon namespace) =====
-    static std::string pad_cell(const std::string &s, unsigned int w) {
-        if (w <= 0) return "";
-        if (s.size() <= w) return s + std::string(w - s.size(), ' ');
-        if (w <= 1) return s.substr(0, w);
-        return s.substr(0, w - 1) + "…";
-    }
+    namespace detail {
+        // ---------- tiny helpers ----------
+        inline std::string pad_cell(std::string s, size_t w) {
+            if (w == 0) return {};
+            if (s.size() <= w) {
+                s.append(w - s.size(), ' ');
+                return s;
+            }
+            if (w == 1) return s.substr(0, 1);
+            return s.substr(0, w - 1) + "…";
+        }
 
+        inline std::string fmt_fixed(double x, int prec) {
+            std::ostringstream os;
+            os.setf(std::ios::fixed);
+            os << std::setprecision(prec) << x;
+            return os.str();
+        }
+
+        inline double pct(double part, double whole) {
+            return (whole > 0.0) ? (part * 100.0 / whole) : 0.0;
+        }
+
+        template<class MapT, class GetScoreFn>
+        auto sorted_items(const MapT &m, GetScoreFn score_desc) {
+            using K = typename MapT::key_type;
+            using V = typename MapT::mapped_type;
+            std::vector<std::pair<const K *, const V *> > out;
+            out.reserve(m.size());
+            for (auto &kv: m) out.push_back({&kv.first, &kv.second});
+            std::sort(out.begin(), out.end(),
+                      [&](auto a, auto b) { return score_desc(*a.second) > score_desc(*b.second); });
+            return out;
+        }
+    } // namespace detail
+
+    // ---------- ANSI theming ----------
     struct ZebraTheme {
-        // Use 256-color backgrounds by default; fall back to simple if needed
-        // You can tweak these. 236/235 are subtle dark grays; 22 is a dark green.
         const char *even_bg = "\x1b[48;5;236m";
         const char *odd_bg = "\x1b[48;5;235m";
         const char *header_bg = "\x1b[48;5;238m";
@@ -62,21 +90,50 @@ namespace GPU_HeiPa {
         const char *reset = "\x1b[0m";
     };
 
-    // Simpler theme (basic 8 colors) if 256-color looks bad
-    static ZebraTheme basic_theme() {
+    inline ZebraTheme basic_theme() {
         return ZebraTheme{
-            /*even_bg*/ "\x1b[47m", // white bg
-            /*odd_bg*/ "\x1b[107m", // bright white bg
-            /*header_bg*/"\x1b[47m",
-            /*rule_fg*/ "\x1b[90m", // bright black (gray)
-            /*text_fg*/ "\x1b[30m", // black text
-            /*bold_on*/ "\x1b[1m",
-            /*bold_off*/ "\x1b[22m",
-            /*reset*/ "\x1b[0m"
+            "\x1b[47m",  // even
+            "\x1b[107m", // odd
+            "\x1b[47m",  // header
+            "\x1b[90m",  // rule
+            "\x1b[30m",  // text
+            "\x1b[1m",
+            "\x1b[22m",
+            "\x1b[0m"
         };
     }
 
-    // ---------- simple stats -----------
+    class AnsiOut {
+    public:
+        AnsiOut(bool enabled, ZebraTheme theme) : enabled_(enabled), t_(theme) {
+        }
+
+        void rule(std::ostream &os, const std::string &s) const {
+            if (!enabled_) {
+                os << s << "\n";
+                return;
+            }
+            os << t_.rule_fg << s << t_.reset << "\n";
+        }
+
+        void row(std::ostream &os, const std::string &s, bool header, bool even, bool bold = false) const {
+            if (!enabled_) {
+                os << s << "\n";
+                return;
+            }
+            const char *bg = header ? t_.header_bg : (even ? t_.even_bg : t_.odd_bg);
+            os << bg << t_.text_fg;
+            if (bold) os << t_.bold_on;
+            os << s;
+            if (bold) os << t_.bold_off;
+            os << t_.reset << "\n";
+        }
+
+    private:
+        bool enabled_;
+        ZebraTheme t_;
+    };
+
     struct KTStat {
         double total_ms = 0.0;
         unsigned long calls = 0;
@@ -86,446 +143,289 @@ namespace GPU_HeiPa {
             ++calls;
         }
 
-        inline double avg() const { return calls ? total_ms / (f64) calls : 0.0; }
+        inline double avg() const { return calls ? total_ms / (double) calls : 0.0; }
     };
 
-    struct KTKernels {
-        std::unordered_map<std::string, KTStat> kernels; // kernel name -> stat
-        KTStat agg;                                      // aggregate of kernels
+    struct FlatKey {
+        const char *g;
+        const char *f;
+        const char *k;
     };
 
-    struct KTGroup {
-        std::unordered_map<std::string, KTKernels> functions; // function name -> kernels
-        KTStat agg;                                           // aggregate of functions
+    struct FlatRec {
+        FlatKey key;
+        KTStat stat;
     };
 
-    // ========== Profiler (hierarchical) ==========
     class Profiler {
     public:
         static Profiler &instance() {
-            static Profiler R;
-            return R;
+            static Profiler P;
+            return P;
         }
 
-        // Add a timing sample
-        void add(const char *group, const char *function, const char *kernel, double ms) {
-            auto &g = groups_[group];
-            auto &f = g.functions[function];
-            f.kernels[kernel].add(ms);
-            f.agg.add(ms);
-            g.agg.add(ms);
+        void add(const char *g, const char *f, const char *k, double ms) {
+            #if !ENABLE_PROFILER
+            (void) g; (void) f; (void) k; (void) ms;
+            return;
+            #else
+            const uint64_t h = hash_triple_ptr(g, f, k);
+            auto it = flat_.find(h);
+            if (it == flat_.end()) {
+                FlatRec r;
+                r.key = {g, f, k};
+                r.stat.add(ms);
+                flat_.emplace(h, r);
+            } else {
+                // ultra-rare collision safety (optional but cheap)
+                if (it->second.key.g != g || it->second.key.f != f || it->second.key.k != k) {
+                    const uint64_t h2 = hash_triple_ptr_salted(g, f, k);
+                    auto &r = flat_[h2];
+                    if (r.key.g == nullptr) r.key = {g, f, k};
+                    r.stat.add(ms);
+                } else {
+                    it->second.stat.add(ms);
+                }
+            }
             total_.add(ms);
-        }
-
-        // ===== Colored printer =====
-        void print_table_ascii_colored(std::ostream &os = std::cout,
-                                       int max_funcs_per_group = -1,
-                                       int max_kernels_per_func = -1,
-                                       unsigned int name_width = 48,
-                                       bool force_color = false,
-                                       bool use_basic_colors = false) const {
-            #if !ENABLE_PROFILER
-            // os << "Profiler disabled (ENABLE_PROFILER=0).\n";
-            return;
             #endif
-            if (total_.total_ms <= 0.0) {
-                os << "Profiler: no samples recorded.\n";
-                return;
-            }
-
-            // Color gating (unchanged) ...
-            const bool no_color_env = std::getenv("NO_COLOR") != nullptr;
-            bool color_ok = !no_color_env && (force_color || true);
-
-            ZebraTheme theme = use_basic_colors ? basic_theme() : ZebraTheme{};
-            auto apply_bg = [&](const std::string &s, bool header, bool even)-> std::string {
-                if (!color_ok) return s + '\n';
-                const char *bg = header ? theme.header_bg : (even ? theme.even_bg : theme.odd_bg);
-                return std::string(bg) + theme.text_fg + s + theme.reset + '\n';
-            };
-            auto apply_rule = [&](const std::string &s)-> std::string {
-                if (!color_ok) return s + '\n';
-                return std::string(theme.rule_fg) + s + theme.reset + '\n';
-            };
-
-            // Clamp name column
-            if (name_width < 24) name_width = 24;
-            if (name_width > 96) name_width = 96;
-
-            auto fmt_ms = [](double x) {
-                std::ostringstream s;
-                s.setf(std::ios::fixed);
-                s << std::setprecision(3) << x;
-                return s.str();
-            };
-            auto fmt_pct = [](double x) {
-                std::ostringstream s;
-                s.setf(std::ios::fixed);
-                s << std::setprecision(1) << x;
-                return s.str();
-            };
-            auto pct_of_total = [&](double ms) { return total_.total_ms > 0.0 ? (ms * 100.0 / total_.total_ms) : 0.0; };
-
-            // --- New: IO-less baseline
-            double io_ms = 0.0; {
-                auto it = groups_.find("io"); // your group is named "io"
-                if (it != groups_.end()) io_ms = it->second.agg.total_ms;
-            }
-            const double denom_no_io = std::max(0.0, total_.total_ms - io_ms);
-            auto pct_no_io = [&](double ms) {
-                return denom_no_io > 0.0 ? (ms * 100.0 / denom_no_io) : 0.0;
-            };
-
-            // Sort groups
-            std::vector<std::pair<std::string, KTGroup const *> > gs;
-            gs.reserve(groups_.size());
-            for (auto &kv: groups_) gs.emplace_back(kv.first, &kv.second);
-            std::sort(gs.begin(), gs.end(),
-                      [](auto &a, auto &b) { return a.second->agg.total_ms > b.second->agg.total_ms; });
-
-            const int W_CALL = 8, W_TOT = 12, W_AVG = 10, W_PCT = 7, W_PCT2 = 7; // new width
-            auto make_rule = [&]() {
-                return std::string(name_width + 3u + W_CALL + 3 + W_TOT + 3 + W_AVG + 3 + W_PCT + 3 + W_PCT2, '-');
-            };
-
-            size_t row_index = 0;
-
-            // Header
-            os << apply_rule(make_rule()); {
-                std::string hdr;
-                if (color_ok) hdr += theme.bold_on;
-                hdr += pad_cell("Scope", name_width);
-                hdr += "   " + pad_cell("Calls", W_CALL);
-                hdr += "   " + pad_cell("Total ms", W_TOT);
-                hdr += "   " + pad_cell("Avg ms", W_AVG);
-                hdr += "   " + pad_cell("%Tot", W_PCT);
-                hdr += "   " + pad_cell("%NoIO", W_PCT2); // new column
-                if (color_ok) hdr += theme.bold_off;
-                os << apply_bg(hdr, /*header=*/true, /*even=*/true);
-            }
-            os << apply_rule(make_rule());
-
-            // Row emitter (now takes two pct strings)
-            auto emit_row = [&](const std::string &scope, const std::string &calls,
-                                const std::string &tot, const std::string &avg,
-                                const std::string &pct, const std::string &pct_noio) {
-                std::string line;
-                line.reserve(128 + scope.size());
-                line += pad_cell(scope, name_width);
-                line += "   " + pad_cell(calls, W_CALL);
-                line += "   " + pad_cell(tot, W_TOT);
-                line += "   " + pad_cell(avg, W_AVG);
-                line += "   " + pad_cell(pct, W_PCT);
-                line += "   " + pad_cell(pct_noio, W_PCT2);
-                const bool even = (row_index++ % 2 == 0);
-                os << apply_bg(line, /*header=*/false, even);
-            };
-
-            // TOTAL row: %NoIO is 100.0 if we have any non-IO time
-            emit_row("TOTAL", "-", fmt_ms(total_.total_ms), "-", fmt_pct(100.0),
-                     fmt_pct(denom_no_io > 0.0 ? 100.0 : 0.0));
-
-            // Groups
-            for (size_t gi = 0; gi < gs.size(); ++gi) {
-                const auto &gname = gs[gi].first;
-                const auto *gptr = gs[gi].second;
-                const bool is_io_group = (gname == "io");
-
-                // Functions sort
-                std::vector<std::pair<std::string, KTKernels const *> > fs;
-                for (auto &fk: gptr->functions) fs.emplace_back(fk.first, &fk.second);
-                std::sort(fs.begin(), fs.end(),
-                          [](auto &a, auto &b) { return a.second->agg.total_ms > b.second->agg.total_ms; });
-                if (max_funcs_per_group >= 0 && (int) fs.size() > max_funcs_per_group)
-                    fs.resize((size_t) max_funcs_per_group);
-
-                emit_row("+-- [G] " + gname, "-",
-                         fmt_ms(gptr->agg.total_ms), "-",
-                         fmt_pct(pct_of_total(gptr->agg.total_ms)),
-                         fmt_pct(is_io_group ? 0.0 : pct_no_io(gptr->agg.total_ms)));
-
-                // Functions
-                for (size_t fi = 0; fi < fs.size(); ++fi) {
-                    const auto &fname = fs[fi].first;
-                    const auto *fptr = fs[fi].second;
-
-                    // Kernels sort
-                    std::vector<std::pair<std::string, KTStat const *> > ks;
-                    for (auto &kk: fptr->kernels) ks.emplace_back(kk.first, &kk.second);
-                    std::sort(ks.begin(), ks.end(),
-                              [](auto &a, auto &b) { return a.second->total_ms > b.second->total_ms; });
-                    if (max_kernels_per_func >= 0 && (int) ks.size() > max_kernels_per_func)
-                        ks.resize((size_t) max_kernels_per_func);
-
-                    emit_row("|   +-- [F] " + fname, "-",
-                             fmt_ms(fptr->agg.total_ms), "-",
-                             fmt_pct(pct_of_total(fptr->agg.total_ms)),
-                             fmt_pct(is_io_group ? 0.0 : pct_no_io(fptr->agg.total_ms)));
-
-                    for (size_t ki = 0; ki < ks.size(); ++ki) {
-                        const auto &kname = ks[ki].first;
-                        const auto *kstat = ks[ki].second;
-                        emit_row("|   |   +-- [K] " + kname,
-                                 std::to_string(kstat->calls),
-                                 fmt_ms(kstat->total_ms),
-                                 fmt_ms(kstat->avg()),
-                                 fmt_pct(pct_of_total(kstat->total_ms)),
-                                 fmt_pct(is_io_group ? 0.0 : pct_no_io(kstat->total_ms)));
-                    }
-                }
-            }
-
-            // Footer
-            os << apply_rule(make_rule());
-
-            // Optional legend line (non-colored):
-            os << "(* %NoIO = share of time if IO group were removed from the total)\n";
         }
 
-
-        // --------- Pretty print (sorted by total time desc at each level) ----------
-        void print(FILE *out = stderr) const {
-            #if !ENABLE_PROFILER
-            return;
-            #endif
-            auto pct = [](double part, double whole) -> double {
-                return (whole > 0.0) ? (part * 100.0 / whole) : 0.0;
-            };
-
-            std::fprintf(out, "\n=== Kernel Timing (group → function → kernel) ===\n");
-            std::fprintf(out, "%-50s %10s %12s %12s %8s %8s\n",
-                         "Name", "Calls", "Total(ms)", "Avg(ms)", "%Func", "%Group");
-
-            // Sort groups by total time
-            std::vector<std::pair<std::string, KTGroup const *> > gs;
-            gs.reserve(groups_.size());
-            for (auto &kv: groups_) gs.emplace_back(kv.first, &kv.second);
-            std::sort(gs.begin(), gs.end(),
-                      [](auto &a, auto &b) { return a.second->agg.total_ms > b.second->agg.total_ms; });
-
-            for (auto &[gname, gptr]: gs) {
-                const auto &g = *gptr;
-                // Group header
-                std::fprintf(out, "%-50s %10lu %12.3f %12.3f %8s %8.1f\n",
-                             gname.c_str(), g.agg.calls, g.agg.total_ms, g.agg.avg(),
-                             "", pct(g.agg.total_ms, total_.total_ms));
-
-                // Sort functions by total time
-                std::vector<std::pair<std::string, KTKernels const *> > fs;
-                fs.reserve(g.functions.size());
-                for (auto &fk: g.functions) fs.emplace_back(fk.first, &fk.second);
-                std::sort(fs.begin(), fs.end(),
-                          [](auto &a, auto &b) { return a.second->agg.total_ms > b.second->agg.total_ms; });
-
-                for (auto &[fname, fptr]: fs) {
-                    const auto &f = *fptr;
-                    // Function row (1-tab indent)
-                    std::fprintf(out, "    %-46s %10lu %12.3f %12.3f %8s %8.1f\n",
-                                 fname.c_str(), f.agg.calls, f.agg.total_ms, f.agg.avg(),
-                                 "", pct(f.agg.total_ms, g.agg.total_ms));
-
-                    // Sort kernels by total time
-                    std::vector<std::pair<std::string, KTStat const *> > ks;
-                    ks.reserve(f.kernels.size());
-                    for (auto &kk: f.kernels) ks.emplace_back(kk.first, &kk.second);
-                    std::sort(ks.begin(), ks.end(),
-                              [](auto &a, auto &b) { return a.second->total_ms > b.second->total_ms; });
-
-                    for (auto &[kname, kstat]: ks) {
-                        // Kernel row (2-tab indent)
-                        std::fprintf(out, "        %-42s %10lu %12.3f %12.3f %8.1f %8.1f\n",
-                                     kname.c_str(), kstat->calls, kstat->total_ms, kstat->avg(),
-                                     pct(kstat->total_ms, f.agg.total_ms),
-                                     pct(kstat->total_ms, g.agg.total_ms));
-                    }
-                }
-                std::fprintf(out, "\n"); // blank line after each group
-            }
-
-            // Total row at end
-            std::fprintf(out, "-------------------------------------------------\n");
-            std::fprintf(out, "%-50s %10lu %12.3f %12.3f %8s %8s\n",
-                         "TOTAL", total_.calls, total_.total_ms, total_.avg(), "", "100.0");
-            std::fprintf(out, "=================================================\n");
-        }
-
-        // --------- JSON export (nested, pretty-printed) ----------
-        std::string to_JSON() const {
-            #if !ENABLE_PROFILER
-            return "{}";
-            #endif
-
-            auto esc = [](const std::string &s) {
-                std::ostringstream e;
-                for (char c: s) {
-                    if (c == '\"' || c == '\\') e << '\\' << c;
-                    else if (c == '\n') e << "\\n";
-                    else e << c;
-                }
-                return e.str();
-            };
-
-            auto indent = [](std::ostringstream &oss, int level) {
-                for (int i = 0; i < level; ++i) oss << '\t'; // tabs for indentation
-            };
-
-            std::ostringstream oss;
-            oss.setf(std::ios::fixed);
-            oss.precision(6);
-
-            int lvl = 0;
-            oss << "{\n";
-
-            // overall total (only total_ms)
-            indent(oss, ++lvl);
-            oss << "\"total\": {\n";
-            indent(oss, ++lvl);
-            oss << "\"total_ms\": " << total_.total_ms << "\n";
-            indent(oss, --lvl);
-            oss << "},\n";
-
-            // groups (sorted by total time desc)
-            indent(oss, lvl);
-            oss << "\"groups\": {\n";
-            ++lvl;
-
-            std::vector<std::pair<std::string, KTGroup const *> > gs;
-            for (auto &kv: groups_) gs.emplace_back(kv.first, &kv.second);
-            std::sort(gs.begin(), gs.end(),
-                      [](auto &a, auto &b) { return a.second->agg.total_ms > b.second->agg.total_ms; });
-
-            bool first_g = true;
-            for (auto &[gname, gptr]: gs) {
-                if (!first_g) oss << ",\n";
-                first_g = false;
-
-                indent(oss, lvl);
-                oss << "\"" << esc(gname) << "\": {\n";
-                ++lvl;
-
-                // group total
-                indent(oss, lvl);
-                oss << "\"total_ms\": " << gptr->agg.total_ms << ",\n";
-
-                // functions
-                indent(oss, lvl);
-                oss << "\"functions\": {\n";
-                ++lvl;
-
-                std::vector<std::pair<std::string, KTKernels const *> > fs;
-                for (auto &fk: gptr->functions) fs.emplace_back(fk.first, &fk.second);
-                std::sort(fs.begin(), fs.end(),
-                          [](auto &a, auto &b) { return a.second->agg.total_ms > b.second->agg.total_ms; });
-
-                bool first_f = true;
-                for (auto &[fname, fptr]: fs) {
-                    if (!first_f) oss << ",\n";
-                    first_f = false;
-
-                    indent(oss, lvl);
-                    oss << "\"" << esc(fname) << "\": {\n";
-                    ++lvl;
-
-                    // function total
-                    indent(oss, lvl);
-                    oss << "\"total_ms\": " << fptr->agg.total_ms << ",\n";
-
-                    // kernels
-                    indent(oss, lvl);
-                    oss << "\"kernels\": {\n";
-                    ++lvl;
-
-                    std::vector<std::pair<std::string, KTStat const *> > ks;
-                    for (auto &kk: fptr->kernels) ks.emplace_back(kk.first, &kk.second);
-                    std::sort(ks.begin(), ks.end(),
-                              [](auto &a, auto &b) { return a.second->total_ms > b.second->total_ms; });
-
-                    bool first_k = true;
-                    for (auto &[kname, kstat]: ks) {
-                        if (!first_k) oss << ",\n";
-                        first_k = false;
-
-                        indent(oss, lvl);
-                        oss << "\"" << esc(kname) << "\": {\n";
-                        ++lvl;
-                        indent(oss, lvl);
-                        oss << "\"calls\": " << kstat->calls << ",\n";
-                        indent(oss, lvl);
-                        oss << "\"total_ms\": " << kstat->total_ms << ",\n";
-                        indent(oss, lvl);
-                        oss << "\"avg_ms\": " << kstat->avg() << "\n";
-                        --lvl;
-                        indent(oss, lvl);
-                        oss << "}";
-                    }
-                    oss << "\n";
-                    --lvl;
-                    indent(oss, lvl);
-                    oss << "}\n"; // end kernels
-
-                    --lvl;
-                    indent(oss, lvl);
-                    oss << "}";
-                }
-                oss << "\n";
-                --lvl;
-                indent(oss, lvl);
-                oss << "}\n"; // end functions
-
-                --lvl;
-                indent(oss, lvl);
-                oss << "}";
-            }
-            oss << "\n";
-            --lvl;
-            indent(oss, lvl);
-            oss << "}\n"; // end groups
-
-            --lvl;
-            oss << "}";
-            return oss.str();
-        }
+        // Your existing print_table_ascii_colored can now:
+        //  - iterate flat_
+        //  - build hierarchy in local structures
+        //  - sort and print
+        void print_table(std::ostream &os = std::cout,
+                         int max_funcs_per_group = -1,
+                         int max_kernels_per_func = -1,
+                         unsigned int name_width = 48,
+                         bool force_color = false,
+                         bool use_basic_colors = false) const;
 
     private:
         Profiler() = default;
 
-        std::unordered_map<std::string, KTGroup> groups_;
+        static inline uint64_t splitmix64(uint64_t x) {
+            x += 0x9e3779b97f4a7c15ull;
+            x = (x ^ (x >> 30)) * 0xbf58476d1ce4e5b9ull;
+            x = (x ^ (x >> 27)) * 0x94d049bb133111ebull;
+            return x ^ (x >> 31);
+        }
+
+        static inline uint64_t hash_triple_ptr(const void *a, const void *b, const void *c) {
+            uint64_t x = splitmix64((uint64_t) (uintptr_t) a);
+            x ^= splitmix64((uint64_t) (uintptr_t) b + 0x9e3779b97f4a7c15ull);
+            x ^= splitmix64((uint64_t) (uintptr_t) c + 0xbf58476d1ce4e5b9ull);
+            return x;
+        }
+
+        static inline uint64_t hash_triple_ptr_salted(const void *a, const void *b, const void *c) {
+            // fallback if a collision is detected (practically never)
+            uint64_t x = splitmix64((uint64_t) (uintptr_t) a ^ 0xA5A5A5A5A5A5A5A5ull);
+            x ^= splitmix64((uint64_t) (uintptr_t) b ^ 0x0123456789ABCDEFull);
+            x ^= splitmix64((uint64_t) (uintptr_t) c ^ 0xF0E1D2C3B4A59687ull);
+            return x;
+        }
+
+        std::unordered_map<uint64_t, FlatRec> flat_;
         KTStat total_;
     };
 
+
     struct ScopedTimer {
         #if ENABLE_PROFILER
+        using clock = std::chrono::steady_clock;
+
         const char *group;
         const char *function;
         const char *kernel;
-        std::chrono::time_point<std::chrono::system_clock> t0;
+        clock::time_point t0;
         bool stopped = false;
-        #endif
 
-        #if ENABLE_PROFILER
         ScopedTimer(const char *g, const char *f, const char *k)
-            : group(g), function(f), kernel(k), t0(get_time_point()) {
-            // std::cout << group << " " << function << " " << kernel << " " << std::flush;
+            : group(g), function(f), kernel(k), t0(clock::now()) {
         }
-        #else
-        ScopedTimer(const char *g, const char *f, const char *k) {
-        }
-        #endif
 
         void stop() {
-            #if !ENABLE_PROFILER
-            return;
-            #else
-            if (!stopped) {
-                Profiler::instance().add(group, function, kernel, get_milli_seconds(t0, get_time_point()));
-                // std::cout << "took " << get_milli_seconds(t0, get_time_point()) << " ms" << std::endl;
-                stopped = true;
-            }
-            #endif
+            if (stopped) return;
+            const auto t1 = clock::now();
+            const double ms = std::chrono::duration<double, std::milli>(t1 - t0).count();
+            Profiler::instance().add(group, function, kernel, ms);
+            stopped = true;
         }
 
         ~ScopedTimer() { stop(); }
+        #else
+        ScopedTimer(const char *, const char *, const char *) {
+        }
+        void stop() {
+        }
+        #endif
     };
-}
+
+    static inline bool streq(const char *a, const char *b) {
+        return (a == b) || (a && b && std::strcmp(a, b) == 0);
+    }
+
+    static inline void merge_stat(KTStat &dst, const KTStat &src) {
+        dst.total_ms += src.total_ms;
+        dst.calls += src.calls;
+    }
+
+    // local hierarchy nodes (only used during printing)
+    struct PrintFunc {
+        std::unordered_map<const char *, KTStat> kernels; // kernel name -> stat
+        KTStat agg;
+    };
+
+    struct PrintGroup {
+        std::unordered_map<const char *, PrintFunc> funcs; // function name -> func
+        KTStat agg;
+    };
+
+    void Profiler::print_table(std::ostream &os,
+                               int max_funcs_per_group,
+                               int max_kernels_per_func,
+                               unsigned int name_width,
+                               bool force_color,
+                               bool use_basic_colors) const {
+        #if !ENABLE_PROFILER
+        (void) os; (void) max_funcs_per_group; (void) max_kernels_per_func;
+        (void) name_width; (void) force_color; (void) use_basic_colors;
+        return;
+        #endif
+
+        if (total_.total_ms <= 0.0) {
+            os << "Profiler: no samples recorded.\n";
+            return;
+        }
+
+        // clamp
+        name_width = std::min(std::max(name_width, 24u), 96u);
+
+        // color gating
+        const bool no_color_env = std::getenv("NO_COLOR") != nullptr;
+        const bool color_ok = !no_color_env && (force_color || true); // keep your behavior
+        AnsiOut out(color_ok, use_basic_colors ? basic_theme() : ZebraTheme{});
+
+        // ---- Build hierarchy from flat_ (print-time only) ----
+        std::unordered_map<const char *, PrintGroup> groups;
+        groups.reserve(flat_.size());
+
+        for (const auto &kv: flat_) {
+            const FlatRec &r = kv.second;
+            auto &g = groups[r.key.g];
+            auto &f = g.funcs[r.key.f];
+
+            // merge kernel stat
+            auto &kstat = f.kernels[r.key.k];
+            merge_stat(kstat, r.stat);
+
+            // roll-ups
+            merge_stat(f.agg, r.stat);
+            merge_stat(g.agg, r.stat);
+        }
+
+        // ---- IO-less denominator ----
+        double io_ms = 0.0;
+        for (const auto &gkv: groups) {
+            if (streq(gkv.first, "io")) {
+                io_ms = gkv.second.agg.total_ms;
+                break;
+            }
+        }
+        const double denom_no_io = std::max(0.0, total_.total_ms - io_ms);
+
+        auto pct_tot = [&](double ms) { return detail::pct(ms, total_.total_ms); };
+        auto pct_noio = [&](double ms) { return detail::pct(ms, denom_no_io); };
+
+        // column widths
+        constexpr int W_CALL = 8, W_TOT = 12, W_AVG = 10, W_PCT = 7, W_PCT2 = 7;
+        const auto rule_len = name_width + 3u + W_CALL + 3 + W_TOT + 3 + W_AVG + 3 + W_PCT + 3 + W_PCT2;
+        const std::string rule(rule_len, '-');
+
+        auto make_line = [&](const std::string &scope,
+                             const std::string &calls,
+                             const std::string &tot,
+                             const std::string &avg,
+                             const std::string &p1,
+                             const std::string &p2) {
+            std::string s;
+            s.reserve(128 + scope.size());
+            s += detail::pad_cell(scope, name_width);
+            s += "   " + detail::pad_cell(calls, W_CALL);
+            s += "   " + detail::pad_cell(tot, W_TOT);
+            s += "   " + detail::pad_cell(avg, W_AVG);
+            s += "   " + detail::pad_cell(p1, W_PCT);
+            s += "   " + detail::pad_cell(p2, W_PCT2);
+            return s;
+        };
+
+        size_t row_i = 0;
+        auto emit = [&](const std::string &line, bool header = false, bool bold = false) {
+            out.row(os, line, header, /*even*/ (row_i++ % 2 == 0), bold);
+        };
+
+        // ---- Header ----
+        out.rule(os, rule);
+        emit(make_line("Scope", "Calls", "Total ms", "Avg ms", "%Tot", "%NoIO"),
+             /*header*/true, /*bold*/true);
+        out.rule(os, rule);
+
+        // ---- TOTAL ----
+        emit(make_line("TOTAL", "-",
+                       detail::fmt_fixed(total_.total_ms, 3), "-",
+                       detail::fmt_fixed(100.0, 1),
+                       detail::fmt_fixed(denom_no_io > 0.0 ? 100.0 : 0.0, 1)));
+
+        // ---- Groups sorted by total desc ----
+        auto gs = detail::sorted_items(groups, [](const PrintGroup &g) { return g.agg.total_ms; });
+
+        for (auto [gname_ptr, gptr]: gs) {
+            const char *gname = *gname_ptr;
+            const bool is_io = streq(gname, "io");
+
+            emit(make_line(std::string("+-- [G] ") + gname, "-",
+                           detail::fmt_fixed(gptr->agg.total_ms, 3), "-",
+                           detail::fmt_fixed(pct_tot(gptr->agg.total_ms), 1),
+                           detail::fmt_fixed(is_io ? 0.0 : pct_noio(gptr->agg.total_ms), 1)));
+
+            // functions sorted
+            auto fs = detail::sorted_items(gptr->funcs, [](const PrintFunc &f) { return f.agg.total_ms; });
+            if (max_funcs_per_group >= 0 && (int) fs.size() > max_funcs_per_group)
+                fs.resize((size_t) max_funcs_per_group);
+
+            for (auto [fname_ptr, fptr]: fs) {
+                const char *fname = *fname_ptr;
+
+                emit(make_line(std::string("|   +-- [F] ") + fname, "-",
+                               detail::fmt_fixed(fptr->agg.total_ms, 3), "-",
+                               detail::fmt_fixed(pct_tot(fptr->agg.total_ms), 1),
+                               detail::fmt_fixed(is_io ? 0.0 : pct_noio(fptr->agg.total_ms), 1)));
+
+                // kernels sorted
+                auto ks = detail::sorted_items(fptr->kernels, [](const KTStat &k) { return k.total_ms; });
+                if (max_kernels_per_func >= 0 && (int) ks.size() > max_kernels_per_func)
+                    ks.resize((size_t) max_kernels_per_func);
+
+                for (auto [kname_ptr, kstat]: ks) {
+                    const char *kname = *kname_ptr;
+
+                    emit(make_line(std::string("|   |   +-- [K] ") + kname,
+                                   std::to_string(kstat->calls),
+                                   detail::fmt_fixed(kstat->total_ms, 3),
+                                   detail::fmt_fixed(kstat->avg(), 3),
+                                   detail::fmt_fixed(pct_tot(kstat->total_ms), 1),
+                                   detail::fmt_fixed(is_io ? 0.0 : pct_noio(kstat->total_ms), 1)));
+                }
+            }
+        }
+
+        // ---- Footer ----
+        out.rule(os, rule);
+        os << "(* %NoIO = share of time if IO group were removed from the total)\n";
+    }
+} // namespace GPU_HeiPa
+
 
 #endif //GPU_HEIPA_PROFILER_H

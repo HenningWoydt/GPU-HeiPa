@@ -131,7 +131,7 @@ int main(int argc, char *argv[]) {
     }
 
     if (verbose_level >= 2) {
-        Profiler::instance().print_table_ascii_colored(std::cout);
+        Profiler::instance().print_table(std::cout);
     }
 
     auto ep = get_time_point();
