@@ -125,7 +125,7 @@ namespace GPU_HeiPa {
                 seed = std::random_device{}();
             }
 
-            verbose_level = 2;
+            verbose_level = 1;
             if (is_set("--verbose-level")) {
                 verbose_level = std::stoi(get("--verbose-level"));
             }
