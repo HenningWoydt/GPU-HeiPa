@@ -45,22 +45,23 @@ namespace GPU_HeiPa {
     typedef float f32;
     typedef double f64;
 
-    typedef s32 vertex_t; // TODO: swap back to u32
+    typedef u32 vertex_t;
     typedef s32 weight_t;
-    typedef s32 partition_t;  // TODO: swap back to u32
+    typedef u32 partition_t; // TODO: swap back to u32
 
     constexpr weight_t GAIN_MIN = std::numeric_limits<weight_t>::lowest();
-    constexpr partition_t NULL_PART = -1;
-    constexpr partition_t HASH_RECLAIM = -2;
-    constexpr partition_t NO_MOVE = -3;
+    constexpr partition_t NULL_PART = std::numeric_limits<u32>::max() - 1;
+    constexpr partition_t HASH_RECLAIM = std::numeric_limits<u32>::max() - 2;
+    constexpr partition_t NO_MOVE = std::numeric_limits<u32>::max() - 3;
+    constexpr u32 NO_BLOCK_ID = std::numeric_limits<u32>::max();
 
     using DeviceExecutionSpace = Kokkos::DefaultExecutionSpace;
     using DeviceMemorySpace = Kokkos::DefaultExecutionSpace::memory_space;
     using HostMemory = Kokkos::CudaHostPinnedSpace;
 
-    using UnmanagedHostVertex = Kokkos::View<vertex_t *, HostMemory, Kokkos::MemoryTraits<Kokkos::Unmanaged>>;
+    using UnmanagedHostVertex = Kokkos::View<vertex_t *, HostMemory, Kokkos::MemoryTraits<Kokkos::Unmanaged> >;
     using HostVertex = Kokkos::View<vertex_t *, HostMemory>;
-    using UnmanagedHostWeight = Kokkos::View<weight_t *, HostMemory, Kokkos::MemoryTraits<Kokkos::Unmanaged>>;
+    using UnmanagedHostWeight = Kokkos::View<weight_t *, HostMemory, Kokkos::MemoryTraits<Kokkos::Unmanaged> >;
     using HostWeight = Kokkos::View<weight_t *, HostMemory>;
     using HostPartition = Kokkos::View<partition_t *, HostMemory>;
     using HostU8 = Kokkos::View<u8 *, HostMemory>;
@@ -124,9 +125,6 @@ namespace GPU_HeiPa {
     using HostPinnedWeight = Kokkos::View<weight_t *, Kokkos::SharedHostPinnedSpace>;
     using HostScalarPinnedWeight = Kokkos::View<weight_t, Kokkos::SharedHostPinnedSpace>;
     using Policy = Kokkos::RangePolicy<DeviceExecutionSpace>;
-    using TeamPolicy = Kokkos::TeamPolicy<DeviceExecutionSpace>;
-    using TeamMember = typename TeamPolicy::member_type;
-
 }
 
 #endif //GPU_HEIPA_DEFINITIONS_H

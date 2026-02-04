@@ -46,14 +46,16 @@ namespace GPU_HeiPa {
         u64 n_pops = 5;
 
         UnmanagedDeviceWeight weights;
-        UnmanagedDeviceVertex neighborhood;
+        UnmanagedDeviceU32 neighborhood;
         UnmanagedDeviceVertex edges_u;
         UnmanagedDeviceVertex edges_v;
         UnmanagedDeviceWeight edges_w;
     };
 
     inline Graph from_HostGraph(const HostGraph &host_g,
-                                KokkosMemoryStack &mem_stack) {
+                                KokkosMemoryStack &mem_stack,
+                                f64 &down_upload_ms) {
+        auto p = get_time_point();
         Graph g;
         // initialize the graph
         {
@@ -68,7 +70,7 @@ namespace GPU_HeiPa {
             size_t bytes_weights = round_up_64(sizeof(weight_t) * (size_t) g.n);
 
             size_t off_neighborhood = off_weights + bytes_weights;
-            size_t bytes_neighborhood = round_up_64(sizeof(vertex_t) * (size_t) (g.n + 1));
+            size_t bytes_neighborhood = round_up_64(sizeof(u32) * (size_t) (g.n + 1));
 
             size_t off_edges_v = off_neighborhood + bytes_neighborhood;
             size_t bytes_edges_v = round_up_64(sizeof(vertex_t) * (size_t) g.m);
@@ -89,7 +91,7 @@ namespace GPU_HeiPa {
 
             // create unmanaged views into the chunk
             g.weights = UnmanagedDeviceWeight((weight_t *) (base + off_weights), g.n);
-            g.neighborhood = UnmanagedDeviceVertex((vertex_t *) (base + off_neighborhood), g.n + 1);
+            g.neighborhood = UnmanagedDeviceU32((u32 *) (base + off_neighborhood), g.n + 1);
             g.edges_v = UnmanagedDeviceVertex((vertex_t *) (base + off_edges_v), g.m);
             g.edges_w = UnmanagedDeviceWeight((weight_t *) (base + off_edges_w), g.m);
             g.edges_u = UnmanagedDeviceVertex((vertex_t *) (base + off_edges_u), g.m);
@@ -100,6 +102,7 @@ namespace GPU_HeiPa {
             Kokkos::deep_copy(Kokkos::subview(g.memory, std::make_pair((size_t) 0, (size_t) host_g.n_bytes)), host_g.memory);
             KOKKOS_PROFILE_FENCE();
         }
+        down_upload_ms += get_milli_seconds(p, get_time_point());
         // create the third array
         {
             ScopedTimer _t{"misc", "from_HostGraph", "fill_edges_u"};
@@ -130,7 +133,7 @@ namespace GPU_HeiPa {
             coarse_g.g_weight = old_g.g_weight;
 
             coarse_g.weights = UnmanagedDeviceWeight((weight_t *) get_chunk_front(mem_stack, sizeof(weight_t) * coarse_g.n), coarse_g.n);
-            coarse_g.neighborhood = UnmanagedDeviceVertex((vertex_t *) get_chunk_front(mem_stack, sizeof(vertex_t) * (coarse_g.n + 1)), coarse_g.n + 1);
+            coarse_g.neighborhood = UnmanagedDeviceU32((u32 *) get_chunk_front(mem_stack, sizeof(u32) * (coarse_g.n + 1)), coarse_g.n + 1);
         }
 
         UnmanagedDeviceVertex degrees;
@@ -169,7 +172,7 @@ namespace GPU_HeiPa {
             ScopedTimer t_max_degrees{"contraction", "from_Graph_Mapping", "max_degrees"};
 
             Kokkos::parallel_for("max_degrees", old_g.n, KOKKOS_LAMBDA(const vertex_t u) {
-                vertex_t deg = old_g.neighborhood(u + 1) - old_g.neighborhood(u);
+                u32 deg = old_g.neighborhood(u + 1) - old_g.neighborhood(u);
                 weight_t u_w = old_g.weights(u);
                 vertex_t v = mapping.mapping(u);
 
@@ -287,7 +290,9 @@ namespace GPU_HeiPa {
                 if (final) coarse_g.neighborhood(i) = running;
                 running += cnt;
             });
-            Kokkos::deep_copy(coarse_g.m, Kokkos::subview(coarse_g.neighborhood, coarse_g.n)); // copy final number of edges m
+            u32 temp;
+            Kokkos::deep_copy(temp, Kokkos::subview(coarse_g.neighborhood, coarse_g.n)); // copy final number of edges m
+            coarse_g.m = (vertex_t) temp;
 
             KOKKOS_PROFILE_FENCE();
         }

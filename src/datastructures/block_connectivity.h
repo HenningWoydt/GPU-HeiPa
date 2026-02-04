@@ -305,6 +305,8 @@ namespace GPU_HeiPa {
                           const Graph &g,
                           const Partition &partition,
                           partition_t k) {
+        #if ASSERT_ENABLED
+
         // Host mirrors
         HostBlockConnectivity h_bc = download_block_connectivity(bc);
         HostGraph h_g = to_host_graph(g);
@@ -415,6 +417,7 @@ namespace GPU_HeiPa {
             //     }
             // }
         }
+        #endif
     }
 
 

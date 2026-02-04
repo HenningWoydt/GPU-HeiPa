@@ -70,6 +70,7 @@ namespace GPU_HeiPa {
         weight_t initial_edge_cut = 0;
         weight_t initial_max_block_weight = 0;
 
+        f64 down_up_load_ms = 0.0;
         f64 misc_ms = 0.0;
         f64 coarsening_ms = 0.0;
         f64 contraction_ms = 0.0;
@@ -156,6 +157,7 @@ namespace GPU_HeiPa {
                 host_partition = HostPartition(Kokkos::view_alloc(Kokkos::WithoutInitializing, "host_partition"), graphs.back().n);
                 Kokkos::deep_copy(host_partition, partition.map);
             }
+            down_up_load_ms += get_milli_seconds(p, get_time_point());
 
             // calc stats
             size_t n_empty_partitions = 0;
@@ -216,8 +218,9 @@ namespace GPU_HeiPa {
                 std::cout << "Init. Part.       : " << initial_partitioning_ms << std::endl;
                 std::cout << "Uncontraction     : " << uncontraction_ms << std::endl;
                 std::cout << "Refinement        : " << refinement_ms << std::endl;
+                std::cout << "Down/Upload       : " << down_up_load_ms << std::endl;
                 std::cout << "Misc              : " << misc_ms << std::endl;
-                std::cout << "ALL               : " << misc_ms + coarsening_ms + contraction_ms + initial_partitioning_ms + uncontraction_ms + refinement_ms << std::endl;
+                std::cout << "ALL               : " << coarsening_ms + contraction_ms + initial_partitioning_ms + uncontraction_ms + refinement_ms + down_up_load_ms + misc_ms << std::endl;
             }
             if (config.verbose_level >= 2) {
                 #if ENABLE_PROFILER
@@ -300,7 +303,7 @@ namespace GPU_HeiPa {
             k = config.k;
             lmax = (weight_t) std::ceil((1.0 + config.imbalance) * ((f64) host_g.g_weight / (f64) config.k));
 
-            graphs.emplace_back(from_HostGraph(host_g, mem_stack));
+            graphs.emplace_back(from_HostGraph(host_g, mem_stack, down_up_load_ms));
             //
             {
                 ScopedTimer t{"misc", "partition", "initialize"};
@@ -308,6 +311,7 @@ namespace GPU_HeiPa {
             }
 
             misc_ms += get_milli_seconds(p, get_time_point());
+            misc_ms -= down_up_load_ms;
 
             assert_state_pre_partition(graphs.back());
         }

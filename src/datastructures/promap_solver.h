@@ -74,6 +74,7 @@ namespace GPU_HeiPa {
         weight_t initial_comm_cost = 0;
         weight_t initial_max_block_weight = 0;
 
+        f64 down_upload_ms = 0.0;
         f64 misc_ms = 0.0;
         f64 coarsening_ms = 0.0;
         f64 contraction_ms = 0.0;
@@ -158,6 +159,7 @@ namespace GPU_HeiPa {
                 host_partition = HostPartition(Kokkos::view_alloc(Kokkos::WithoutInitializing, "host_partition"), graphs.back().n);
                 Kokkos::deep_copy(host_partition, partition.map);
             }
+            down_upload_ms += get_milli_seconds(p, get_time_point());
 
             // calc stats
             weight_t max_block_w = 0;
@@ -312,7 +314,7 @@ namespace GPU_HeiPa {
             distances = config.distance;
             lmax = (weight_t) std::ceil((1.0 + config.imbalance) * ((f64) host_g.g_weight / (f64) config.k));
 
-            graphs.emplace_back(from_HostGraph(host_g, mem_stack));
+            graphs.emplace_back(from_HostGraph(host_g, mem_stack, down_upload_ms));
 
             // initialize distance oracle
             {
