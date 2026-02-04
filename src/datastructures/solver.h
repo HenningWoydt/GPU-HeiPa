@@ -153,19 +153,20 @@ namespace GPU_HeiPa {
             HostPartition host_partition;
             //
             {
-                ScopedTimer _t("misc", "Solver", "download_partition");
+                ScopedTimer _t("up/download", "Solver", "download_partition");
                 host_partition = HostPartition(Kokkos::view_alloc(Kokkos::WithoutInitializing, "host_partition"), graphs.back().n);
                 Kokkos::deep_copy(host_partition, partition.map);
             }
-            down_up_load_ms += get_milli_seconds(p, get_time_point());
+            f64 down_ms = get_milli_seconds(p, get_time_point());
+            down_up_load_ms += down_ms;
 
             // calc stats
             size_t n_empty_partitions = 0;
             size_t n_overloaded_partitions = 0;
             weight_t sum_too_much = 0;
-            PartitionHost partition_host = to_host_partition(partition);
             if (config.verbose_level >= 2) {
                 ScopedTimer _t("misc", "Solver", "calc_stats");
+                PartitionHost partition_host = to_host_partition(partition);
                 for (partition_t id = 0; id < config.k; ++id) {
                     n_empty_partitions += partition_host.bweights(id) == 0;
                     n_overloaded_partitions += partition_host.bweights(id) > lmax;
@@ -187,6 +188,7 @@ namespace GPU_HeiPa {
             }
 
             misc_ms += get_milli_seconds(p, get_time_point());
+            misc_ms -= down_ms;
 
             auto ep = get_time_point();
             f64 duration = get_milli_seconds(sp, ep);
@@ -303,15 +305,14 @@ namespace GPU_HeiPa {
             k = config.k;
             lmax = (weight_t) std::ceil((1.0 + config.imbalance) * ((f64) host_g.g_weight / (f64) config.k));
 
-            graphs.emplace_back(from_HostGraph(host_g, mem_stack, down_up_load_ms));
-            //
-            {
-                ScopedTimer t{"misc", "partition", "initialize"};
-                partition = initialize_partition(n, k, lmax, mem_stack);
-            }
+            f64 up_ms = 0;
+            graphs.emplace_back(from_HostGraph(host_g, mem_stack, up_ms));
+
+            partition = initialize_partition(n, k, lmax, mem_stack);
 
             misc_ms += get_milli_seconds(p, get_time_point());
-            misc_ms -= down_up_load_ms;
+            misc_ms -= up_ms;
+            down_up_load_ms += up_ms;
 
             assert_state_pre_partition(graphs.back());
         }

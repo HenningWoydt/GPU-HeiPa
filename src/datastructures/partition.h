@@ -48,6 +48,8 @@ namespace GPU_HeiPa {
                                           const partition_t t_k,
                                           const weight_t t_lmax,
                                           KokkosMemoryStack &mem_stack) {
+        ScopedTimer t{"misc", "partition", "initialize_partition"};
+
         Partition partition;
 
         partition.n = t_n;

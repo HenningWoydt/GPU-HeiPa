@@ -161,14 +161,18 @@ namespace GPU_HeiPa {
                                     KokkosMemoryStack &mem_stack) {
         const weight_t max_allowed = (weight_t) (6.0 * (f64) g.g_weight / (f64) thm.n);
 
-        UnmanagedDeviceVertex unmapped_v = UnmanagedDeviceVertex((vertex_t *) get_chunk_back(mem_stack, sizeof(vertex_t) * thm.n), thm.n);
-        UnmanagedDeviceVertex next_unmapped_v = UnmanagedDeviceVertex((vertex_t *) get_chunk_back(mem_stack, sizeof(vertex_t) * thm.n), thm.n);
+        UnmanagedDeviceVertex unmapped_v;
+        UnmanagedDeviceVertex next_unmapped_v;
         vertex_t n_unmapped = thm.n;
         vertex_t next_n_unmapped = thm.n;
 
         // init unmapped vertices
         {
             ScopedTimer _t("coarsening", "thm_heavy_edge_matching", "init_unmapped");
+
+            unmapped_v = UnmanagedDeviceVertex((vertex_t *) get_chunk_back(mem_stack, sizeof(vertex_t) * thm.n), thm.n);
+            next_unmapped_v = UnmanagedDeviceVertex((vertex_t *) get_chunk_back(mem_stack, sizeof(vertex_t) * thm.n), thm.n);
+
             Kokkos::parallel_for("init_unmapped", thm.n, KOKKOS_LAMBDA(const vertex_t u) {
                 unmapped_v(u) = u;
             });
@@ -210,7 +214,7 @@ namespace GPU_HeiPa {
                         f32 rating = (f32) (w * w) / weight_product;
                         rating += edge_noise(u, v, round);
 
-                        if (rating > best_rating || (rating == best_rating && best_v < v)) {
+                        if (rating > best_rating) {
                             best_v = v;
                             best_rating = rating;
                         }

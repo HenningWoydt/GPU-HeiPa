@@ -55,7 +55,6 @@ namespace GPU_HeiPa {
     inline Graph from_HostGraph(const HostGraph &host_g,
                                 KokkosMemoryStack &mem_stack,
                                 f64 &down_upload_ms) {
-        auto p = get_time_point();
         Graph g;
         // initialize the graph
         {
@@ -96,9 +95,10 @@ namespace GPU_HeiPa {
             g.edges_w = UnmanagedDeviceWeight((weight_t *) (base + off_edges_w), g.m);
             g.edges_u = UnmanagedDeviceVertex((vertex_t *) (base + off_edges_u), g.m);
         }
+        auto p = get_time_point();
         // copy the structure to device
         {
-            ScopedTimer _t{"misc", "from_HostGraph", "copy"};
+            ScopedTimer _t{"up/download", "from_HostGraph", "copy"};
             Kokkos::deep_copy(Kokkos::subview(g.memory, std::make_pair((size_t) 0, (size_t) host_g.n_bytes)), host_g.memory);
             KOKKOS_PROFILE_FENCE();
         }
@@ -223,62 +223,31 @@ namespace GPU_HeiPa {
                 u32 len = end - beg;
                 if (len == 0) { return; }
 
-                u32 idx = beg + hash32(v_new) % len;
                 for (u32 j = 0; j < len; ++j) {
-                    if (idx == end) { idx = beg; }
-                    vertex_t old = Kokkos::atomic_compare_exchange(&hash_keys(idx), coarse_g.n, v_new);
-                    if (old == coarse_g.n || old == v_new) {
+                    u32 idx = beg + ((v_new + j) % len);
+                    vertex_t found_v = hash_keys(idx);
+
+                    if (found_v == v_new) {
                         Kokkos::atomic_add(&hash_vals(idx), w);
-                        if (old == coarse_g.n) { Kokkos::atomic_inc(&degrees(u_new)); }
                         break;
                     }
-                    idx += 1;
+
+                    if (found_v == coarse_g.n) {
+                        vertex_t old = Kokkos::atomic_compare_exchange(&hash_keys(idx), coarse_g.n, v_new);
+                        if (old == v_new) {
+                            Kokkos::atomic_add(&hash_vals(idx), w);
+                            break;
+                        }
+
+                        if (old == coarse_g.n) {
+                            Kokkos::atomic_inc(&degrees(u_new));
+                            Kokkos::atomic_add(&hash_vals(idx), w);
+                            break;
+                        }
+                    }
                 }
             });
             KOKKOS_PROFILE_FENCE();
-        }
-
-        // hash edges - vertex parallel
-        {
-            /*
-            ScopedTimer t_hash_edges{"contraction", "from_Graph_Mapping", "hash_edges"};
-
-            using TeamPolicy = Kokkos::TeamPolicy<DeviceExecutionSpace, Kokkos::IndexType<u32> >;
-            Kokkos::parallel_for("hash_edges", TeamPolicy((int) old_g.n, Kokkos::AUTO), KOKKOS_LAMBDA(const TeamPolicy::member_type &t) {
-                vertex_t u = t.league_rank();
-
-                Kokkos::parallel_for(Kokkos::TeamThreadRange(t, old_g.neighborhood(u), old_g.neighborhood(u + 1)), [=](const u32 i) {
-                    vertex_t v = old_g.edges_v(i);
-                    weight_t w = old_g.edges_w(i);
-
-                    vertex_t u_new = mapping.mapping(u);
-                    vertex_t v_new = mapping.mapping(v);
-
-                    MY_KOKKOS_ASSERT(u_new < coarse_g.n);
-                    MY_KOKKOS_ASSERT(v_new < coarse_g.n);
-
-                    if (u_new == v_new) { return; } // this edge vanishes
-
-                    u32 beg = hash_offsets(u_new);
-                    u32 end = hash_offsets(u_new + 1);
-                    u32 len = end - beg;
-                    if (len == 0) { return; }
-
-                    u32 idx = beg + hash32(v_new) % len;
-                    for (u32 j = 0; j < len; ++j) {
-                        if (idx == end) { idx = beg; }
-                        vertex_t old = Kokkos::atomic_compare_exchange(&hash_keys(idx), coarse_g.n, v_new);
-                        if (old == coarse_g.n || old == v_new) {
-                            Kokkos::atomic_add(&hash_vals(idx), w);
-                            if (old == coarse_g.n) { Kokkos::atomic_inc(&degrees(u_new)); }
-                            break;
-                        }
-                        idx += 1;
-                    }
-                });
-            });
-            KOKKOS_PROFILE_FENCE();
-            */
         }
 
         // build offsets
@@ -319,6 +288,7 @@ namespace GPU_HeiPa {
                     vertex_t v = hash_keys(idx);
                     weight_t w = hash_vals(idx);
                     if (v != coarse_g.n) {
+                        coarse_g.edges_u(out) = u_new;
                         coarse_g.edges_v(out) = v;
                         coarse_g.edges_w(out) = w;
                         ++out;
@@ -332,6 +302,7 @@ namespace GPU_HeiPa {
         }
 
         // fill the u array
+        /*
         {
             ScopedTimer t_fill_coarse_u{"contraction", "from_Graph_Mapping", "fill_coarse_u"};
 
@@ -344,6 +315,7 @@ namespace GPU_HeiPa {
             });
             KOKKOS_PROFILE_FENCE();
         }
+        */
 
         // deallocate mem
         {
