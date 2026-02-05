@@ -229,7 +229,7 @@ if (
     -DCMAKE_CXX_FLAGS_RELEASE="${CXX_RELEASE_FLAGS}" \
     -DCMAKE_CXX_FLAGS="-w" \
     ${ARCH_FLAG:+-D${ARCH_FLAG}} \
-  && make install -j "$JOBS" > /dev/null 2>&1
+  && make install -j "$JOBS"
 ); then
   echo "Kokkos 5.0.0 build completed successfully."
 else
@@ -254,8 +254,7 @@ if (
     -DCMAKE_CXX_FLAGS="-w" \
     ${KOKKOS_BACKEND} \
     ${KOKKOS_ARCH} \
-    > /dev/null 2>&1 \
-  && make install -j "$JOBS" > /dev/null 2>&1
+  && make install -j "$JOBS"
 ); then
   echo "Kokkos-Kernels 5.0.0 build completed successfully."
 else
@@ -320,5 +319,5 @@ cmake .. -DCMAKE_BUILD_TYPE=Release \
          -DCMAKE_PREFIX_PATH="${ROOT}/extern/local/kokkos;${ROOT}/extern/local/kokkos-kernels" \
          -DCMAKE_CXX_STANDARD=20 \
          -DCMAKE_CXX_EXTENSIONS=OFF
-# cmake --build . --parallel "$JOBS" --target GPU-HeiPa
+cmake --build . --parallel "$JOBS" --target GPU-HeiPa
 cmake --build . --parallel "$JOBS" --target GPU-HeiProMap
