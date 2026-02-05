@@ -127,7 +127,7 @@ namespace GPU_HeiPa {
         Graph coarse_g;
         // initialize graphs
         {
-            ScopedTimer t_initialize{"contraction", "from_Graph_Mapping", "initialize_graph"};
+            ScopedTimer _t{"contraction", "from_Graph_Mapping", "initialize_graph"};
 
             coarse_g.n = mapping.coarse_n;
             coarse_g.g_weight = old_g.g_weight;
@@ -142,21 +142,31 @@ namespace GPU_HeiPa {
         UnmanagedDeviceU32 hash_offsets;
         UnmanagedDeviceVertex hash_keys;
         UnmanagedDeviceWeight hash_vals;
+
+        UnmanagedDeviceU32 group_size;
+        UnmanagedDeviceU32 group_offsets;
+        UnmanagedDeviceU32 group_pos;
+        UnmanagedDeviceVertex grouped;
         // initialize helpers
         {
-            ScopedTimer t_initialize{"contraction", "from_Graph_Mapping", "initialize_helpers"};
+            ScopedTimer _t{"contraction", "from_Graph_Mapping", "initialize_helpers"};
 
-            degrees = UnmanagedDeviceVertex((vertex_t *) get_chunk_back(mem_stack, sizeof(vertex_t) * coarse_g.n), coarse_g.n);
-            sum_degrees = UnmanagedDeviceVertex((vertex_t *) get_chunk_back(mem_stack, sizeof(vertex_t) * coarse_g.n), coarse_g.n);
+            degrees = UnmanagedDeviceVertex((vertex_t *) get_chunk_back(mem_stack, sizeof(vertex_t) * (coarse_g.n + 1)), (coarse_g.n + 1));
+            sum_degrees = UnmanagedDeviceVertex((vertex_t *) get_chunk_back(mem_stack, sizeof(vertex_t) * (coarse_g.n + 1)), (coarse_g.n + 1));
 
             hash_offsets = UnmanagedDeviceU32((u32 *) get_chunk_back(mem_stack, sizeof(u32) * (coarse_g.n + 1)), coarse_g.n + 1);
             hash_keys = UnmanagedDeviceVertex((vertex_t *) get_chunk_back(mem_stack, sizeof(vertex_t) * old_g.m), old_g.m);
             hash_vals = UnmanagedDeviceWeight((weight_t *) get_chunk_back(mem_stack, sizeof(weight_t) * old_g.m), old_g.m);
+
+            group_size = UnmanagedDeviceU32((u32 *) get_chunk_back(mem_stack, sizeof(u32) * (coarse_g.n + 1)), coarse_g.n + 1);
+            group_offsets = UnmanagedDeviceU32((u32 *) get_chunk_back(mem_stack, sizeof(u32) * (coarse_g.n + 1)), coarse_g.n + 1);
+            group_pos = UnmanagedDeviceU32((u32 *) get_chunk_back(mem_stack, sizeof(u32) * (coarse_g.n + 1)), coarse_g.n + 1);
+            grouped = UnmanagedDeviceVertex((vertex_t *) get_chunk_back(mem_stack, sizeof(vertex_t) * old_g.n), old_g.n);
         }
 
         // set memory to 0
         {
-            ScopedTimer t_initialize_set_0{"contraction", "from_Graph_Mapping", "initialize_set_0"};
+            ScopedTimer _t{"contraction", "from_Graph_Mapping", "initialize_set_0"};
 
             Kokkos::deep_copy(coarse_g.weights, 0);
             Kokkos::deep_copy(degrees, 0);
@@ -164,12 +174,14 @@ namespace GPU_HeiPa {
             Kokkos::deep_copy(hash_offsets, 0);
             Kokkos::deep_copy(hash_keys, coarse_g.n);
             Kokkos::deep_copy(hash_vals, 0);
+
+            Kokkos::deep_copy(group_size, 0);
             KOKKOS_PROFILE_FENCE();
         }
 
         // determine weight of new vertices and maximum degree
         {
-            ScopedTimer t_max_degrees{"contraction", "from_Graph_Mapping", "max_degrees"};
+            ScopedTimer _t{"contraction", "from_Graph_Mapping", "max_degrees"};
 
             Kokkos::parallel_for("max_degrees", old_g.n, KOKKOS_LAMBDA(const vertex_t u) {
                 u32 deg = old_g.neighborhood(u + 1) - old_g.neighborhood(u);
@@ -184,19 +196,75 @@ namespace GPU_HeiPa {
 
         // prefix sum over all degrees
         {
-            ScopedTimer t_max_degrees_prefix_sum{"contraction", "from_Graph_Mapping", "max_degrees_prefix_sum"};
+            ScopedTimer _t{"contraction", "from_Graph_Mapping", "max_degrees_prefix_sum"};
 
             Kokkos::parallel_scan("prefix_sum_offsets", coarse_g.n + 1, KOKKOS_LAMBDA(const u32 i, u32 &running, const bool final) {
-                u32 cnt = i < coarse_g.n ? sum_degrees(i) : 0;
-                if (final) hash_offsets(i) = running;
-                running += cnt;
+                if (final) { hash_offsets(i) = running; }
+                running += sum_degrees(i);
             });
+
             KOKKOS_PROFILE_FENCE();
         }
 
-        // hash edges - edge parallel
+        vertex_t max_degree = 0;
+        // determine max degree
         {
-            ScopedTimer t_hash_edges{"contraction", "from_Graph_Mapping", "hash_edges"};
+            ScopedTimer _t{"contraction", "from_Graph_Mapping", "max_degree"};
+
+            Kokkos::parallel_reduce("max_degree", Kokkos::RangePolicy<DeviceExecutionSpace>(0, coarse_g.n), KOKKOS_LAMBDA(const vertex_t u, vertex_t &lmax) {
+                const vertex_t deg = hash_offsets(u + 1) - hash_offsets(u);
+                if (deg > lmax) lmax = deg;
+            }, Kokkos::Max<vertex_t>(max_degree));
+
+            Kokkos::fence();
+            KOKKOS_PROFILE_FENCE();
+        }
+
+        // determine how many vertice map to v
+        {
+            ScopedTimer _t{"contraction", "from_Graph_Mapping", "group_size"};
+
+            Kokkos::parallel_for("group_size", old_g.n, KOKKOS_LAMBDA(const vertex_t u) {
+                vertex_t v = mapping.mapping(u);
+                Kokkos::atomic_inc(&group_size(v));
+            });
+
+            KOKKOS_PROFILE_FENCE();
+        }
+
+        // determine the offsets
+        {
+            ScopedTimer _t{"contraction", "from_Graph_Mapping", "group_offsets"};
+
+            Kokkos::parallel_scan("group_offsets_scan", coarse_g.n + 1, KOKKOS_LAMBDA(const u32 i, u32 &running, const bool final) {
+                if (final) group_offsets(i) = running;
+                if (i < (u32) coarse_g.n) running += group_size(i);
+            });
+
+            Kokkos::parallel_for("init_group_pos", coarse_g.n, KOKKOS_LAMBDA(const u32 v) {
+                group_pos(v) = group_offsets(v);
+            });
+
+            KOKKOS_PROFILE_FENCE();
+        }
+
+        // group by mapping
+        {
+            ScopedTimer _t{"contraction", "from_Graph_Mapping", "groups"};
+
+            Kokkos::parallel_for("scatter_grouped_vertices", old_g.n, KOKKOS_LAMBDA(const vertex_t u) {
+                const vertex_t v = mapping.mapping(u);
+                const u32 idx = Kokkos::atomic_fetch_inc(&group_pos(v));
+                grouped(idx) = u;
+            });
+
+            KOKKOS_PROFILE_FENCE();
+        }
+
+        std::cout << "max_degrees: " << max_degree << std::endl;
+        if (max_degree > 128) {
+            // hash edges - edge parallel
+            ScopedTimer _t{"contraction", "from_Graph_Mapping", "hash_edges_edge_parallel"};
 
             Kokkos::parallel_for("hash_edges", old_g.m, KOKKOS_LAMBDA(const u32 i) {
                 vertex_t u = old_g.edges_u(i);
@@ -238,16 +306,143 @@ namespace GPU_HeiPa {
                 }
             });
             KOKKOS_PROFILE_FENCE();
+        } else {
+            // hash edges - vertex parallel
+            ScopedTimer _t{"contraction", "from_Graph_Mapping", "hash_edges_vertex_parallel"};
+
+            // Scratch hash capacity (power of two) ~ 2*max_degree is usually enough
+            int CAP = 1;
+            while (CAP < int(2 * max_degree + 1)) CAP <<= 1;
+            CAP = (CAP < 16) ? 16 : CAP; // give it some slack; still tiny for max_degree<=10
+
+            // Scratch: keys[CAP] + vals[CAP] + nuniq
+            const size_t scratch_bytes = size_t(CAP) * sizeof(vertex_t) + size_t(CAP) * sizeof(weight_t) + sizeof(u32);
+
+            using TeamPolicy = Kokkos::TeamPolicy<DeviceExecutionSpace>;
+            using Member = typename TeamPolicy::member_type;
+
+            Kokkos::parallel_for("hash_edges_small_degree_team", TeamPolicy((int) coarse_g.n, Kokkos::AUTO).set_scratch_size(0, Kokkos::PerTeam(scratch_bytes)), KOKKOS_LAMBDA(const Member &team) {
+                const vertex_t u_new = (vertex_t) team.league_rank();
+
+                const u32 g_beg = group_offsets(u_new);
+                const u32 g_end = group_offsets(u_new + 1);
+
+                const u32 row_beg = hash_offsets(u_new);
+                const u32 row_end = hash_offsets(u_new + 1);
+                const u32 row_len = row_end - row_beg;
+
+                // Nothing maps here or no capacity (shouldn't happen if offsets are consistent)
+                if (g_beg == g_end || row_len == 0) {
+                    Kokkos::single(Kokkos::PerTeam(team), [&]() { degrees(u_new) = 0; });
+                    return;
+                }
+
+                // --- scratch allocations ---
+                auto *s_keys = (vertex_t *) team.team_shmem().get_shmem(sizeof(vertex_t) * CAP);
+                auto *s_vals = (weight_t *) team.team_shmem().get_shmem(sizeof(weight_t) * CAP);
+                auto *s_nuniq = (u32 *) team.team_shmem().get_shmem(sizeof(u32));
+
+                // init scratch
+                Kokkos::parallel_for(Kokkos::TeamThreadRange(team, 0, CAP), [&](int j) {
+                    s_keys[j] = (vertex_t) NO_BLOCK_ID; // scratch empty sentinel
+                    s_vals[j] = 0;
+                });
+                Kokkos::single(Kokkos::PerTeam(team), [&]() { *s_nuniq = 0; });
+                team.team_barrier();
+
+                // --- aggregate neighbors into scratch hash ---
+                // Iterate original vertices that map to this coarse vertex
+                for (u32 p = g_beg; p < g_end; ++p) {
+                    const vertex_t u = grouped(p);
+
+                    // CSR neighbors of u
+                    const u32 e_beg = old_g.neighborhood(u);
+                    const u32 e_end = old_g.neighborhood(u + 1);
+
+                    Kokkos::parallel_for(Kokkos::TeamThreadRange(team, e_beg, e_end), [&](u32 ei) {
+                        const vertex_t v = old_g.edges_v(ei);
+                        const weight_t w = old_g.edges_w(ei);
+
+                        const vertex_t v_new = mapping.mapping(v);
+                        if (v_new == u_new) return; // self-loop vanishes
+
+                        // insert/accumulate in scratch (linear probing)
+                        u32 slot = (u32) v_new & (u32) (CAP - 1);
+                        while (true) {
+                            const vertex_t prev = Kokkos::atomic_compare_exchange(&s_keys[slot], (vertex_t) NO_BLOCK_ID, v_new);
+
+                            if (prev == (vertex_t) NO_BLOCK_ID) {
+                                // we inserted a new key
+                                Kokkos::atomic_inc(s_nuniq);
+                                Kokkos::atomic_add(&s_vals[slot], w);
+                                break;
+                            }
+                            if (prev == v_new) {
+                                Kokkos::atomic_add(&s_vals[slot], w);
+                                break;
+                            }
+                            slot = (slot + 1) & (u32) (CAP - 1);
+                        }
+                    });
+
+                    team.team_barrier(); // keep scratch coherent across batches of u
+                }
+
+                // --- write scratch entries into global row for u_new ---
+                // Since this team uniquely owns [row_beg,row_end), we can write without global atomics.
+                // hash_keys was pre-initialized to coarse_g.n as empty sentinel.
+                Kokkos::single(Kokkos::PerTeam(team), [&]() {
+                    u32 inserted = 0;
+
+                    for (int j = 0; j < CAP; ++j) {
+                        const vertex_t key = s_keys[j];
+                        if (key == (vertex_t) NO_BLOCK_ID) continue;
+
+                        const weight_t val = s_vals[j];
+                        u32 pos0 = (u32) key % row_len;
+
+                        bool ok = false;
+                        for (u32 t = 0; t < row_len; ++t) {
+                            const u32 idx = row_beg + (pos0 + t) % row_len;
+                            const vertex_t found = hash_keys(idx);
+
+                            if (found == coarse_g.n) {
+                                hash_keys(idx) = key;
+                                hash_vals(idx) = val;
+                                ++inserted;
+                                ok = true;
+                                break;
+                            }
+                            if (found == key) {
+                                hash_vals(idx) += val;
+                                ok = true;
+                                break;
+                            }
+                        }
+
+                        // If this triggers, your row_len was too small for the number of unique neighbors.
+                        // (Shouldn't happen if hash_offsets gives enough capacity.)
+                        if (!ok) {
+                            // safest: stop hard in debug builds
+                            // Kokkos::abort("row_len too small in small-degree contraction hash");
+                        }
+                    }
+
+                    degrees(u_new) = inserted; // <-- IMPORTANT: use inserted, not s_nuniq
+                });
+            });
+
+            KOKKOS_PROFILE_FENCE();
         }
+        Kokkos::fence();
 
         // build offsets
         {
-            ScopedTimer t_build_offsets{"contraction", "from_Graph_Mapping", "build_offsets"};
+            ScopedTimer _t{"contraction", "from_Graph_Mapping", "build_offsets"};
 
             Kokkos::parallel_scan("build_offsets", coarse_g.n + 1, KOKKOS_LAMBDA(const u32 i, u32 &running, const bool final) {
-                const u32 cnt = i < coarse_g.n ? degrees(i) : 0;
-                if (final) coarse_g.neighborhood(i) = running;
-                running += cnt;
+                if (final) { coarse_g.neighborhood(i) = running; }
+                running += degrees(i);
             });
             u32 temp;
             Kokkos::deep_copy(temp, Kokkos::subview(coarse_g.neighborhood, coarse_g.n)); // copy final number of edges m
@@ -258,7 +453,7 @@ namespace GPU_HeiPa {
 
         // allocate edges for coarse graph
         {
-            ScopedTimer t_allocate_edges{"contraction", "from_Graph_Mapping", "allocate_edges"};
+            ScopedTimer _t{"contraction", "from_Graph_Mapping", "allocate_edges"};
 
             coarse_g.edges_u = UnmanagedDeviceVertex((vertex_t *) get_chunk_front(mem_stack, sizeof(vertex_t) * coarse_g.m), coarse_g.m);
             coarse_g.edges_v = UnmanagedDeviceVertex((vertex_t *) get_chunk_front(mem_stack, sizeof(vertex_t) * coarse_g.m), coarse_g.m);
@@ -269,7 +464,7 @@ namespace GPU_HeiPa {
 
         // fill the coarse graph
         {
-            ScopedTimer t_fill_coarse_graph{"contraction", "from_Graph_Mapping", "fill_coarse_graph"};
+            ScopedTimer _t{"contraction", "from_Graph_Mapping", "fill_coarse_graph"};
 
             Kokkos::parallel_for("materialize_edges", coarse_g.n, KOKKOS_LAMBDA(const vertex_t u_new) {
                 u32 out = coarse_g.neighborhood(u_new);
@@ -289,7 +484,7 @@ namespace GPU_HeiPa {
 
         // fill the u array
         {
-            ScopedTimer t_fill_coarse_u{"contraction", "from_Graph_Mapping", "fill_coarse_u"};
+            ScopedTimer _t{"contraction", "from_Graph_Mapping", "fill_coarse_u"};
 
             Kokkos::parallel_for("fill_edges_u", coarse_g.n, KOKKOS_LAMBDA(const vertex_t u) {
                 u32 begin = coarse_g.neighborhood(u);
@@ -301,11 +496,14 @@ namespace GPU_HeiPa {
             KOKKOS_PROFILE_FENCE();
         }
 
-
         // deallocate mem
         {
-            ScopedTimer t_fill_coarse_u{"contraction", "from_Graph_Mapping", "deallocate"};
+            ScopedTimer _t{"contraction", "from_Graph_Mapping", "deallocate"};
 
+            pop_back(mem_stack);
+            pop_back(mem_stack);
+            pop_back(mem_stack);
+            pop_back(mem_stack);
             pop_back(mem_stack);
             pop_back(mem_stack);
             pop_back(mem_stack);
