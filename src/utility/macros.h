@@ -49,28 +49,6 @@ namespace GPU_HeiPa {
     #else
     #define KOKKOS_PROFILE_FENCE() do {} while(0)
     #endif
-
-    #if (ASSERT_ENABLED)
-
-    // Basic assert
-    #define MY_KOKKOS_ASSERT(cond) \
-        do { \
-        if (!(cond)) { \
-        printf("\n[ASSERT FAILED]\n" \
-        "  Condition : %s\n" \
-        "  File      : %s\n" \
-        "  Function  : %s\n" \
-        "  Line      : %d\n", \
-        #cond, __FILE__, __func__, __LINE__); \
-        Kokkos::abort("[ASSERT FAILED]"); \
-        } \
-        } while (0)
-
-    #else  // ASSERT_ENABLED
-
-    #define MY_KOKKOS_ASSERT(cond)         do { (void)sizeof(cond); } while (0)
-
-    #endif
 }
 
 #endif //GPU_HEIPA_MACROS_H
