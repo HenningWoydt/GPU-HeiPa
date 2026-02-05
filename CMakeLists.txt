@@ -15,6 +15,9 @@ set(CMAKE_CXX_EXTENSIONS OFF)
 set(CMAKE_POSITION_INDEPENDENT_CODE ON)
 set(CMAKE_EXPORT_COMPILE_COMMANDS ON)
 
+option(ENABLE_PROFILER "Enable profiler instrumentation" ON)
+
+
 # --- KaHIP library ---
 set(KaHIP_ROOT "${CMAKE_CURRENT_SOURCE_DIR}/extern/local/kahip")
 find_library(KAHIP_LIBRARY
@@ -73,9 +76,9 @@ find_package(Kokkos REQUIRED)
 
 # --- OpenMP Setup ---
 find_package(OpenMP REQUIRED)
-if(OpenMP_CXX_FOUND)
+if (OpenMP_CXX_FOUND)
     message(STATUS "Found OpenMP: ${OpenMP_CXX_VERSION}")
-endif()
+endif ()
 
 # --- Compiler Flags ---
 set(CMAKE_CXX_FLAGS_RELEASE "-O3 -DNDEBUG -march=native -pipe -finline-functions -ftree-vectorize -funroll-loops -falign-loops -fno-rtti -Wall -Wextra -pedantic -Wno-unused-variable -Wno-unused-parameter -Wconversion -Wsign-conversion -Wfloat-conversion")
@@ -106,4 +109,12 @@ target_link_libraries(GPU-HeiProMap
         Kokkos::kokkos
         Kokkos::kokkoskernels
         OpenMP::OpenMP_CXX
+)
+
+target_compile_definitions(GPU-HeiProMap PRIVATE
+        ENABLE_PROFILER=$<IF:$<BOOL:${ENABLE_PROFILER}>,1,0>
+)
+
+target_compile_definitions(GPU-HeiPa PRIVATE
+        ENABLE_PROFILER=$<IF:$<BOOL:${ENABLE_PROFILER}>,1,0>
 )
