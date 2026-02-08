@@ -214,24 +214,26 @@ namespace GPU_HeiPa {
 
                 u32 r_beg = bc.row(u);
                 u32 r_end = bc.row(u + 1);
+                u32 r_len = r_end - r_beg;
 
                 partition_t v_id = lp.partition.map(v);
 
-                for (u32 j = r_beg; j < r_end; j++) {
-                    partition_t val = bc.ids(j);
+                for (u32 j = 0; j < r_len; j++) {
+                    u32 idx = r_beg + j; // ((v_id + j) % r_len);
+                    partition_t val = bc.ids(idx);
                     if (val == v_id) {
-                        Kokkos::atomic_add(&bc.weights(j), w);
+                        Kokkos::atomic_add(&bc.weights(idx), w);
                         return;
                     }
                     if (val == NULL_PART) {
-                        val = Kokkos::atomic_compare_exchange(&bc.ids(j), NULL_PART, v_id);
+                        val = Kokkos::atomic_compare_exchange(&bc.ids(idx), NULL_PART, v_id);
                         if (val == NULL_PART) {
-                            Kokkos::atomic_add(&bc.weights(j), w);
+                            Kokkos::atomic_add(&bc.weights(idx), w);
                             Kokkos::atomic_inc(&bc.sizes(u));
                             return;
                         }
                         if (val == v_id) {
-                            Kokkos::atomic_add(&bc.weights(j), w);
+                            Kokkos::atomic_add(&bc.weights(idx), w);
                             return;
                         }
                     }
@@ -278,8 +280,10 @@ namespace GPU_HeiPa {
                 u32 r_len = r_end - r_beg;
 
                 // reset global memory
-                Kokkos::parallel_for(Kokkos::TeamThreadRange(t, 0, r_len), [&](const u32 i) { bc.weights(r_beg + i) = 0; });
-                Kokkos::parallel_for(Kokkos::TeamThreadRange(t, 0, r_len), [&](const u32 i) { bc.ids(r_beg + i) = NULL_PART; });
+                Kokkos::parallel_for(Kokkos::TeamThreadRange(t, 0, r_len), [&](const u32 i) {
+                    bc.weights(r_beg + i) = 0;
+                    bc.ids(r_beg + i) = NULL_PART;
+                });
 
                 // build the row
                 weight_t *s_weights = (weight_t *) t.team_shmem().get_shmem(sizeof(weight_t) * r_len);
@@ -287,8 +291,10 @@ namespace GPU_HeiPa {
                 u32 *n_needed_slots = (u32 *) t.team_shmem().get_shmem(sizeof(u32));
 
                 // reset weights and ids
-                Kokkos::parallel_for(Kokkos::TeamThreadRange(t, 0, r_len), [&](const vertex_t j) { s_weights[j] = 0; });
-                Kokkos::parallel_for(Kokkos::TeamThreadRange(t, 0, r_len), [&](const vertex_t j) { s_ids[j] = NULL_PART; });
+                Kokkos::parallel_for(Kokkos::TeamThreadRange(t, 0, r_len), [&](const vertex_t j) {
+                    s_weights[j] = 0;
+                    s_ids[j] = NULL_PART;
+                });
                 *n_needed_slots = 0;
                 t.team_barrier();
 
@@ -300,7 +306,9 @@ namespace GPU_HeiPa {
                     u32 idx = (u32) v_id % r_len;
 
                     if (r_len == (u32) lp.k) {
-                        if (NULL_PART == Kokkos::atomic_compare_exchange(s_ids + idx, NULL_PART, v_id)) { Kokkos::atomic_add(n_needed_slots, 1); }
+                        if (NULL_PART == Kokkos::atomic_compare_exchange(s_ids + idx, NULL_PART, v_id)) {
+                            Kokkos::atomic_add(n_needed_slots, 1);
+                        }
                     } else {
                         while (true) {
                             partition_t id = Kokkos::atomic_compare_exchange(s_ids + idx, NULL_PART, v_id);
@@ -338,8 +346,10 @@ namespace GPU_HeiPa {
                 } else {
                     bc.sizes(u) = old_size;
                     //copy conn table into global memory
-                    Kokkos::parallel_for(Kokkos::TeamThreadRange(t, 0, old_size), [&](const u32 i) { bc.weights(r_beg + i) = s_weights[i]; });
-                    Kokkos::parallel_for(Kokkos::TeamThreadRange(t, 0, old_size), [&](const u32 i) { bc.ids(r_beg + i) = s_ids[i]; });
+                    Kokkos::parallel_for(Kokkos::TeamThreadRange(t, 0, old_size), [&](const u32 i) {
+                        bc.weights(r_beg + i) = s_weights[i];
+                        bc.ids(r_beg + i) = s_ids[i];
+                    });
                 }
 
                 // reset cache and memory
@@ -1172,4 +1182,5 @@ namespace GPU_HeiPa {
         return std::make_pair(best_edge_cut, best_max_weight);
     }
 }
+
 #endif //GPU_HEIPA_JET_LABEL_PROPAGATION_H

@@ -75,25 +75,21 @@ namespace GPU_HeiPa {
 
     KOKKOS_INLINE_FUNCTION
     f32 edge_noise(vertex_t u, vertex_t v, u32 round) {
-        // make (u,v) order-independent
-        uint32_t a = (u < v) ? u : v;
-        uint32_t b = (u < v) ? v : u;
+        // order independent
+        const u32 a = u < v ? u : v;
+        const u32 b = u < v ? v : u;
 
-        // combine the pair (boost::hash_combine style)
-        uint32_t x = a;
-        x ^= b + 0x9e3779b9u + (x << 6) + (x >> 2) + round;
+        // simple 32-bit mix (Wang-style)
+        u32 x = a * 0x9e3779b1u;
+        x ^= b * 0x85ebca77u;
+        x ^= round * 0xc2b2ae3du;
 
-        // Murmur3 32-bit finalizer (good avalanche, cheap)
         x ^= x >> 16;
-        x *= 0x85ebca6bu;
-        x ^= x >> 13;
-        x *= 0xc2b2ae35u;
-        x ^= x >> 16;
+        x *= 0x7feb352du;
+        x ^= x >> 15;
 
-        // map to [0,1): use top 24 bits to match float mantissa width
-        uint32_t mant = x >> 8; // top 24 bits
-        f32 noise = (f32) mant * (1.0f / 16777216.0f);
-        return noise * 0.000001f;
+        // map to tiny float in [0, 1e-6)
+        return (f32) (x & 0x00ffffffu) * (1.0f / 16777216.0f) * 1e-6f;
     }
 
     inline Mapping determine_mapping(const DeviceVertex &matching,
@@ -121,7 +117,7 @@ namespace GPU_HeiPa {
                 vertex_t v = matching(u);
                 u32 need = v <= u;
                 needs_id(u) = need; // side-effect: mark array
-                lsum += need;       // accumulate count
+                lsum += need; // accumulate count
             }, mapping.coarse_n);
             KOKKOS_PROFILE_FENCE();
         }
@@ -153,14 +149,11 @@ namespace GPU_HeiPa {
         return mapping;
     }
 
-
     inline void heavy_edge_matching(TwoHopMatcher &thm,
                                     const Graph &g,
                                     UnmanagedDeviceVertex &matching,
                                     const Partition &partition,
                                     KokkosMemoryStack &mem_stack) {
-        const weight_t max_allowed = (weight_t) (6.0 * (f64) g.g_weight / (f64) thm.n);
-
         UnmanagedDeviceVertex unmapped_v;
         UnmanagedDeviceVertex next_unmapped_v;
         vertex_t n_unmapped = thm.n;
@@ -193,11 +186,6 @@ namespace GPU_HeiPa {
                     // Cache weight lookups to reduce memory access
                     weight_t u_weight = g.weights(u);
 
-                    if (u_weight >= max_allowed) {
-                        thm.preferred_neighbor(u) = u;
-                        return;
-                    }
-
                     vertex_t best_v = u;
                     f32 best_rating = -max_sentinel<f32>();
                     for (u32 j = g.neighborhood(u); j < g.neighborhood(u + 1); ++j) {
@@ -207,8 +195,6 @@ namespace GPU_HeiPa {
 
                         weight_t w = g.edges_w(j);
                         weight_t v_weight = g.weights(v);
-
-                        if (v_weight >= max_allowed) { continue; }
 
                         f32 weight_product = (f32) (u_weight * v_weight);
                         f32 rating = (f32) (w * w) / weight_product;
@@ -222,6 +208,7 @@ namespace GPU_HeiPa {
 
                     thm.preferred_neighbor(u) = best_v;
                 });
+
                 KOKKOS_PROFILE_FENCE();
             }
 
@@ -429,7 +416,8 @@ namespace GPU_HeiPa {
     inline void relative_matching(TwoHopMatcher &thm,
                                   const Graph &g,
                                   UnmanagedDeviceVertex &matching,
-                                  const Partition &partition) { {
+                                  const Partition &partition) {
+        {
             ScopedTimer _t("coarsening", "thm_relative_matching", "pick_neighbor");
             Kokkos::parallel_for("pick_neighbor", g.n, KOKKOS_LAMBDA(const vertex_t u) {
                 if (matching(u) != u) {
@@ -445,7 +433,7 @@ namespace GPU_HeiPa {
                     vertex_t mid_v = g.edges_v(i);
                     weight_t mid_e_w = g.edges_w(i);
                     vertex_t mid_deg = g.neighborhood(mid_v + 1) - g.neighborhood(mid_v);
-                    if (mid_deg > 10) { continue; }             // avoid matchmaker with high degree
+                    if (mid_deg > 10) { continue; } // avoid matchmaker with high degree
                     if (matching(mid_v) == mid_v) { continue; } // avoid unmatched matchmaker
 
                     for (u32 j = g.neighborhood(mid_v); j < g.neighborhood(mid_v + 1); ++j) {
