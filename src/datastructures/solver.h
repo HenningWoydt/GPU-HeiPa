@@ -56,6 +56,7 @@ namespace GPU_HeiPa {
         vertex_t m = 0;
         partition_t k = 0;
         weight_t lmax = 0;
+        bool use_ultra = true;
 
         std::vector<Graph> graphs;
         std::vector<Mapping> mappings;
@@ -145,7 +146,7 @@ namespace GPU_HeiPa {
                partition_t t_k,
                f64 imbalance,
                u64 seed,
-               bool use_ultra,
+               bool t_use_ultra,
                UnmanagedDevicePartition &dev_partition,
                KokkosMemoryStack &dev_mem_stack) {
             // Main stack: Graph + coarsening overhead
@@ -158,6 +159,7 @@ namespace GPU_HeiPa {
             config.k = k;
             config.seed = seed;
             config.verbose_level = 0; // or whatever you want
+            use_ultra = t_use_ultra;
 
             graphs.emplace_back(dev_g);
 
@@ -381,6 +383,7 @@ namespace GPU_HeiPa {
             m = host_g.m;
             k = config.k;
             lmax = (weight_t) std::ceil((1.0 + config.imbalance) * ((f64) host_g.g_weight / (f64) config.k));
+            use_ultra = config.config == "ultra";
 
             f64 up_ms = 0;
             graphs.emplace_back(from_HostGraph(host_g, mem_stack, up_ms));
@@ -447,7 +450,7 @@ namespace GPU_HeiPa {
         void refinement(u32 level, KokkosMemoryStack &mem_stack) {
             auto p = get_time_point();
 
-            auto pair = jet_refine(graphs.back(), partition, k, lmax, level, curr_edge_cut, curr_max_block_weight, mem_stack);
+            auto pair = jet_refine(graphs.back(), partition, k, lmax, use_ultra, level, curr_edge_cut, curr_max_block_weight, mem_stack);
             curr_edge_cut = pair.first;
             curr_max_block_weight = pair.second;
 

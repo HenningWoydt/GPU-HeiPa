@@ -1099,6 +1099,7 @@ namespace GPU_HeiPa {
                                                     Partition &partition,
                                                     partition_t k,
                                                     weight_t lmax,
+                                                    bool use_ultra,
                                                     u32 level,
                                                     weight_t curr_edge_cut,
                                                     weight_t curr_max_weight,
@@ -1117,55 +1118,66 @@ namespace GPU_HeiPa {
 
         BlockConn bc = init_BlockConn(lp, g, mem_stack);
 
-        f64 filter_ratio = 0.75;
-        if (level == 0) { filter_ratio = 0.25; }
+        std::vector<f64> filter_ratios;
 
-        u32 balance_iteration = 0;
-        u32 iteration = 0;
-        while (iteration < N_MAX_ITERATIONS) {
-            iteration += 1;
-
-            UnmanagedDeviceVertex moves;
-            if (curr_max_weight <= lmax) {
-                moves = jet_lp(lp, g, bc, filter_ratio);
-                balance_iteration = 0;
+        if (use_ultra) {
+            filter_ratios = {0.85, 0.80, 0.75, 0.70, 0.65, 0.60, 0.55, 0.50, 0.45, 0.40, 0.35, 0.30, 0.25, 0.20, 0.15, 0.10, 0.05,};
+        } else {
+            if (level == 0) {
+                filter_ratios.push_back(0.25);
             } else {
-                if (balance_iteration < N_MAX_WEAK_ITERATIONS) {
-                    moves = rebalance_weak(lp, g, bc);
-                } else {
-                    moves = rebalance_strong(lp, g, bc);
-                }
-                balance_iteration++;
+                filter_ratios.push_back(0.75);
             }
+        }
 
-            u32 n_moves = (u32) moves.extent(0);
-            if (n_moves == 0) { continue; }
+        for (auto filter_ratio: filter_ratios) {
+            u32 balance_iteration = 0;
+            u32 iteration = 0;
+            while (iteration < N_MAX_ITERATIONS) {
+                iteration += 1;
 
-            perform_moves(lp, g, bc, moves, curr_max_weight, curr_edge_cut);
-
-            if (best_max_weight > lmax && curr_max_weight < best_max_weight) {
-                // copy the partition
-                {
-                    ScopedTimer _t("refinement", "JetLabelPropagation", "copy_partition");
-
-                    copy_into(partition, lp.partition, g.n);
-                    best_edge_cut = curr_edge_cut;
-                    best_max_weight = curr_max_weight;
-                    iteration = 0;
-
-                    KOKKOS_PROFILE_FENCE();
+                UnmanagedDeviceVertex moves;
+                if (curr_max_weight <= lmax) {
+                    moves = jet_lp(lp, g, bc, filter_ratio);
+                    balance_iteration = 0;
+                } else {
+                    if (balance_iteration < N_MAX_WEAK_ITERATIONS) {
+                        moves = rebalance_weak(lp, g, bc);
+                    } else {
+                        moves = rebalance_strong(lp, g, bc);
+                    }
+                    balance_iteration++;
                 }
-            } else if (curr_edge_cut < best_edge_cut && (curr_max_weight <= lmax || curr_max_weight < best_max_weight)) {
-                if ((f64) curr_edge_cut < PHI * (f64) best_edge_cut) { iteration = 0; }
-                //
-                {
-                    ScopedTimer _t("refinement", "JetLabelPropagation", "copy_partition");
 
-                    copy_into(partition, lp.partition, g.n);
-                    best_edge_cut = curr_edge_cut;
-                    best_max_weight = curr_max_weight;
+                u32 n_moves = (u32) moves.extent(0);
+                if (n_moves == 0) { continue; }
 
-                    KOKKOS_PROFILE_FENCE();
+                perform_moves(lp, g, bc, moves, curr_max_weight, curr_edge_cut);
+
+                if (best_max_weight > lmax && curr_max_weight < best_max_weight) {
+                    // copy the partition
+                    {
+                        ScopedTimer _t("refinement", "JetLabelPropagation", "copy_partition");
+
+                        copy_into(partition, lp.partition, g.n);
+                        best_edge_cut = curr_edge_cut;
+                        best_max_weight = curr_max_weight;
+                        iteration = 0;
+
+                        KOKKOS_PROFILE_FENCE();
+                    }
+                } else if (curr_edge_cut < best_edge_cut && (curr_max_weight <= lmax || curr_max_weight < best_max_weight)) {
+                    if ((f64) curr_edge_cut < PHI * (f64) best_edge_cut) { iteration = 0; }
+                    //
+                    {
+                        ScopedTimer _t("refinement", "JetLabelPropagation", "copy_partition");
+
+                        copy_into(partition, lp.partition, g.n);
+                        best_edge_cut = curr_edge_cut;
+                        best_max_weight = curr_max_weight;
+
+                        KOKKOS_PROFILE_FENCE();
+                    }
                 }
             }
         }

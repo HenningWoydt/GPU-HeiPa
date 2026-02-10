@@ -24,6 +24,7 @@
 
  # --- build GPU-HeiPa ---
  echo "Building GPU-HeiPa..."
+ mkdir -p build
  cd build
  # Ensure our Kokkos/Kernels are found first
  cmake .. -DCMAKE_BUILD_TYPE=Release \
