@@ -111,6 +111,12 @@ target_link_libraries(GPU-HeiProMap
         OpenMP::OpenMP_CXX
 )
 
+# Disable CUDA lazy loading via linker flags
+if(Kokkos_ENABLE_CUDA)
+    target_link_options(GPU-HeiPa PRIVATE "LINKER:--require-defined,cudaDeviceSynchronize")
+    target_link_options(GPU-HeiProMap PRIVATE "LINKER:--require-defined,cudaDeviceSynchronize")
+endif()
+
 target_compile_definitions(GPU-HeiProMap PRIVATE
         ENABLE_PROFILER=$<IF:$<BOOL:${ENABLE_PROFILER}>,1,0>
 )

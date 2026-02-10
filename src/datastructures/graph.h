@@ -304,7 +304,6 @@ namespace GPU_HeiPa {
 
             KOKKOS_PROFILE_FENCE();
         }
-        assert_back_is_empty(mem_stack);
 
         return coarse_g;
     }
@@ -681,9 +680,29 @@ namespace GPU_HeiPa {
 
             KOKKOS_PROFILE_FENCE();
         }
-        assert_back_is_empty(mem_stack);
 
         return coarse_g;
+    }
+
+    inline Graph make_graph(const vertex_t n,
+                            const vertex_t m,
+                            const weight_t w,
+                            KokkosMemoryStack &mem_stack) {
+        Graph g;
+        // initialize the graph
+
+        g.n = n;
+        g.m = m;
+        g.g_weight = w;
+
+        g.weights = UnmanagedDeviceWeight((weight_t *) get_chunk_front(mem_stack, sizeof(weight_t) * g.n), g.n);
+        g.neighborhood = UnmanagedDeviceU32((u32 *) get_chunk_front(mem_stack, sizeof(u32) * (g.n + 1)), g.n + 1);
+        g.edges_v = UnmanagedDeviceVertex((vertex_t *) get_chunk_front(mem_stack, sizeof(vertex_t) * g.m), g.m);
+        g.edges_w = UnmanagedDeviceWeight((weight_t *) get_chunk_front(mem_stack, sizeof(weight_t) * g.m), g.m);
+        g.edges_u = UnmanagedDeviceVertex((vertex_t *) get_chunk_front(mem_stack, sizeof(vertex_t) * g.m), g.m);
+        g.n_pops = 5;
+
+        return g;
     }
 
     inline HostGraph to_host_graph(const Graph &device_g) {

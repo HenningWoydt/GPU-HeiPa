@@ -75,7 +75,7 @@ int main(int argc, char *argv[]) {
                 {"--hierarchy", "4:8:1"},
                 {"--distance", "1:10:100"},
                 {"--imbalance", "0.03"},
-                {"--config", "default"},
+                {"--config", "HM"},
                 {"--seed", "1"},
                 {"--distance-oracle", "matrix"},
                 {"--verbose-level", "2"}
@@ -125,13 +125,20 @@ int main(int argc, char *argv[]) {
         }
 
         auto sp_solver = get_time_point();
-        if (config.distance_oracle_string == "matrix") {
-            host_partition = ProMapSolver<DistanceOracleMatrix>(config).solve(host_g);
-        } else if (config.distance_oracle_string == "binary") {
-            host_partition = ProMapSolver<DistanceOracleBinary>(config).solve(host_g);
+        if (config.config == "IM") {
+            if (config.distance_oracle_string == "matrix") {
+                host_partition = ProMapSolver<DistanceOracleMatrix>(config).solve(host_g);
+            } else if (config.distance_oracle_string == "binary") {
+                host_partition = ProMapSolver<DistanceOracleBinary>(config).solve(host_g);
+            } else {
+                std::cerr << "Error: Invalid distance oracle string: " << config.distance_oracle_string << std::endl;
+            }
+        } else if (config.config == "HM" || config.config == "HM-ultra") {
+            host_partition = ProMapSolver<DistanceOracleMatrix>(config).solve_multisection(host_g);
         } else {
-            std::cerr << "Error: Invalid distance oracle string: " << config.distance_oracle_string << std::endl;
+            std::cerr << "Error: Invalid config: " << config.config << std::endl;
         }
+
         if (verbose_level >= 1) {
             std::cout << "Solved in         : " << get_milli_seconds(sp_solver, get_time_point()) << std::endl;
         }

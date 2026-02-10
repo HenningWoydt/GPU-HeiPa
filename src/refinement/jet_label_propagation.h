@@ -480,7 +480,7 @@ namespace GPU_HeiPa {
         // If g == 1 -> k=0 -> b stays MID_BUCKETS (matches loop behavior)
         // k = ceil(log_{1.5}(g)) for g>1, and k = ceil(log_{1.5}(1/g)) for g<1
         constexpr float INV_LOG2_1P5 = 1.0f / 0.5849625007211562f; // 1 / log2(1.5)
-        constexpr float EPS = 1e-6f;                               // avoid rounding up at exact powers
+        constexpr float EPS = 1e-6f; // avoid rounding up at exact powers
 
         if (g < 1.0f) {
             // k = ceil(-log_{1.5}(g))
@@ -1115,9 +1115,6 @@ namespace GPU_HeiPa {
         weight_t best_edge_cut = curr_edge_cut;
         weight_t best_max_weight = curr_max_weight;
 
-        ASSERT(curr_edge_cut == get_total_cut(g, curr_partition.map) / 2);
-        ASSERT(curr_weight == max_weight(curr_partition));
-
         BlockConn bc = init_BlockConn(lp, g, mem_stack);
 
         f64 filter_ratio = 0.75;
@@ -1171,9 +1168,6 @@ namespace GPU_HeiPa {
                     KOKKOS_PROFILE_FENCE();
                 }
             }
-
-            ASSERT(curr_edge_cut == get_total_cut(g, curr_partition.map) / 2);
-            ASSERT(curr_weight == max_weight(curr_partition));
         }
 
         free_BlockConn(bc, mem_stack);

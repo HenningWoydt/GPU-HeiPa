@@ -149,9 +149,9 @@ namespace GPU_HeiPa {
         const partition_t k = hierarchy[curr_l];
         const f64 imb = determine_adaptive_imbalance(global_imbalance, global_g_weight, global_k, g.g_weight, k_rem[l - 1 - identifier.size()], l - identifier.size());
 
-        #if ASSERT_ENABLED
+#if ASSERT_ENABLED
         for (vertex_t u = 0; u < g.n; ++u) { temp_partition[u] = k; }
-        #endif
+#endif
 
         // partition current graph into k_here blocks (writes temp_partition for vertices 0..g.n-1)
         {
@@ -160,9 +160,9 @@ namespace GPU_HeiPa {
             // recursive_bisec_partition(g, k, imb, seed, temp_partition);
         }
 
-        #if ASSERT_ENABLED
+#if ASSERT_ENABLED
         for (vertex_t u = 0; u < g.n; ++u) { ASSERT(temp_partition[u] < k); }
-        #endif
+#endif
 
         // leaf: last split (identifier already contains all previous split-ids)
         if (identifier.size() == l - 1) {

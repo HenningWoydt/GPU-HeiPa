@@ -46,6 +46,7 @@
 #include "../utility/profiler.h"
 #include "../utility/asserts.h"
 #include "../distance_oracles/distance_oracle_helpers.h"
+#include "../initial_partitioning/hierarchical_multisection.h"
 #include "../utility/comm_cost.h"
 
 namespace GPU_HeiPa {
@@ -231,12 +232,17 @@ namespace GPU_HeiPa {
             }
 
             if (config.verbose_level >= 2) {
-                #if ENABLE_PROFILER
+#if ENABLE_PROFILER
                 print_all_levels(level_infos);
-                #endif
+#endif
             }
 
             return host_partition;
+        }
+
+        HostPartition solve_multisection(HostGraph &host_g) {
+            bool use_ultra = config.config == "HM-ultra";
+            return hierarchical_multisection_gpu(host_g, config.hierarchy, config.k, config.imbalance, config.seed, use_ultra);
         }
 
     private:
@@ -248,12 +254,12 @@ namespace GPU_HeiPa {
 
             u32 level = 0;
             while (graphs.back().n > max_n) {
-                #if ENABLE_PROFILER
+#if ENABLE_PROFILER
                 level_infos.emplace_back();
                 level_infos[level].level = level;
                 level_infos[level].n = graphs.back().n;
                 level_infos[level].m = graphs.back().m;
-                #endif
+#endif
 
                 coarsening(level);
                 contraction(level);
@@ -261,23 +267,23 @@ namespace GPU_HeiPa {
                 level += 1;
             }
 
-            #if ENABLE_PROFILER
+#if ENABLE_PROFILER
             level_infos.emplace_back();
             level_infos[level].level = level;
             level_infos[level].n = graphs.back().n;
             level_infos[level].m = graphs.back().m;
-            #endif
+#endif
 
             initial_partitioning();
 
-            #if ENABLE_PROFILER
+#if ENABLE_PROFILER
             level_infos[level].max_b_weight = max_weight(partition);
             level_infos[level].imb = (f64) level_infos[level].max_b_weight / ((f64) host_g.g_weight / (f64) config.k);
             level_infos[level].comm_cost = comm_cost(graphs.back(), partition, d_oracle);
             level_infos[level].empty_partitions = n_empty_blocks(partition);
             level_infos[level].oload_partitions = n_oload_blocks(partition);
             level_infos[level].sum_oload_weights = sum_oload_weight(partition);
-            #endif
+#endif
 
 
             while (!mappings.empty()) {
@@ -286,14 +292,14 @@ namespace GPU_HeiPa {
                 uncontraction(level);
                 refinement(level);
 
-                #if ENABLE_PROFILER
+#if ENABLE_PROFILER
                 level_infos[level].max_b_weight = max_weight(partition);
                 level_infos[level].imb = (f64) level_infos[level].max_b_weight / ((f64) host_g.g_weight / (f64) config.k);
                 level_infos[level].comm_cost = comm_cost(graphs.back(), partition, d_oracle);
                 level_infos[level].empty_partitions = n_empty_blocks(partition);
                 level_infos[level].oload_partitions = n_oload_blocks(partition);
                 level_infos[level].sum_oload_weights = sum_oload_weight(partition);
-                #endif
+#endif
             }
         }
 
@@ -303,7 +309,7 @@ namespace GPU_HeiPa {
             // Main stack: Graph + coarsening overhead
             mem_stack = initialize_kokkos_memory_stack(
                 20 * host_g.n * sizeof(vertex_t) + // 20% buffer for vertices
-                10 * host_g.m * sizeof(vertex_t),  // Graph + coarsening overhead
+                10 * host_g.m * sizeof(vertex_t), // Graph + coarsening overhead
                 "Stack"
             );
 
@@ -341,9 +347,9 @@ namespace GPU_HeiPa {
             Kokkos::fence();
             coarsening_ms += get_milli_seconds(p, get_time_point());
 
-            #if ENABLE_PROFILER
+#if ENABLE_PROFILER
             level_infos[level].t_coarsening = get_milli_seconds(p, get_time_point());
-            #endif
+#endif
 
             assert_state_pre_partition(graphs.back());
         }
@@ -357,9 +363,9 @@ namespace GPU_HeiPa {
             Kokkos::fence();
             contraction_ms += get_milli_seconds(p, get_time_point());
 
-            #if ENABLE_PROFILER
+#if ENABLE_PROFILER
             level_infos[level].t_contraction = get_milli_seconds(p, get_time_point());
-            #endif
+#endif
 
             assert_state_pre_partition(graphs.back());
         }
@@ -385,16 +391,16 @@ namespace GPU_HeiPa {
         void refinement(u32 level) {
             auto p = get_time_point();
 
-            auto pair = promap_refine(graphs.back(), partition, d_oracle, k, lmax, level, curr_comm_cost, curr_max_block_weight,mem_stack);
+            auto pair = promap_refine(graphs.back(), partition, d_oracle, k, lmax, level, curr_comm_cost, curr_max_block_weight, mem_stack);
             curr_comm_cost = pair.first;
             curr_max_block_weight = pair.second;
 
             Kokkos::fence();
             refinement_ms += get_milli_seconds(p, get_time_point());
 
-            #if ENABLE_PROFILER
+#if ENABLE_PROFILER
             level_infos[level].t_refinement = get_milli_seconds(p, get_time_point());
-            #endif
+#endif
 
             assert_state_after_partition(graphs.back(), partition, config.k);
         }
@@ -413,9 +419,9 @@ namespace GPU_HeiPa {
             Kokkos::fence();
             uncontraction_ms += get_milli_seconds(p, get_time_point());
 
-            #if ENABLE_PROFILER
+#if ENABLE_PROFILER
             level_infos[level].t_uncontraction = get_milli_seconds(p, get_time_point());
-            #endif
+#endif
 
             assert_state_after_partition(graphs.back(), partition, config.k);
         }

@@ -187,6 +187,9 @@ if [ "$USE_CUDA" = "ON" ]; then
     echo "Make sure kokkos source was extracted and CUDA toolkit is installed."
     exit 2
   fi
+  # Disable CUDA lazy loading - force eager module loading
+  export CUDA_MODULE_LOADING=EAGER
+  echo "CUDA lazy loading disabled (CUDA_MODULE_LOADING=EAGER)"
 else
   export CXX="${CXX:-g++}"
 fi

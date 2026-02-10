@@ -40,7 +40,6 @@
 #include "partition.h"
 #include "../coarsening/two_hop_matching.h"
 #include "../refinement/jet_label_propagation.h"
-#include "../refinement/jet_label_propagation.h"
 #include "../initial_partitioning/metis_partitioning.h"
 #include "../utility/definitions.h"
 #include "../utility/configuration.h"
@@ -57,8 +56,6 @@ namespace GPU_HeiPa {
         vertex_t m = 0;
         partition_t k = 0;
         weight_t lmax = 0;
-
-        KokkosMemoryStack mem_stack;
 
         std::vector<Graph> graphs;
         std::vector<Mapping> mappings;
@@ -144,10 +141,97 @@ namespace GPU_HeiPa {
         explicit Solver(Configuration t_config) : config(std::move(t_config)) {
         }
 
+        Solver(Graph &dev_g,
+               partition_t t_k,
+               f64 imbalance,
+               u64 seed,
+               bool use_ultra,
+               UnmanagedDevicePartition &dev_partition,
+               KokkosMemoryStack &dev_mem_stack) {
+            // Main stack: Graph + coarsening overhead
+            n = dev_g.n;
+            m = dev_g.m;
+            k = t_k;
+            lmax = (weight_t) std::ceil((1.0 + imbalance) * ((f64) dev_g.g_weight / (f64) k));
+
+            config.imbalance = imbalance;
+            config.k = k;
+            config.seed = seed;
+            config.verbose_level = 0; // or whatever you want
+
+            graphs.emplace_back(dev_g);
+
+            partition = initialize_partition(n, k, lmax, dev_mem_stack);
+
+            assert_state_pre_partition(graphs.back());
+
+            const partition_t c = 8;
+            const partition_t max_n = c * k;
+
+            u32 level = 0;
+            while (graphs.back().n > max_n) {
+#if ENABLE_PROFILER
+                level_infos.emplace_back();
+                level_infos[level].level = level;
+                level_infos[level].n = graphs.back().n;
+                level_infos[level].m = graphs.back().m;
+#endif
+                coarsening(level, dev_mem_stack);
+                contraction(level, dev_mem_stack);
+
+                level += 1;
+            }
+
+#if ENABLE_PROFILER
+            level_infos.emplace_back();
+            level_infos[level].level = level;
+            level_infos[level].n = graphs.back().n;
+            level_infos[level].m = graphs.back().m;
+#endif
+
+            initial_partitioning(dev_mem_stack);
+
+#if ENABLE_PROFILER
+            level_infos[level].max_b_weight = max_weight(partition);
+            level_infos[level].imb = (f64) level_infos[level].max_b_weight / ((f64) dev_g.g_weight / (f64) config.k);
+            level_infos[level].edge_cut = edge_cut(graphs.back(), partition);
+            level_infos[level].empty_partitions = n_empty_blocks(partition);
+            level_infos[level].oload_partitions = n_oload_blocks(partition);
+            level_infos[level].sum_oload_weights = sum_oload_weight(partition);
+#endif
+
+            while (!mappings.empty()) {
+                level -= 1;
+
+                uncontraction(level, dev_mem_stack);
+                refinement(level, dev_mem_stack);
+
+#if ENABLE_PROFILER
+                level_infos[level].max_b_weight = max_weight(partition);
+                level_infos[level].imb = (f64) level_infos[level].max_b_weight / ((f64) dev_g.g_weight / (f64) config.k);
+                level_infos[level].edge_cut = edge_cut(graphs.back(), partition);
+                level_infos[level].empty_partitions = n_empty_blocks(partition);
+                level_infos[level].oload_partitions = n_oload_blocks(partition);
+                level_infos[level].sum_oload_weights = sum_oload_weight(partition);
+#endif
+            }
+
+            Kokkos::deep_copy(dev_partition, partition.map);
+            Kokkos::fence();
+
+            free_partition(partition, dev_mem_stack);
+        }
+
         HostPartition solve(HostGraph &host_g) {
             auto sp = get_time_point();
 
-            internal_solve(host_g);
+            KokkosMemoryStack mem_stack = initialize_kokkos_memory_stack(
+                20 * (size_t) host_g.n * sizeof(vertex_t) + // 20% buffer for vertices
+                10 * (size_t) host_g.m * sizeof(vertex_t), // Graph + coarsening overhead
+                "Stack"
+            );
+
+            internal_solve(host_g, mem_stack);
 
             auto p = get_time_point();
             HostPartition host_partition;
@@ -234,8 +318,8 @@ namespace GPU_HeiPa {
         }
 
     private:
-        void internal_solve(HostGraph &host_g) {
-            initialize(host_g);
+        void internal_solve(HostGraph &host_g, KokkosMemoryStack &mem_stack) {
+            initialize(host_g, mem_stack);
 
             const partition_t c = 8;
             const partition_t max_n = c * k;
@@ -249,8 +333,8 @@ namespace GPU_HeiPa {
                 level_infos[level].m = graphs.back().m;
 #endif
 
-                coarsening(level);
-                contraction(level);
+                coarsening(level, mem_stack);
+                contraction(level, mem_stack);
 
                 level += 1;
             }
@@ -262,7 +346,7 @@ namespace GPU_HeiPa {
             level_infos[level].m = graphs.back().m;
 #endif
 
-            initial_partitioning();
+            initial_partitioning(mem_stack);
 
 #if ENABLE_PROFILER
             level_infos[level].max_b_weight = max_weight(partition);
@@ -276,8 +360,8 @@ namespace GPU_HeiPa {
             while (!mappings.empty()) {
                 level -= 1;
 
-                uncontraction(level);
-                refinement(level);
+                uncontraction(level, mem_stack);
+                refinement(level, mem_stack);
 
 #if ENABLE_PROFILER
                 level_infos[level].max_b_weight = max_weight(partition);
@@ -290,15 +374,8 @@ namespace GPU_HeiPa {
             }
         }
 
-        void initialize(HostGraph &host_g) {
+        void initialize(HostGraph &host_g, KokkosMemoryStack &mem_stack) {
             auto p = get_time_point();
-
-            // Main stack: Graph + coarsening overhead
-            mem_stack = initialize_kokkos_memory_stack(
-                20 * (size_t) host_g.n * sizeof(vertex_t) + // 20% buffer for vertices
-                10 * (size_t) host_g.m * sizeof(vertex_t), // Graph + coarsening overhead
-                "Stack"
-            );
 
             n = host_g.n;
             m = host_g.m;
@@ -317,7 +394,7 @@ namespace GPU_HeiPa {
             assert_state_pre_partition(graphs.back());
         }
 
-        void coarsening(u32 level) {
+        void coarsening(u32 level, KokkosMemoryStack &mem_stack) {
             auto p = get_time_point();
 
             mappings.emplace_back(two_hop_matcher_get_mapping(graphs.back(), partition, lmax, mem_stack));
@@ -332,7 +409,7 @@ namespace GPU_HeiPa {
             assert_state_pre_partition(graphs.back());
         }
 
-        void contraction(u32 level) {
+        void contraction(u32 level, KokkosMemoryStack &mem_stack) {
             auto p = get_time_point();
 
             graphs.emplace_back(from_Graph_Mapping(graphs.back(), mappings.back(), mem_stack));
@@ -348,7 +425,7 @@ namespace GPU_HeiPa {
             assert_state_pre_partition(graphs.back());
         }
 
-        void initial_partitioning() {
+        void initial_partitioning(KokkosMemoryStack &mem_stack) {
             auto p = get_time_point();
 
             // Use METIS for initial partitioning
@@ -367,7 +444,7 @@ namespace GPU_HeiPa {
             assert_state_after_partition(graphs.back(), partition, config.k);
         }
 
-        void refinement(u32 level) {
+        void refinement(u32 level, KokkosMemoryStack &mem_stack) {
             auto p = get_time_point();
 
             auto pair = jet_refine(graphs.back(), partition, k, lmax, level, curr_edge_cut, curr_max_block_weight, mem_stack);
@@ -387,7 +464,7 @@ namespace GPU_HeiPa {
             assert_state_after_partition(graphs.back(), partition, config.k);
         }
 
-        void uncontraction(u32 level) {
+        void uncontraction(u32 level, KokkosMemoryStack &mem_stack) {
             auto p = get_time_point();
 
             uncontract(partition, mappings.back());

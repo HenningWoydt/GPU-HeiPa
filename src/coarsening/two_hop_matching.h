@@ -486,8 +486,6 @@ namespace GPU_HeiPa {
                                                const Partition &partition,
                                                const weight_t &lmax,
                                                KokkosMemoryStack &mem_stack) {
-        assert_back_is_empty(mem_stack);
-
         TwoHopMatcher thm = initialize_thm(g.n, g.m, lmax, mem_stack);
 
         UnmanagedDeviceVertex matching;
@@ -521,7 +519,6 @@ namespace GPU_HeiPa {
         pop_back(mem_stack); // pop the matching vec
         free_thm(thm, mem_stack);
 
-        assert_back_is_empty(mem_stack);
         return mapping;
     }
 }

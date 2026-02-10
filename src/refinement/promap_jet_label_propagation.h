@@ -823,8 +823,6 @@ namespace GPU_HeiPa {
         free_bc(bc, mem_stack);
         free_promap_lp(lp, mem_stack);
 
-        assert_back_is_empty(mem_stack);
-
         return std::make_pair(best_comm_cost, best_weight);;
     }
 }
