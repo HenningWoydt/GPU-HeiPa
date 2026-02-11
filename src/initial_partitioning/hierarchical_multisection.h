@@ -59,7 +59,7 @@ namespace GPU_HeiPa {
                                               weight_t global_g_weight,
                                               partition_t global_k,
                                               vertex_t global_n,
-                                              int seed,
+                                              u64 seed,
                                               bool use_ultra,
                                               const std::vector<partition_t> &index_vec, // as in your host code
                                               std::vector<partition_t> &identifier, // path of ids
@@ -222,12 +222,12 @@ namespace GPU_HeiPa {
         pop_front(mem_stack); // tmp_part
     }
 
-    inline HostPartition hierarchical_multisection_gpu(const HostGraph &g,
-                                                       const std::vector<partition_t> &hierarchy,
-                                                       partition_t global_k,
-                                                       f64 imbalance,
-                                                       int seed,
-                                                       bool use_ultra) {
+    inline HostPartition hierarchical_multisection(const HostGraph &g,
+                                                   const std::vector<partition_t> &hierarchy,
+                                                   partition_t global_k,
+                                                   f64 imbalance,
+                                                   u64 seed,
+                                                   bool use_ultra) {
         KokkosMemoryStack mem_stack = initialize_kokkos_memory_stack(30 * (size_t) g.n * sizeof(vertex_t) + 10 * (size_t) g.m * sizeof(vertex_t), "Stack");
 
         f64 time = 0.0;

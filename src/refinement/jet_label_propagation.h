@@ -60,6 +60,7 @@ namespace GPU_HeiPa {
         UnmanagedDeviceU32 lock;
         UnmanagedDevicePartition dest_cache;
 
+        HostScalarPinnedU32 host_pinned_u32;
         HostScalarPinnedVertex scan_host;
         HostScalarPinnedWeight cut_change1, cut_change2, max_part;
         HostPinnedWeight reduce_locs;
@@ -107,6 +108,7 @@ namespace GPU_HeiPa {
         Kokkos::deep_copy(lp.lock, 0);
         Kokkos::deep_copy(lp.dest_cache, NULL_PART);
 
+        lp.host_pinned_u32 = HostScalarPinnedU32("pinned_u32");
         lp.scan_host = HostScalarPinnedVertex("scan host");
         lp.n_underloaded_blocks = DeviceScalarPartition("total undersized");
         lp.max_vwgt = DeviceScalarWeight("max vwgt allowed");
@@ -530,6 +532,7 @@ namespace GPU_HeiPa {
                     u32 r_end = r_beg + r_len;
 
                     for (u32 i = r_beg; i < r_end; ++i) {
+                        /*
                         partition_t id = bc.ids(i);
                         if (id == NULL_PART || id == HASH_RECLAIM) { continue; } // no valid entry
 
@@ -544,17 +547,33 @@ namespace GPU_HeiPa {
                             best_id = id;
                             best_conn = w;
                         }
+                        */
+                        partition_t id = bc.ids(i);
+                        weight_t w = bc.weights(i);
+
+                        bool valid = (id != NULL_PART) & (id != HASH_RECLAIM); // single mask
+                        bool is_own = valid & (id == u_id);
+                        bool is_cand = valid & !is_own;
+
+                        // Update own_conn if this is our id
+                        own_conn = is_own ? w : own_conn;
+
+                        // Update best if it's a candidate and better
+                        bool better = is_cand & (w > best_conn);
+                        best_conn = better ? w : best_conn;
+                        best_id = better ? id : best_id;
                     }
 
                     weight_t gain = 0;
 
                     if (best_id != NO_MOVE) {
-                        if (best_conn >= own_conn || ((own_conn - best_conn) < floor(conn_c * own_conn))) {
+                        if (best_conn >= own_conn || (own_conn - best_conn) < floor(conn_c * own_conn)) {
                             gain = best_conn - own_conn;
                         } else {
                             best_id = NO_MOVE;
                         }
                     }
+
                     lp.gain_cache(u) = gain;
                     lp.dest_cache(u) = best_id;
                     lp.dest_part(u) = best_id;
@@ -574,9 +593,8 @@ namespace GPU_HeiPa {
             });
 
             Kokkos::fence();
-            u32 t;
-            Kokkos::deep_copy(t, lp.idx);
-            num_pos = (vertex_t) t;
+            Kokkos::deep_copy(lp.host_pinned_u32, lp.idx);
+            num_pos = (vertex_t) lp.host_pinned_u32();
 
             KOKKOS_PROFILE_FENCE();
         }
@@ -585,6 +603,7 @@ namespace GPU_HeiPa {
         {
             ScopedTimer _t("refinement", "jetlp", "afterburner");
             Kokkos::deep_copy(lp.idx, 0);
+
             Kokkos::parallel_for("afterburner heuristic", num_pos, KOKKOS_LAMBDA(const u32 i) {
                 vertex_t u = lp.vtx1(i);
                 weight_t u_gain = lp.gain1(u);
@@ -596,15 +615,22 @@ namespace GPU_HeiPa {
                     vertex_t v = g.edges_v(j);
                     weight_t v_gain = lp.gain1(v);
 
-                    if (v_gain > u_gain || (v_gain == u_gain && v < u)) {
-                        partition_t v_new_id = lp.dest_part(v);
-                        partition_t v_old_id = lp.partition.map(v);
-                        weight_t w = g.edges_w(j);
+                    // if (v_gain > u_gain || (v_gain == u_gain && v < u)) {
+                    //     partition_t v_new_id = lp.dest_part(v);
+                    //     partition_t v_old_id = lp.partition.map(v);
+                    //     weight_t w = g.edges_w(j);
+                    //
+                    //     if (v_new_id == old_u_id) { change -= w; } else if (v_new_id == new_u_id) { change += w; }
+                    //     if (v_old_id == old_u_id) { change += w; } else if (v_old_id == new_u_id) { change -= w; }
+                    // }
 
-                        if (v_new_id == old_u_id) { change -= w; } else if (v_new_id == new_u_id) { change += w; }
-                        if (v_old_id == old_u_id) { change += w; } else if (v_old_id == new_u_id) { change -= w; }
-                    }
+                    bool move_first = v_gain > u_gain || (v_gain == u_gain && v < u);
+                    partition_t v_new_id = lp.dest_part(v);
+                    partition_t v_old_id = lp.partition.map(v);
+                    weight_t w = g.edges_w(j) * move_first;
+                    change += w * ((v_new_id == new_u_id) - (v_new_id == old_u_id) + (v_old_id == old_u_id) - (v_old_id == new_u_id));
                 }
+
                 if (u_gain + change >= 0) {
                     lp.lock(u) = 1;
                     u32 idx = Kokkos::atomic_fetch_inc(&lp.idx());
@@ -612,9 +638,8 @@ namespace GPU_HeiPa {
                 }
             });
             Kokkos::fence();
-            u32 t;
-            Kokkos::deep_copy(t, lp.idx);
-            num_pos = (vertex_t) t;
+            Kokkos::deep_copy(lp.host_pinned_u32, lp.idx);
+            num_pos = (vertex_t) lp.host_pinned_u32();
 
             KOKKOS_PROFILE_FENCE();
         }
@@ -1046,7 +1071,7 @@ namespace GPU_HeiPa {
         {
             ScopedTimer _t("refinement", "JetLabelPropagation", "update_max_weight");
 
-            Kokkos::parallel_reduce("update_max_weight", Kokkos::RangePolicy<>(0, lp.k), KOKKOS_LAMBDA(const s32 i, weight_t &update) {
+            Kokkos::parallel_reduce("update_max_weight", Kokkos::RangePolicy<>(DeviceExecutionSpace(), 0, lp.k), KOKKOS_LAMBDA(const s32 i, weight_t &update) {
                 if (lp.partition.bweights(i) > update) {
                     update = lp.partition.bweights(i);
                 }

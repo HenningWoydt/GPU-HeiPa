@@ -72,10 +72,10 @@ int main(int argc, char *argv[]) {
                 // {"--graph", "../../graph_collection/mapping/cfd2.mtx.graph"},
                 // {"--mapping", "../data/out/partition/cfd2.mtx.txt"},
                 // {"--statistics", "../data/out/statistics/cfd2.mtx.JSON"},
-                {"--hierarchy", "4:8:1"},
+                {"--hierarchy", "4:8:6"},
                 {"--distance", "1:10:100"},
                 {"--imbalance", "0.03"},
-                {"--config", "HM"},
+                {"--config", "HM-ultra"},
                 {"--seed", "1"},
                 {"--distance-oracle", "matrix"},
                 {"--verbose-level", "2"}
