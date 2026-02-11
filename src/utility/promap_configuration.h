@@ -45,7 +45,7 @@ namespace GPU_HeiPa {
             {"--config", "-c", "Broad Config.", "", "", false},
             {"--seed", "-s", "Seed for more randomness.", "0", "", false},
             {"--distance-oracle", "", "Which Distance Oracle to use {matrix, division, binary}.", "binary", "", false},
-            {"--verbose-level", "", "Whether to print.", "2", "", false},
+            {"--verbose-level", "", "Whether to print.", "1", "", false},
         };
 
     public:
@@ -128,7 +128,6 @@ namespace GPU_HeiPa {
                 seed = std::random_device{}();
             }
 
-            verbose_level = 2;
             if (is_set("--verbose-level")) {
                 verbose_level = std::stoi(get("--verbose-level"));
             }

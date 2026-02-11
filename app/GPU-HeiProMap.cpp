@@ -53,32 +53,14 @@ int main(int argc, char *argv[]) {
         {
             ScopedTimer _t("io", "main", "parse_args");
             std::vector<std::pair<std::string, std::string> > input = {
-                // {"--graph", "../../graph_collection/mapping/rgg24.graph"},
-                // {"--mapping", "../data/out/partition/rgg24.txt"},
-                // {"--statistics", "../data/out/statistics/rgg24.JSON"},
-                // {"--graph", "../../graph_collection/mapping/rgg23.graph"},
-                // {"--mapping", "../data/out/partition/rgg23.txt"},
-                // {"--statistics", "../data/out/statistics/rgg23.JSON"},
                 {"--graph", "../../ProMapRepo/data/mapping/rgg23.graph"}, // comm cost 9543754, 1098 ms
-                // {"--graph", "../../graph_collection/mapping/GAP-road.graph"},
-                // {"--mapping", "../data/out/partition/GAP-road.txt"},
-                // {"--statistics", "../data/out/statistics/GAP-road.JSON"},
-                // {"--graph", "../../graph_collection/mapping/2cubes_sphere.mtx.graph"},
-                // {"--mapping", "../data/out/partition/2cubes_sphere.mtx.txt"},
-                // {"--statistics", "../data/out/statistics/2cubes_sphere.mtx.JSON"},
-                // {"--graph", "../../graph_collection/mapping/cop20k_A.mtx.graph"},
-                // {"--mapping", "../data/out/partition/cop20k_A.mtx.txt"},
-                // {"--statistics", "../data/out/statistics/cop20k_A.mtx.JSON"},
-                // {"--graph", "../../graph_collection/mapping/cfd2.mtx.graph"},
-                // {"--mapping", "../data/out/partition/cfd2.mtx.txt"},
-                // {"--statistics", "../data/out/statistics/cfd2.mtx.JSON"},
                 {"--hierarchy", "4:8:6"},
                 {"--distance", "1:10:100"},
                 {"--imbalance", "0.03"},
-                {"--config", "HM-ultra"},
+                {"--config", "IM"},
                 {"--seed", "1"},
                 {"--distance-oracle", "matrix"},
-                {"--verbose-level", "2"}
+                {"--verbose-level", "1"}
             };
 
             std::vector<std::string> args = {"GPU-HeiProMap"};
