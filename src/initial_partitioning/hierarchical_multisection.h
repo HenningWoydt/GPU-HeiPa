@@ -228,7 +228,7 @@ namespace GPU_HeiPa {
                                                        f64 imbalance,
                                                        int seed,
                                                        bool use_ultra) {
-        KokkosMemoryStack mem_stack = initialize_kokkos_memory_stack(20 * (size_t) g.n * sizeof(vertex_t) + 10 * (size_t) g.m * sizeof(vertex_t), "Stack");
+        KokkosMemoryStack mem_stack = initialize_kokkos_memory_stack(30 * (size_t) g.n * sizeof(vertex_t) + 10 * (size_t) g.m * sizeof(vertex_t), "Stack");
 
         f64 time = 0.0;
         Graph dev_g = from_HostGraph(g, mem_stack, time);
