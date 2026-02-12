@@ -92,11 +92,11 @@ namespace GPU_HeiPa {
 
     inline ZebraTheme basic_theme() {
         return ZebraTheme{
-            "\x1b[47m",  // even
+            "\x1b[47m", // even
             "\x1b[107m", // odd
-            "\x1b[47m",  // header
-            "\x1b[90m",  // rule
-            "\x1b[30m",  // text
+            "\x1b[47m", // header
+            "\x1b[90m", // rule
+            "\x1b[30m", // text
             "\x1b[1m",
             "\x1b[22m",
             "\x1b[0m"
@@ -165,10 +165,10 @@ namespace GPU_HeiPa {
         }
 
         void add(const char *g, const char *f, const char *k, double ms) {
-            #if !ENABLE_PROFILER
+#if !ENABLE_PROFILER
             (void) g; (void) f; (void) k; (void) ms;
             return;
-            #else
+#else
             const uint64_t h = hash_triple_ptr(g, f, k);
             auto it = flat_.find(h);
             if (it == flat_.end()) {
@@ -188,7 +188,7 @@ namespace GPU_HeiPa {
                 }
             }
             total_.add(ms);
-            #endif
+#endif
         }
 
         // Your existing print_table_ascii_colored can now:
@@ -233,7 +233,7 @@ namespace GPU_HeiPa {
 
 
     struct ScopedTimer {
-        #if ENABLE_PROFILER
+#if ENABLE_PROFILER
         using clock = std::chrono::steady_clock;
 
         const char *group;
@@ -255,12 +255,12 @@ namespace GPU_HeiPa {
         }
 
         ~ScopedTimer() { stop(); }
-        #else
+#else
         ScopedTimer(const char *, const char *, const char *) {
         }
         void stop() {
         }
-        #endif
+#endif
     };
 
     static inline bool streq(const char *a, const char *b) {
@@ -289,11 +289,11 @@ namespace GPU_HeiPa {
                                unsigned int name_width,
                                bool force_color,
                                bool use_basic_colors) const {
-        #if !ENABLE_PROFILER
+#if !ENABLE_PROFILER
         (void) os; (void) max_funcs_per_group; (void) max_kernels_per_func;
         (void) name_width; (void) force_color; (void) use_basic_colors;
         return;
-        #endif
+#endif
 
         if (total_.total_ms <= 0.0) {
             os << "Profiler: no samples recorded.\n";
