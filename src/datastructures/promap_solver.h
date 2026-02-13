@@ -35,12 +35,7 @@
 #include "mapping.h"
 #include "partition.h"
 #include "../coarsening/two_hop_matching.h"
-#include "../distance_oracles/distance_oracle_binary.h"
-#include "../distance_oracles/distance_oracle_matrix.h"
-#include "../refinement/promap_jet_label_propagation.h"
-#include "../initial_partitioning/kaffpa_partitioning.h"
 #include "../initial_partitioning/global_multisection.h"
-#include "../initial_partitioning/metis_partitioning.h"
 #include "../utility/definitions.h"
 #include "../utility/promap_configuration.h"
 #include "../utility/profiler.h"
@@ -48,6 +43,7 @@
 #include "../distance_oracles/distance_oracle_helpers.h"
 #include "../initial_partitioning/hierarchical_multisection.h"
 #include "../utility/comm_cost.h"
+#include "../refinement/promap_jet_label_propagation.h"
 
 namespace GPU_HeiPa {
     template<typename d_oracle_t>
@@ -391,7 +387,7 @@ namespace GPU_HeiPa {
         void refinement(u32 level) {
             auto p = get_time_point();
 
-            auto pair = promap_refine(graphs.back(), partition, d_oracle, k, lmax, level, curr_comm_cost, curr_max_block_weight, mem_stack);
+            auto pair = ProMap_jet_refine(graphs.back(), partition, d_oracle, k, lmax, level, curr_comm_cost, curr_max_block_weight, mem_stack);
             curr_comm_cost = pair.first;
             curr_max_block_weight = pair.second;
 

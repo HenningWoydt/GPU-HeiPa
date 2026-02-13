@@ -88,25 +88,25 @@ namespace GPU_HeiPa {
 
     std::string get_kokkos_execution_space_as_str() {
         using ExecSpace = Kokkos::DefaultExecutionSpace;
-        #if defined(KOKKOS_ENABLE_CUDA)
+#if defined(KOKKOS_ENABLE_CUDA)
         if (std::is_same<ExecSpace, Kokkos::Cuda>::value) { return "Cuda"; }
-        #endif
+#endif
 
-        #if defined(KOKKOS_ENABLE_HIP)
+#if defined(KOKKOS_ENABLE_HIP)
         if (std::is_same<ExecSpace, Kokkos::HIP>::value) { return "HIP"; }
-        #endif
+#endif
 
-        #if defined(KOKKOS_ENABLE_OPENMP)
+#if defined(KOKKOS_ENABLE_OPENMP)
         if (std::is_same<ExecSpace, Kokkos::OpenMP>::value) { return "OpenMP"; }
-        #endif
+#endif
 
-        #if defined(KOKKOS_ENABLE_THREADS)
+#if defined(KOKKOS_ENABLE_THREADS)
         if (std::is_same<ExecSpace, Kokkos::Threads>::value) { return "Threads"; }
-        #endif
+#endif
 
-        #if defined(KOKKOS_ENABLE_SERIAL)
+#if defined(KOKKOS_ENABLE_SERIAL)
         if (std::is_same<ExecSpace, Kokkos::Serial>::value) { return "Serial"; }
-        #endif
+#endif
     }
 
     KOKKOS_INLINE_FUNCTION
@@ -145,38 +145,38 @@ namespace GPU_HeiPa {
     KOKKOS_INLINE_FUNCTION
     u32 floor_log2_u32(u32 v) {
         // precondition: v > 0
-        #if defined(__CUDA_ARCH__)
+#if defined(__CUDA_ARCH__)
         // CUDA device: count-leading-zeros (32-bit)
         return 31u - (u32) __clz(v);
-        #elif defined(__HIP_DEVICE_COMPILE__)
+#elif defined(__HIP_DEVICE_COMPILE__)
         // HIP device: same builtin
         return 31u - (u32) __clz(v);
-        #elif defined(_MSC_VER)
+#elif defined(_MSC_VER)
         // MSVC host
         unsigned long idx;
         _BitScanReverse(&idx, v);
         return (u32) idx;
-        #elif defined(__GNUC__) || defined(__clang__)
+#elif defined(__GNUC__) || defined(__clang__)
         // GCC/Clang host
         return 31u - (u32) __builtin_clz(v);
-        #else
+#else
         // portable fallback
         u32 r = 0;
         while (v >>= 1) ++r;
         return r;
-        #endif
+#endif
     }
 
     KOKKOS_INLINE_FUNCTION
     u32 floor_log2_u64(u64 x) {
         if (x == 0ull) return 0u;
-        #if defined(__CUDA_ARCH__)
+#if defined(__CUDA_ARCH__)
         return 63u - (u32) __clzll((unsigned long long) x);
-        #elif defined(__HIP_DEVICE_COMPILE__)
+#elif defined(__HIP_DEVICE_COMPILE__)
         return 63u - (u32) __clzll((unsigned long long) x);
-        #else
+#else
         return 63u - (u32) __builtin_clzll((unsigned long long) x);
-        #endif
+#endif
     }
 
     KOKKOS_INLINE_FUNCTION
@@ -201,6 +201,21 @@ namespace GPU_HeiPa {
         x ^= x >> 17;
         x ^= x << 5;
         return x;
+    }
+
+    inline void print(const UnmanagedDeviceWeight &dev_vec, const std::string &name = "") {
+        auto host_vec =
+                Kokkos::create_mirror_view_and_copy(Kokkos::HostSpace(), dev_vec);
+
+        if (!name.empty()) std::cout << name << " = ";
+        std::cout << "[";
+
+        for (size_t i = 0; i < host_vec.extent(0); ++i) {
+            std::cout << host_vec(i);
+            if (i + 1 != host_vec.extent(0)) std::cout << ", ";
+        }
+
+        std::cout << "]\n";
     }
 }
 
