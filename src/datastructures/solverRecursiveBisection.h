@@ -62,13 +62,75 @@ namespace GPU_HeiPa {
 
                 //Step 1: Just partition once:
                 
-                Configuration conf1; // use settings of original config but k != 2
+                Configuration conf1 = config;
+                conf1.k = 2;
+                conf1.verbose_level = 2;
 
                 HostPartition first_partition = Solver(conf1).solve(host_g);
             
-                // then i can go over the partition and check where the vertices lie!
-                // from thus i can create two subgraphs!
+                HostGraph left_graph, right_graph;
+                create_subgraph(first_partition, host_g, left_graph, right_graph);
 
+            }
+
+
+            /**
+             * Returns two subgraphs:
+             *  One for all nodes with partition ID 0
+             *  One for all nodes with partition ID 1
+             *
+             *  First make a boring serial version, 
+             *  later parallelize (openMP ? GPU ?)
+             * 
+             *  Important question: How do i convert between input and output graphs?
+             *  I.e. how do i get the partition for the original graph from
+             *  my smaller subgraphs?
+             *  -> Save the mapping somewhere?
+             * 
+             * @param TODO
+             * @return TODO
+             */
+            void create_subgraph(HostPartition input_partition, HostGraph &input_graph,
+                                 HostGraph &left_graph, HostGraph &right_graph
+            ) {
+
+                vertex_t num_vertices[2], num_edges[2];
+                weight_t weights[2];
+                num_vertices[0] = num_vertices[1] = num_edges[0] = num_edges[1] = 0;
+                weights[0] = weights[1] = 0;
+
+                //? Is this byte-allocation correct? Henning does the same in the host_graph.h ...
+                HostU32 rename = HostU32(Kokkos::view_alloc(Kokkos::WithoutInitializing, "vertex_renaming"), input_graph.n * sizeof(u32) ) ;
+
+                
+                // Get the initial information to create the two subgraphs:
+                partition_t partition;
+                for(vertex_t u = 0; u < input_graph.n ; ++u) {
+                    partition = input_partition(u);
+
+                    rename[u] = num_vertices[partition];
+                    num_vertices[partition]++ ;
+                    weights[partition] += input_graph.weights(u);
+                    num_edges[partition] += input_graph.neighborhood( u+1 ) - input_graph.neighborhood(u); // fast upper bound
+                }
+                
+                // Print initialization values for subgraphs
+                std::cout << "Left subgraph:  vertices=" << num_vertices[0] 
+                          << " edges=" << num_edges[0] << " weight=" << weights[0] << std::endl;
+                std::cout << "Right subgraph: vertices=" << num_vertices[1] 
+                          << " edges=" << num_edges[1] << " weight=" << weights[1] << std::endl;
+                
+                
+                // init the two HostGraphs
+                allocate_memory(left_graph, num_vertices[0], num_edges[0], weights[0]);
+                allocate_memory(right_graph, num_vertices[1], num_edges[1], weights[1]);
+
+
+                //TODO: Assign values to l_graph and r_graph (create the subgraphs)
+
+
+
+                return;
             }
         
         
