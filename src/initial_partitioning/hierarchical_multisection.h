@@ -43,6 +43,7 @@ namespace GPU_HeiPa {
                                     UnmanagedDevicePartition &partition,
                                     KokkosMemoryStack &mem_stack) {
         if (k == 1) {
+            ScopedTimer t{"hm", "recursive", "partition k=1"};
             Kokkos::deep_copy(partition, 0);
             Kokkos::fence();
             return;
@@ -65,6 +66,7 @@ namespace GPU_HeiPa {
                                               std::vector<partition_t> &identifier, // path of ids
                                               UnmanagedDevicePartition &global_partition, // size global_n
                                               KokkosMemoryStack &mem_stack) {
+        ScopedTimer t{"hm", "recursive", "allocate"};
         const partition_t l = (partition_t) hierarchy.size();
         const partition_t k = hierarchy[level];
 
@@ -75,11 +77,14 @@ namespace GPU_HeiPa {
         // Here: just use global_imbalance directly (plug your adaptive formula if desired).
         const f64 imb = global_imbalance;
 
+        t.stop();
+
         // 1) Partition current device graph into k blocks
         gpu_heipa_partition(device_g, k, imb, seed, use_ultra, tmp_part, mem_stack);
 
         // 2) Leaf: last split -> write into global_partition
         if (identifier.size() == (size_t) (l - 1)) {
+            ScopedTimer t{"hm", "recursive", "write_to_global"};
             // offset = sum_{i=0..l-2} identifier[i] * index_vec[last-i]
             partition_t offset = 0;
             for (partition_t i = 0; i < l - 1; ++i) { offset += identifier[i] * index_vec[index_vec.size() - 1 - i]; }
@@ -96,6 +101,8 @@ namespace GPU_HeiPa {
 
         // 3) Non-leaf: build each child and recurse immediately
         for (partition_t id = 0; id < k; ++id) {
+            ScopedTimer t_subgraph{"hm", "recursive", "generate_subgraph"};
+
             // --- First pass: compute sub_n, sub_m, sub_weight for this id
             vertex_t sub_n = 0;
             vertex_t sub_m = 0;
@@ -193,6 +200,8 @@ namespace GPU_HeiPa {
             // We no longer need child_o_to_n after edges built
             pop_back(mem_stack);
 
+            t_subgraph.stop();
+
             // --- Recurse into this child
             identifier.push_back(id);
             recursive_multisection_device(
@@ -228,6 +237,8 @@ namespace GPU_HeiPa {
                                                    f64 imbalance,
                                                    u64 seed,
                                                    bool use_ultra) {
+        ScopedTimer t{"hm", "initialize", "allocate"};
+
         KokkosMemoryStack mem_stack = initialize_kokkos_memory_stack(30 * (size_t) g.n * sizeof(vertex_t) + 10 * (size_t) g.m * sizeof(vertex_t), "Stack");
 
         f64 time = 0.0;
@@ -247,6 +258,8 @@ namespace GPU_HeiPa {
         std::vector<partition_t> identifier;
         identifier.reserve(l);
 
+        t.stop();
+
         recursive_multisection_device(dev_g,
                                       dev_n_to_o,
                                       hierarchy,
@@ -261,6 +274,8 @@ namespace GPU_HeiPa {
                                       identifier,
                                       dev_global_part,
                                       mem_stack);
+
+        ScopedTimer t_copy{"hm", "io", "copy_to_host"};
 
         // copy back to host
         HostPartition host_part = HostPartition(Kokkos::view_alloc(Kokkos::WithoutInitializing, "host_partition"), g.n);;
