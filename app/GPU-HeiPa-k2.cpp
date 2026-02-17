@@ -29,6 +29,7 @@
 #include <Kokkos_Core.hpp>
 
 #include "../src/datastructures/solver.h"
+#include "../src/datastructures/solverRecursiveBisection.h"
 #include "../src/utility/configuration.h"
 
 using namespace GPU_HeiPa;
@@ -52,7 +53,7 @@ int main(int argc, char *argv[]) {
         {
             ScopedTimer _t("io", "main", "parse_args");
             std::vector<std::pair<std::string, std::string> > input = {
-                {"--graph", "../../ProMapRepo/data/mapping/rgg23.graph"},    // 100.054 in 334ms
+                {"--graph", "./res/graphs/144.graph"},    // 100.054 in 334ms
                 // {"--graph", "../../ProMapRepo/data/mapping/cfd2.mtx.graph"}, // 92.920 in 40ms
                 {"--k", "32"},
                 {"--imbalance", "0.03"},
@@ -105,23 +106,26 @@ int main(int argc, char *argv[]) {
 
 
         auto sp_solver = get_time_point();
-        HostPartition host_partition = Solver(config).solve(host_g);
+        
+        //! Only change this line to use the new solver!
+        // HostPartition host_partition = Solver(config).solve(host_g);
+        HostPartition host_partition = SolverRecursiveBisection(config).solve(host_g);
 
         if (verbose_level >= 1) {
             std::cout << "Solved in         : " << get_milli_seconds(sp_solver, get_time_point()) << std::endl;
         }
 
-        if (config.is_set("--mapping")) {
-            ScopedTimer _t("io", "main", "write_partition");
-            auto p = get_time_point();
-
-            write_partition(host_partition, host_g.n, config.mapping_out);
-
-            if (verbose_level >= 1) {
-                io_ms = get_milli_seconds(p, get_time_point());
-                std::cout << "Write partition in: " << io_ms << std::endl;
-            }
-        }
+        //if (config.is_set("--mapping")) {
+        //    ScopedTimer _t("io", "main", "write_partition");
+        //    auto p = get_time_point();
+//
+        //    write_partition(host_partition, host_g.n, config.mapping_out);
+//
+        //    if (verbose_level >= 1) {
+        //        io_ms = get_milli_seconds(p, get_time_point());
+        //        std::cout << "Write partition in: " << io_ms << std::endl;
+        //    }
+        //}
     }
     Kokkos::fence();
 
