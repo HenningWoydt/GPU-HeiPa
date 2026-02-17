@@ -10,3 +10,6 @@ build/
 data/
 
 extern/
+
+res/
+.clangd

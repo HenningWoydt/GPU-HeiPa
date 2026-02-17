@@ -228,7 +228,7 @@ namespace GPU_HeiPa {
             auto sp = get_time_point();
 
             KokkosMemoryStack mem_stack = initialize_kokkos_memory_stack(
-                20 * (size_t) host_g.n * sizeof(vertex_t) + // 20% buffer for vertices
+                30 * (size_t) host_g.n * sizeof(vertex_t) + // 20% buffer for vertices
                 10 * (size_t) host_g.m * sizeof(vertex_t), // Graph + coarsening overhead
                 "Stack"
             );

@@ -304,7 +304,7 @@ namespace GPU_HeiPa {
 
             // Main stack: Graph + coarsening overhead
             mem_stack = initialize_kokkos_memory_stack(
-                20 * host_g.n * sizeof(vertex_t) + // 20% buffer for vertices
+                30 * host_g.n * sizeof(vertex_t) + // 20% buffer for vertices
                 10 * host_g.m * sizeof(vertex_t), // Graph + coarsening overhead
                 "Stack"
             );
