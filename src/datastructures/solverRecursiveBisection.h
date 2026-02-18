@@ -71,6 +71,9 @@ namespace GPU_HeiPa {
                 HostGraph left_graph, right_graph;
                 create_subgraph(first_partition, host_g, left_graph, right_graph);
 
+                HostPartition left_par = Solver(conf1).solve(left_graph);
+                HostPartition right_par = Solver(conf1).solve(right_graph);
+
             }
 
 
@@ -128,6 +131,81 @@ namespace GPU_HeiPa {
 
                 //TODO: Assign values to l_graph and r_graph (create the subgraphs)
 
+                //TODO: parallelize
+
+                //! This can be parallelized with a parallel_for (iterations are fully independent)
+                for( vertex_t u = 0; u < input_graph.n ; ++u) {
+                    partition_t my_part = input_partition(u);
+
+                    for(vertex_t i = input_graph.neighborhood(u); i < input_graph.neighborhood(u+1); ++i) {
+                        vertex_t v = input_graph.edges_v(i);
+                        partition_t neighbor_part = input_partition(v);
+
+                        if( my_part == neighbor_part) {
+
+                            if(my_part == 0 ) {
+
+                                left_graph.neighborhood( rename(u) )++;
+
+                            }else{
+                                
+                                right_graph.neighborhood( rename(u) )++;
+
+                            }
+
+                        }
+
+
+                    }
+                }
+
+                //! These can be parallelized with a parallel scan
+                left_graph.neighborhood(left_graph.n) = 0;
+                for(vertex_t u = 1; u < left_graph.n + 1; ++u)
+                    left_graph.neighborhood(u) += left_graph.neighborhood(u-1);
+                
+                right_graph.neighborhood(right_graph.n) = 0;
+                for(vertex_t u = 1; u < right_graph.n + 1; ++u)
+                    right_graph.neighborhood(u) += right_graph.neighborhood(u-1);
+
+                
+                vertex_t idx_l, idx_r;
+                //! This is again a parallel for (independent iterations)
+                for( vertex_t u = 0; u < input_graph.n ; ++u) {
+                    partition_t my_part = input_partition(u);
+
+                    if( my_part == 0) {
+                        left_graph.weights( rename(u) ) = input_graph.weights(u);
+                    } else{
+                        right_graph.weights( rename(u)) = input_graph.weights(u);
+                    }
+
+                    for(vertex_t i = input_graph.neighborhood(u); i < input_graph.neighborhood(u+1); ++i) {
+                        vertex_t v = input_graph.edges_v(i);
+                        partition_t neighbor_part = input_partition(v);
+
+                        if( my_part == neighbor_part) {
+
+                            if(my_part == 0 ) {
+                                idx_l = --left_graph.neighborhood( rename(u) ) ;
+
+                                left_graph.edges_v( idx_l ) = rename(v);
+                                left_graph.edges_w( idx_l ) = input_graph.edges_w(i);
+
+                            }else{
+                                
+                                idx_r = --right_graph.neighborhood( rename(u) ) ;
+
+                                right_graph.edges_v( idx_r ) = rename(v);
+                                right_graph.edges_w( idx_r ) = input_graph.edges_w(i);
+
+                            }
+
+                        }
+
+
+                    }
+                }
 
 
                 return;
