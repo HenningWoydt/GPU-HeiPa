@@ -53,9 +53,9 @@ int main(int argc, char *argv[]) {
         {
             ScopedTimer _t("io", "main", "parse_args");
             std::vector<std::pair<std::string, std::string> > input = {
-                {"--graph", "./res/graphs/144.graph"},    // 100.054 in 334ms
-                // {"--graph", "../../ProMapRepo/data/mapping/cfd2.mtx.graph"}, // 92.920 in 40ms
-                {"--k", "32"},
+                {"--graph", "./res/graphs/144.graph"},    
+                {"--mapping", "./res/mapping144.txt"},  
+                {"--k", "8"},
                 {"--imbalance", "0.03"},
                 {"--config", "default"},
                 {"--seed", "1"},
@@ -115,17 +115,15 @@ int main(int argc, char *argv[]) {
             std::cout << "Solved in         : " << get_milli_seconds(sp_solver, get_time_point()) << std::endl;
         }
 
-        //if (config.is_set("--mapping")) {
-        //    ScopedTimer _t("io", "main", "write_partition");
-        //    auto p = get_time_point();
-//
-        //    write_partition(host_partition, host_g.n, config.mapping_out);
-//
-        //    if (verbose_level >= 1) {
-        //        io_ms = get_milli_seconds(p, get_time_point());
-        //        std::cout << "Write partition in: " << io_ms << std::endl;
-        //    }
-        //}
+        if (config.is_set("--mapping")) {
+            ScopedTimer _t("io", "main", "write_partition");
+            auto p = get_time_point();
+           write_partition(host_partition, host_g.n, config.mapping_out);
+           if (verbose_level >= 1) {
+                io_ms = get_milli_seconds(p, get_time_point());
+                std::cout << "Write partition in: " << io_ms << std::endl;
+            }
+        }
     }
     Kokkos::fence();
 

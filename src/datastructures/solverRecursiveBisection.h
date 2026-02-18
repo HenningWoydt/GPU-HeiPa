@@ -30,50 +30,126 @@ namespace GPU_HeiPa {
 
         public:
             Configuration config; 
-            //? what does this hold?
-            //? -> basically all the config info that you can supply to the algo upon calling the executable
+            HostPartition solution;
 
-            // constructor:
             explicit SolverRecursiveBisection(Configuration t_config) : config(std::move(t_config)) {
         }
 
             HostPartition solve(HostGraph &host_g) {
                 
-                //other stuff...
-                
                 internal_solve(host_g);
+
+                u32 edgecut = get_solution_quality(host_g, solution);
+
+                std::cout << "final edgecut : " << edgecut << std::endl;
             
-                //other stuff...
-
-                HostPartition host_partition; 
-                //? how does this look like? what do i actually need to return?
-                //? -> is just a an array of u32 (but defined as a kokkos view)
-
-                // retrieve the actual host partition from the solver
-
-                return host_partition;
+                return solution;
             }
 
+
+        
+
+            u32 get_solution_quality(HostGraph &g, HostPartition p) {
+                u32 edgecut = 0;
+
+                for (vertex_t u = 0; u < g.n; ++u) {
+                    partition_t u_part = p(u);
+                    for (vertex_t i = g.neighborhood(u); i < g.neighborhood(u + 1); ++i) {
+                        vertex_t v = g.edges_v(i);
+                        partition_t v_part = p(v);
+                        if (u_part != v_part) {
+                            edgecut += g.edges_w(i);
+                        }
+                    }
+                }
+                edgecut /= 2;  
+                return edgecut;
+            }
 
         private:
 
             void internal_solve(HostGraph &host_g) {
-                // do recursive bisection on the inputgraph
 
-                //Step 1: Just partition once:
-                
+                std::vector<int> pos = {};
+                int level = (int)std::log2(config.k);
+                std::vector<std::vector<u32>> mappings = {};
+
+                //? g.n * sizeof(u32) ?
+                solution = HostPartition(Kokkos::view_alloc(Kokkos::WithoutInitializing, "solution"), host_g.n);
+    
+                recursive_bisection(host_g, level, pos, mappings);
+
+                return;
+            }
+
+
+            void recursive_bisection(HostGraph &in_g, int level, std::vector<int> &pos, std::vector<std::vector<u32>> &mappings) {
+
                 Configuration conf1 = config;
                 conf1.k = 2;
-                conf1.verbose_level = 2;
+                conf1.verbose_level = 0;
 
-                HostPartition first_partition = Solver(conf1).solve(host_g);
-            
-                HostGraph left_graph, right_graph;
-                create_subgraph(first_partition, host_g, left_graph, right_graph);
+                if(level == 1) {
 
-                HostPartition left_par = Solver(conf1).solve(left_graph);
-                HostPartition right_par = Solver(conf1).solve(right_graph);
+                    HostPartition in_partition = Solver(conf1).solve(in_g);
+                    propagate_solution(in_partition, in_g, mappings, pos);
+                    return;
 
+                } else{
+                    
+                    HostPartition in_partition = Solver(conf1).solve(in_g);
+                    
+                    HostGraph left_graph, right_graph;
+                    std::vector<u32> left_new_to_old = {};
+                    std::vector<u32> right_new_to_old = {};
+                    create_subgraph(in_partition, in_g, left_graph, right_graph, left_new_to_old, right_new_to_old);
+
+                    std::vector<int> pos_left_graph, pos_right_graph;
+                    pos_left_graph = pos_right_graph = pos;
+                    pos_left_graph.push_back(0);
+                    pos_right_graph.push_back(1);
+
+                    std::vector<std::vector<u32>> mappings_left = mappings;
+                    std::vector<std::vector<u32>> mappings_right = mappings;
+                    mappings_left.push_back(left_new_to_old);
+                    mappings_right.push_back(right_new_to_old);
+
+                    recursive_bisection(left_graph, level-1, pos_left_graph, mappings_left);
+                    recursive_bisection(right_graph, level-1, pos_right_graph, mappings_right);
+                }
+
+                return;
+            }
+
+
+            /**
+             * This function takes a subgraph on the last level of the recursive bisection
+             * and translates (propagates) the partition found on this graph, to a 
+             * partition on the input graph
+             */
+            void propagate_solution(const HostPartition& local_partition, const HostGraph& local_graph,
+                        const std::vector<std::vector<u32>>& mappings, const std::vector<int>& pos) {
+                            
+                            // build global partition id from pos bits
+                            partition_t global_partition_id = 0;
+                            for (int i = 0; i < (int)pos.size(); ++i) {
+                                //? rather use ( 1 << pos.size() - i) ?
+                                global_partition_id += pos[i] * pow(2, pos.size() - i);
+                            }
+                        
+                            for (vertex_t u = 0; u < local_graph.n; ++u) {
+                                // map local u -> original id by walking mappings from last to first
+                                vertex_t original_id = u;
+                                for (int k = (int)mappings.size() - 1; k >= 0; --k) {
+                                    original_id = mappings[k][original_id];
+                                }
+                            
+                                
+                                partition_t full_id = global_partition_id + local_partition(u);
+                            
+                                solution(original_id) = full_id;
+                            }
+                            return;
             }
 
 
@@ -94,7 +170,9 @@ namespace GPU_HeiPa {
              * @return TODO
              */
             void create_subgraph(HostPartition input_partition, HostGraph &input_graph,
-                                 HostGraph &left_graph, HostGraph &right_graph
+                                 HostGraph &left_graph, HostGraph &right_graph,
+                                 std::vector<u32> &left_new_to_old,
+                                 std::vector<u32> &right_new_to_old
             ) {
 
                 vertex_t num_vertices[2], num_edges[2];
@@ -117,13 +195,7 @@ namespace GPU_HeiPa {
                     num_edges[partition] += input_graph.neighborhood( u+1 ) - input_graph.neighborhood(u); // fast upper bound
                 }
                 
-                // Print initialization values for subgraphs
-                std::cout << "Left subgraph:  vertices=" << num_vertices[0] 
-                          << " edges=" << num_edges[0] << " weight=" << weights[0] << std::endl;
-                std::cout << "Right subgraph: vertices=" << num_vertices[1] 
-                          << " edges=" << num_edges[1] << " weight=" << weights[1] << std::endl;
-                
-                
+
                 // init the two HostGraphs
                 allocate_memory(left_graph, num_vertices[0], num_edges[0], weights[0]);
                 allocate_memory(right_graph, num_vertices[1], num_edges[1], weights[1]);
@@ -160,6 +232,8 @@ namespace GPU_HeiPa {
                 }
 
                 //! These can be parallelized with a parallel scan
+                //! + You can combine these two into one loop with a minimum over the two n values
+                //! + And then add a smaller loop for the remaining elements
                 left_graph.neighborhood(left_graph.n) = 0;
                 for(vertex_t u = 1; u < left_graph.n + 1; ++u)
                     left_graph.neighborhood(u) += left_graph.neighborhood(u-1);
@@ -169,6 +243,11 @@ namespace GPU_HeiPa {
                     right_graph.neighborhood(u) += right_graph.neighborhood(u-1);
 
                 
+
+                // work on the mapping of new vertex IDs to old vertex IDs :
+                left_new_to_old.resize( num_vertices[0] );
+                right_new_to_old.resize( num_vertices[1 ]);
+                
                 vertex_t idx_l, idx_r;
                 //! This is again a parallel for (independent iterations)
                 for( vertex_t u = 0; u < input_graph.n ; ++u) {
@@ -176,8 +255,14 @@ namespace GPU_HeiPa {
 
                     if( my_part == 0) {
                         left_graph.weights( rename(u) ) = input_graph.weights(u);
+
+                        // update left new to old mapping
+                        left_new_to_old.at( rename(u) ) = u ;
                     } else{
                         right_graph.weights( rename(u)) = input_graph.weights(u);
+
+                        //update mapping
+                        right_new_to_old.at( rename(u) ) = u;
                     }
 
                     for(vertex_t i = input_graph.neighborhood(u); i < input_graph.neighborhood(u+1); ++i) {

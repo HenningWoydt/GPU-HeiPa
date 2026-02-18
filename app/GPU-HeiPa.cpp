@@ -52,9 +52,9 @@ int main(int argc, char *argv[]) {
         {
             ScopedTimer _t("io", "main", "parse_args");
             std::vector<std::pair<std::string, std::string> > input = {
-                {"--graph", "../../ProMapRepo/data/mapping/rgg23.graph"},    // 100.054 in 334ms
+                {"--graph", "./res/graphs/144.graph"},    // 100.054 in 334ms
                 // {"--graph", "../../ProMapRepo/data/mapping/cfd2.mtx.graph"}, // 92.920 in 40ms
-                {"--k", "32"},
+                {"--k", "4"},
                 {"--imbalance", "0.03"},
                 {"--config", "default"},
                 {"--seed", "1"},
