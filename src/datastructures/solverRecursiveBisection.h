@@ -125,7 +125,7 @@ namespace GPU_HeiPa {
                     HostGraph left_graph, right_graph;
                     std::vector<u32> left_new_to_old = {}; // the mappings between new and old vertex IDs
                     std::vector<u32> right_new_to_old = {}; 
-                    create_subgraph(in_partition, in_g, left_graph, right_graph, left_new_to_old, right_new_to_old);
+                    create_subgraph_clean(in_partition, in_g, left_graph, right_graph, left_new_to_old, right_new_to_old);
 
                     std::vector<int> pos_left_graph, pos_right_graph;
                     pos_left_graph = pos_right_graph = pos;  // copy wont hurt because this is super small (like 10 entries)
@@ -305,6 +305,291 @@ namespace GPU_HeiPa {
                     }
                 }
 
+
+                return;
+            }
+
+
+            void create_subgraph_clean(HostPartition input_partition, HostGraph &input_graph,
+                                 HostGraph &left_graph, HostGraph &right_graph,
+                                 std::vector<u32> &left_new_to_old,
+                                 std::vector<u32> &right_new_to_old
+            ) {
+
+                HostGraph* subgraphs[2];
+                subgraphs[0] = &left_graph;
+                subgraphs[1] = &right_graph;
+
+                vertex_t num_vertices[2], num_edges[2];
+                weight_t weights[2];
+                
+                num_vertices[0] = num_vertices[1] = num_edges[0] = num_edges[1] = 0;
+                weights[0] = weights[1] = 0;
+
+                HostU32 rename = HostU32(Kokkos::view_alloc(Kokkos::WithoutInitializing, "vertex_renaming"), input_graph.n  ) ;
+
+                
+                // Get the initial information to create the two subgraphs:
+                partition_t partition;
+                for(vertex_t u = 0; u < input_graph.n ; ++u) {
+                    partition = input_partition(u);
+
+                    rename[u] = num_vertices[partition];
+                    num_vertices[partition]++ ;
+                    weights[partition] += input_graph.weights(u);
+                    num_edges[partition] += input_graph.neighborhood( u+1 ) - input_graph.neighborhood(u); // fast upper bound
+                }
+                
+
+                // init the two HostGraphs
+                allocate_memory(left_graph, num_vertices[0], num_edges[0], weights[0]);
+                allocate_memory(right_graph, num_vertices[1], num_edges[1], weights[1]);
+
+                for( vertex_t u = 0; u < input_graph.n ; ++u) {
+                    partition_t my_part = input_partition(u);
+
+                    for(vertex_t i = input_graph.neighborhood(u); i < input_graph.neighborhood(u+1); ++i) {
+                        vertex_t v = input_graph.edges_v(i);
+                        partition_t neighbor_part = input_partition(v);
+
+                        if( my_part == neighbor_part) {
+
+                            subgraphs[my_part]->neighborhood( rename(u) )++;
+
+                        }
+
+
+                    }
+                }
+
+
+                left_graph.neighborhood(left_graph.n) = 0;
+                right_graph.neighborhood(right_graph.n) = 0;
+
+                vertex_t min_n = std::min(left_graph.n, right_graph.n);
+                for(vertex_t u = 1; u < min_n + 1; ++u) {
+                    left_graph.neighborhood(u) += left_graph.neighborhood(u-1);
+                    right_graph.neighborhood(u) += right_graph.neighborhood(u-1);
+                }
+                
+                for(vertex_t u = min_n + 1; u < left_graph.n + 1; ++u)
+                    left_graph.neighborhood(u) += left_graph.neighborhood(u-1);
+                
+                for(vertex_t u = min_n + 1; u < right_graph.n + 1; ++u)
+                    right_graph.neighborhood(u) += right_graph.neighborhood(u-1);
+
+                
+
+                // work on the mapping of new vertex IDs to old vertex IDs :
+                left_new_to_old.resize( num_vertices[0] );
+                right_new_to_old.resize( num_vertices[1 ]);
+                
+                std::vector<u32>* mappings[2];
+                mappings[0] = &left_new_to_old;
+                mappings[1] = &right_new_to_old;
+
+                
+                vertex_t idx;
+                for( vertex_t u = 0; u < input_graph.n ; ++u) {
+                    partition_t my_part = input_partition(u);
+
+
+                    subgraphs[my_part]->weights( rename(u) ) = input_graph.weights(u);
+                    mappings[my_part]->at( rename(u) ) = u;
+
+                    for(vertex_t i = input_graph.neighborhood(u); i < input_graph.neighborhood(u+1); ++i) {
+                        vertex_t v = input_graph.edges_v(i);
+                        partition_t neighbor_part = input_partition(v);
+
+                        if( my_part == neighbor_part) {
+
+                            idx = --subgraphs[my_part]->neighborhood(rename(u));
+                            subgraphs[my_part]->edges_v(idx) = rename(v);
+                            subgraphs[my_part]->edges_w(idx) = input_graph.edges_w(i);
+
+                        }
+
+                    }
+                }
+
+                return;
+            }
+
+
+            void create_subgraph_like_Henning(HostPartition input_partition, HostGraph &input_graph,
+                                 HostGraph &left_graph, HostGraph &right_graph,
+                                 std::vector<u32> &left_new_to_old,
+                                 std::vector<u32> &right_new_to_old
+            ) {
+
+                HostGraph* subgraphs[2];
+                subgraphs[0] = &left_graph;
+                subgraphs[1] = &right_graph;
+
+                vertex_t num_vertices[2], num_edges[2];
+                weight_t weights[2];
+                
+                num_vertices[0] = num_vertices[1] = num_edges[0] = num_edges[1] = 0;
+                weights[0] = weights[1] = 0;
+
+                HostU32 rename = HostU32(Kokkos::view_alloc(Kokkos::WithoutInitializing, "vertex_renaming"), input_graph.n  ) ;
+
+                
+                // Get the initial information to create the two subgraphs:
+                partition_t partition;
+                for(vertex_t u = 0; u < input_graph.n ; ++u) {
+                    partition = input_partition(u);
+
+                    rename[u] = num_vertices[partition];
+                    num_vertices[partition]++ ;
+                    weights[partition] += input_graph.weights(u);
+                    num_edges[partition] += input_graph.neighborhood( u+1 ) - input_graph.neighborhood(u); // fast upper bound
+                }
+                
+
+                // init the two HostGraphs
+                allocate_memory(left_graph, num_vertices[0], num_edges[0], weights[0]);
+                allocate_memory(right_graph, num_vertices[1], num_edges[1], weights[1]);
+
+                // work on the mapping of new vertex IDs to old vertex IDs :
+                left_new_to_old.resize( num_vertices[0] );
+                right_new_to_old.resize( num_vertices[1 ]);
+                
+                std::vector<u32>* mappings[2];
+                mappings[0] = &left_new_to_old;
+                mappings[1] = &right_new_to_old;
+
+
+                partition_t my_part;
+                vertex_t idx;
+                for(vertex_t u = 0; u < input_graph.n; ++u) {
+                    my_part = input_partition(u);
+
+                    subgraphs[my_part]->weights( rename(u) ) = input_graph.weights(u);
+                    mappings[my_part]->at( rename(u) ) = u;
+                    subgraphs[my_part]->neighborhood( rename(u) + 1) = subgraphs[my_part]->neighborhood( rename(u) );
+
+                    for(vertex_t i = input_graph.neighborhood(u) ; i < input_graph.neighborhood(u+1); ++i ) {
+                        vertex_t v = input_graph.edges_v(i);
+                        partition_t neighbor_part = input_partition(v);
+
+                        if( my_part == neighbor_part) {
+
+                            idx = subgraphs[my_part]->neighborhood(rename(u)+1);
+
+                            subgraphs[my_part]->edges_v(idx) = rename(v);
+                            subgraphs[my_part]->edges_w(idx) = input_graph.edges_w(i);
+                            subgraphs[my_part]->neighborhood(rename(u)+1) += 1;
+                        }
+                    }
+
+                }
+
+                return;
+            }
+
+
+            void create_subgraph_parallel(HostPartition input_partition, HostGraph &input_graph,
+                                 HostGraph &left_graph, HostGraph &right_graph,
+                                 std::vector<u32> &left_new_to_old,
+                                 std::vector<u32> &right_new_to_old
+            ) {
+
+                HostGraph* subgraphs[2];
+                subgraphs[0] = &left_graph;
+                subgraphs[1] = &right_graph;
+
+                vertex_t num_vertices[2], num_edges[2];
+                weight_t weights[2];
+                
+                num_vertices[0] = num_vertices[1] = num_edges[0] = num_edges[1] = 0;
+                weights[0] = weights[1] = 0;
+
+                std::vector<u32> rename = std::vector<u32>(input_graph.n);
+                
+                // Get the initial information to create the two subgraphs:
+                partition_t partition;
+                for(vertex_t u = 0; u < input_graph.n ; ++u) {
+                    partition = input_partition(u);
+
+                    rename[u] = num_vertices[partition];
+                    num_vertices[partition]++ ;
+                    weights[partition] += input_graph.weights(u);
+                    num_edges[partition] += input_graph.neighborhood( u+1 ) - input_graph.neighborhood(u); // fast upper bound
+                }
+                
+
+                // init the two HostGraphs
+                allocate_memory(left_graph, num_vertices[0], num_edges[0], weights[0]);
+                allocate_memory(right_graph, num_vertices[1], num_edges[1], weights[1]);
+
+                #pragma omp parallel for
+                for( vertex_t u = 0; u < input_graph.n ; ++u) {
+                    partition_t my_part = input_partition(u);
+
+                    for(vertex_t i = input_graph.neighborhood(u); i < input_graph.neighborhood(u+1); ++i) {
+                        vertex_t v = input_graph.edges_v(i);
+                        partition_t neighbor_part = input_partition(v);
+
+                        if( my_part == neighbor_part) {
+
+                            subgraphs[my_part]->neighborhood( rename.at(u) )++;
+
+                        }
+
+
+                    }
+                }
+
+
+                left_graph.neighborhood(left_graph.n) = 0;
+                right_graph.neighborhood(right_graph.n) = 0;
+
+                vertex_t min_n = std::min(left_graph.n, right_graph.n);
+                for(vertex_t u = 1; u < min_n + 1; ++u) {
+                    left_graph.neighborhood(u) += left_graph.neighborhood(u-1);
+                    right_graph.neighborhood(u) += right_graph.neighborhood(u-1);
+                }
+                
+                for(vertex_t u = min_n + 1; u < left_graph.n + 1; ++u)
+                    left_graph.neighborhood(u) += left_graph.neighborhood(u-1);
+                
+                for(vertex_t u = min_n + 1; u < right_graph.n + 1; ++u)
+                    right_graph.neighborhood(u) += right_graph.neighborhood(u-1);
+
+                
+
+                // work on the mapping of new vertex IDs to old vertex IDs :
+                left_new_to_old.resize( num_vertices[0] );
+                right_new_to_old.resize( num_vertices[1 ]);
+                
+                std::vector<u32>* mappings[2];
+                mappings[0] = &left_new_to_old;
+                mappings[1] = &right_new_to_old;
+
+
+                #pragma omp parallel for
+                for( vertex_t u = 0; u < input_graph.n ; ++u) {
+                    partition_t my_part = input_partition(u);
+
+
+                    subgraphs[my_part]->weights( rename.at(u) ) = input_graph.weights(u);
+                    mappings[my_part]->at( rename.at(u) ) = u;
+
+                    for(vertex_t i = input_graph.neighborhood(u); i < input_graph.neighborhood(u+1); ++i) {
+                        vertex_t v = input_graph.edges_v(i);
+                        partition_t neighbor_part = input_partition(v);
+
+                        if( my_part == neighbor_part) {
+
+                            vertex_t idx = --subgraphs[my_part]->neighborhood(rename.at(u));
+                            subgraphs[my_part]->edges_v(idx) = rename.at(v);
+                            subgraphs[my_part]->edges_w(idx) = input_graph.edges_w(i);
+
+                        }
+
+                    }
+                }
 
                 return;
             }
