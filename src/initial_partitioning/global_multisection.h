@@ -209,6 +209,8 @@ namespace GPU_HeiPa {
                                          f64 imbalance,
                                          u64 seed,
                                          HostPartition &partition) {
+        ScopedTimer _t("initial_partitioning", "global_multisection", "global_multisection_host");
+
         const f64 global_imbalance = imbalance;
         const weight_t global_g_weight = g.g_weight;
         const partition_t global_k = k;
@@ -235,6 +237,8 @@ namespace GPU_HeiPa {
 
         std::vector<partition_t> identifier;
         identifier.reserve(l);
+
+        _t.stop();
 
         // IMPORTANT: start from hierarchy.back() like your stack version
         recursive_partition(g,

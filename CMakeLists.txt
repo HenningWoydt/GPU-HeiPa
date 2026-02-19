@@ -15,9 +15,6 @@ set(CMAKE_CXX_EXTENSIONS OFF)
 set(CMAKE_POSITION_INDEPENDENT_CODE ON)
 set(CMAKE_EXPORT_COMPILE_COMMANDS ON)
 
-option(ENABLE_PROFILER "Enable profiler instrumentation" ON)
-
-
 # --- KaHIP library ---
 set(KaHIP_ROOT "${CMAKE_CURRENT_SOURCE_DIR}/extern/local/kahip")
 find_library(KAHIP_LIBRARY
@@ -116,11 +113,3 @@ if(Kokkos_ENABLE_CUDA)
     target_link_options(GPU-HeiPa PRIVATE "LINKER:--require-defined,cudaDeviceSynchronize")
     target_link_options(GPU-HeiProMap PRIVATE "LINKER:--require-defined,cudaDeviceSynchronize")
 endif()
-
-target_compile_definitions(GPU-HeiProMap PRIVATE
-        ENABLE_PROFILER=$<IF:$<BOOL:${ENABLE_PROFILER}>,1,0>
-)
-
-target_compile_definitions(GPU-HeiPa PRIVATE
-        ENABLE_PROFILER=$<IF:$<BOOL:${ENABLE_PROFILER}>,1,0>
-)

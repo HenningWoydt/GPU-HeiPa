@@ -113,7 +113,7 @@ namespace GPU_HeiPa {
                                 u64 seed,
                                 Partition &partition,
                                 MetisOption option) {
-        ScopedTimer _t_copy("initial_partitioning", "METIS", "copy");
+        ScopedTimer _t("initial_partitioning", "METIS", "METIS");
 
         // Convert device graph to simple CSR arrays on host
         HostGraph host_g = to_host_graph(g);

@@ -219,7 +219,7 @@ namespace GPU_HeiPa {
                     weight_t gain = 0;
 
                     if (best_id != NO_MOVE) {
-                        if (best_conn >= own_conn || (own_conn - best_conn) < floor(conn_c * own_conn)) {
+                        if (best_conn >= own_conn || ((f64) own_conn - (f64) best_conn) < floor(conn_c * (f64) own_conn)) {
                             gain = best_conn - own_conn;
                         } else {
                             best_id = NO_MOVE;
@@ -343,6 +343,8 @@ namespace GPU_HeiPa {
             ScopedTimer _t("refinement", "jetrs", "reset_mini_buckets");
 
             Kokkos::deep_copy(Kokkos::subview(lp.gain1, std::make_pair((vertex_t) 0, t_minibuckets + 1)), 0);
+
+            KOKKOS_PROFILE_FENCE();
         }
 
         //
@@ -415,6 +417,8 @@ namespace GPU_HeiPa {
                     update += gain;
                 });
             }
+
+            KOKKOS_PROFILE_FENCE();
         }
 
         //
@@ -699,9 +703,9 @@ namespace GPU_HeiPa {
 
         // first change in cut
         {
-            ScopedTimer _t("refinement", "JetLabelPropagation", "cut_change_1");
-
             if (n_moves < 32) {
+                ScopedTimer _t("refinement", "JetLabelPropagation", "cut_change_1_<32");
+
                 using Exec = DeviceExecutionSpace;
                 using TeamPol = Kokkos::TeamPolicy<Exec>;
                 using Member = TeamPol::member_type;
@@ -736,7 +740,11 @@ namespace GPU_HeiPa {
                         lp.cut_change1() = sum; // device scalar view
                     });
                 });
+
+                KOKKOS_PROFILE_FENCE();
             } else {
+                ScopedTimer _t("refinement", "JetLabelPropagation", "cut_change_1");
+
                 Kokkos::parallel_reduce("cut_change_1", n_moves, KOKKOS_LAMBDA(const u32 &i, weight_t &gain_update) {
                     vertex_t u = moves(i);
                     weight_t u_w = g.weights(u);
@@ -756,9 +764,9 @@ namespace GPU_HeiPa {
                     lp.partition.map(u) = new_id;
                     lp.dest_part(u) = old_id;
                 }, lp.cut_change1);
-            }
 
-            KOKKOS_PROFILE_FENCE();
+                KOKKOS_PROFILE_FENCE();
+            }
         }
 
         // update max weight
@@ -786,19 +794,17 @@ namespace GPU_HeiPa {
             if (n_moves > (u32) g.n / 10) {
                 ScopedTimer _t("refinement", "JetLabelPropagation", "update_block_conn_large");
                 update_large(g, lp.partition, lp.zeros, lp.dest_cache, bc, moves);
+                KOKKOS_PROFILE_FENCE();
             } else {
-                ScopedTimer _t("refinement", "JetLabelPropagation", "update_block_conn_small");
                 update_small(g, lp.partition, lp.dest_part, lp.dest_cache, bc, moves);
             }
-
-            KOKKOS_PROFILE_FENCE();
         }
 
         // second change in cut
         {
-            ScopedTimer _t("refinement", "JetLabelPropagation", "cut_change_2");
-
             if (n_moves < 32) {
+                ScopedTimer _t("refinement", "JetLabelPropagation", "cut_change_2_<32");
+
                 using Exec = DeviceExecutionSpace;
                 using TeamPolicy = Kokkos::TeamPolicy<Exec>;
                 using Member = TeamPolicy::member_type;
@@ -829,7 +835,11 @@ namespace GPU_HeiPa {
                         lp.cut_change2() = sum; // device scalar
                     });
                 });
+
+                KOKKOS_PROFILE_FENCE();
             } else {
+                ScopedTimer _t("refinement", "JetLabelPropagation", "cut_change_2");
+
                 Kokkos::parallel_reduce("cut_change_2", n_moves, KOKKOS_LAMBDA(const vertex_t &i, weight_t &gain_update) {
                     vertex_t u = moves(i);
                     partition_t old_id = lp.dest_part(u);

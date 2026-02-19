@@ -84,7 +84,7 @@ namespace GPU_HeiPa {
 
         // 2) Leaf: last split -> write into global_partition
         if (identifier.size() == (size_t) (l - 1)) {
-            ScopedTimer t{"hm", "recursive", "write_to_global"};
+            ScopedTimer t_write{"hm", "recursive", "write_to_global"};
             // offset = sum_{i=0..l-2} identifier[i] * index_vec[last-i]
             partition_t offset = 0;
             for (partition_t i = 0; i < l - 1; ++i) { offset += identifier[i] * index_vec[index_vec.size() - 1 - i]; }

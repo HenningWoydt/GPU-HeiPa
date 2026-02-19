@@ -268,57 +268,56 @@ namespace GPU_HeiPa {
                              const DeviceVertex &moves) {
         u32 total_moves = (u32) moves.extent(0);
 
-        Kokkos::parallel_for("remove_weight", Kokkos::TeamPolicy<>((int) total_moves, Kokkos::AUTO), KOKKOS_LAMBDA(const Kokkos::TeamPolicy<>::member_type &t) {
-            vertex_t u = moves((u32) t.league_rank());
-            partition_t old_u_id = dest_part(u);
+        //
+        {
+            ScopedTimer _t("refinement", "JetLabelPropagation", "update_small_remove_weight");
 
-            Kokkos::parallel_for(Kokkos::TeamThreadRange(t, g.neighborhood(u), g.neighborhood(u + 1)), [=](const u32 i) {
-                vertex_t v = g.edges_v(i);
-                weight_t w = g.edges_w(i);
+            Kokkos::parallel_for("remove_weight", Kokkos::TeamPolicy<>((int) total_moves, Kokkos::AUTO), KOKKOS_LAMBDA(const Kokkos::TeamPolicy<>::member_type &t) {
+                vertex_t u = moves((u32) t.league_rank());
+                partition_t old_u_id = dest_part(u);
 
-                u32 r_beg = bc.row(v);
-                u32 r_len = bc.sizes(v);
+                Kokkos::parallel_for(Kokkos::TeamThreadRange(t, g.neighborhood(u), g.neighborhood(u + 1)), [=](const u32 i) {
+                    vertex_t v = g.edges_v(i);
+                    weight_t w = g.edges_w(i);
 
-                // find correct idx
-                partition_t idx = old_u_id % r_len;
-                while (bc.ids(r_beg + idx) != old_u_id) { idx = (idx + 1) % r_len; }
+                    u32 r_beg = bc.row(v);
+                    u32 r_len = bc.sizes(v);
 
-                // remove weight
-                weight_t id_w = Kokkos::atomic_fetch_add(&bc.weights(r_beg + idx), -w);
+                    // find correct idx
+                    partition_t idx = old_u_id % r_len;
+                    while (bc.ids(r_beg + idx) != old_u_id) { idx = (idx + 1) % r_len; }
 
-                if (r_len != partition.k && id_w == w) { bc.ids(r_beg + idx) = HASH_RECLAIM; }
+                    // remove weight
+                    weight_t id_w = Kokkos::atomic_fetch_add(&bc.weights(r_beg + idx), -w);
+
+                    if (r_len != partition.k && id_w == w) { bc.ids(r_beg + idx) = HASH_RECLAIM; }
+                });
             });
-        });
 
-        Kokkos::parallel_for("add_weight", Kokkos::TeamPolicy<>((int) total_moves, Kokkos::AUTO), KOKKOS_LAMBDA(const Kokkos::TeamPolicy<>::member_type &t) {
-            vertex_t u = moves((u32) t.league_rank());
-            partition_t new_u_id = partition.map(u);
+            KOKKOS_PROFILE_FENCE();
+        }
 
-            Kokkos::parallel_for(Kokkos::TeamThreadRange(t, g.neighborhood(u), g.neighborhood(u + 1)), [=](const u32 i) {
-                vertex_t v = g.edges_v(i);
-                weight_t w = g.edges_w(i);
+        //
+        {
+            ScopedTimer _t("refinement", "JetLabelPropagation", "update_small_add_weight");
 
-                dest_cache(v) = NULL_PART; // reset the cache
+            Kokkos::parallel_for("add_weight", Kokkos::TeamPolicy<>((int) total_moves, Kokkos::AUTO), KOKKOS_LAMBDA(const Kokkos::TeamPolicy<>::member_type &t) {
+                vertex_t u = moves((u32) t.league_rank());
+                partition_t new_u_id = partition.map(u);
 
-                u32 r_beg = bc.row(v);
-                u32 r_len = bc.sizes(v);
+                Kokkos::parallel_for(Kokkos::TeamThreadRange(t, g.neighborhood(u), g.neighborhood(u + 1)), [=](const u32 i) {
+                    vertex_t v = g.edges_v(i);
+                    weight_t w = g.edges_w(i);
 
-                u32 idx = new_u_id % r_len;
+                    dest_cache(v) = NULL_PART; // reset the cache
 
-                // first pass look for new_u_id
-                bool success = false;
-                for (u32 j = 0; j < r_len; j++) {
-                    idx = (new_u_id + j) % r_len;
-                    partition_t id = bc.ids(r_beg + idx);
+                    u32 r_beg = bc.row(v);
+                    u32 r_len = bc.sizes(v);
 
-                    if (id == new_u_id) {
-                        success = true;
-                        break;
-                    }
-                    if (id == NULL_PART) { break; }
-                }
+                    u32 idx = new_u_id % r_len;
 
-                if (!success) {
+                    // first pass look for new_u_id
+                    bool success = false;
                     for (u32 j = 0; j < r_len; j++) {
                         idx = (new_u_id + j) % r_len;
                         partition_t id = bc.ids(r_beg + idx);
@@ -327,42 +326,57 @@ namespace GPU_HeiPa {
                             success = true;
                             break;
                         }
+                        if (id == NULL_PART) { break; }
+                    }
 
-                        if (id == NULL_PART || id == HASH_RECLAIM) {
-                            partition_t found_id = Kokkos::atomic_compare_exchange(&bc.ids(r_beg + idx), id, new_u_id);
-                            if (found_id == new_u_id || found_id == NULL_PART || found_id == HASH_RECLAIM) {
+                    if (!success) {
+                        for (u32 j = 0; j < r_len; j++) {
+                            idx = (new_u_id + j) % r_len;
+                            partition_t id = bc.ids(r_beg + idx);
+
+                            if (id == new_u_id) {
                                 success = true;
                                 break;
                             }
+
+                            if (id == NULL_PART || id == HASH_RECLAIM) {
+                                partition_t found_id = Kokkos::atomic_compare_exchange(&bc.ids(r_beg + idx), id, new_u_id);
+                                if (found_id == new_u_id || found_id == NULL_PART || found_id == HASH_RECLAIM) {
+                                    success = true;
+                                    break;
+                                }
+                            }
                         }
                     }
-                }
 
-                if (!success) {
-                    idx = r_len;
-                    while (true) {
-                        partition_t id = bc.ids(r_beg + idx);
+                    if (!success) {
+                        idx = r_len;
+                        while (true) {
+                            partition_t id = bc.ids(r_beg + idx);
 
-                        if (id == new_u_id) {
-                            success = true;
-                            break;
-                        }
-
-                        if (id == NULL_PART || id == HASH_RECLAIM) {
-                            partition_t found_id = Kokkos::atomic_compare_exchange(&bc.ids(r_beg + idx), id, new_u_id);
-                            if (found_id == id) {
-                                Kokkos::atomic_add(&bc.sizes(v), 1);
+                            if (id == new_u_id) {
+                                success = true;
                                 break;
                             }
-                            if (found_id == new_u_id) { break; }
-                        }
 
-                        idx++;
+                            if (id == NULL_PART || id == HASH_RECLAIM) {
+                                partition_t found_id = Kokkos::atomic_compare_exchange(&bc.ids(r_beg + idx), id, new_u_id);
+                                if (found_id == id) {
+                                    Kokkos::atomic_add(&bc.sizes(v), 1);
+                                    break;
+                                }
+                                if (found_id == new_u_id) { break; }
+                            }
+
+                            idx++;
+                        }
                     }
-                }
-                Kokkos::atomic_add(&bc.weights(r_beg + idx), w);
+                    Kokkos::atomic_add(&bc.weights(r_beg + idx), w);
+                });
             });
-        });
+
+            KOKKOS_PROFILE_FENCE();
+        }
     }
 
     KOKKOS_INLINE_FUNCTION
