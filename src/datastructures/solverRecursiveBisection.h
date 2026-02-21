@@ -9,34 +9,31 @@
 
 #include "graph.h"
 #include "host_graph.h"
-#include "kokkos_memory_stack.h"
 #include "mapping.h"
 #include "partition.h"
-#include "../coarsening/two_hop_matching.h"
-#include "../refinement/jet_label_propagation.h"
-#include "../initial_partitioning/metis_partitioning.h"
+#include "../initial_partitioning/global_multisection.h"
 #include "../utility/definitions.h"
 #include "../utility/configuration.h"
 #include "../utility/profiler.h"
 #include "../utility/asserts.h"
-#include "../utility/edge_cut.h"
 #include "solver.h"
 
 
+
 namespace GPU_HeiPa {
+
+    
 
     class SolverRecursiveBisection {
 
 
         public:
             Configuration config;
-            Configuration internal_config; 
+            weight_t global_g_w;
             HostPartition solution;
 
             explicit SolverRecursiveBisection(Configuration t_config) : config(std::move(t_config)) {
-                internal_config = config;
-                internal_config.k = 2;
-                internal_config.verbose_level = 0;
+                global_g_w = 0;
         }
 
             HostPartition solve(HostGraph &host_g) {
@@ -103,6 +100,8 @@ namespace GPU_HeiPa {
                 //? g.n * sizeof(u32) ?
                 solution = HostPartition(Kokkos::view_alloc(Kokkos::WithoutInitializing, "solution"), host_g.n);
     
+                global_g_w = host_g.g_weight;
+
                 recursive_bisection(host_g, level, pos, mappings);
 
                 return;
@@ -110,7 +109,20 @@ namespace GPU_HeiPa {
 
 
             void recursive_bisection(HostGraph &in_g, int level, std::vector<int> &pos, std::vector<std::vector<u32>> &mappings) {
+                
+                Configuration internal_config; 
 
+                internal_config = config;
+                internal_config.k = 2;
+                internal_config.imbalance = determine_adaptive_imbalance(
+                    config.imbalance,
+                    global_g_w,
+                    config.k,
+                    in_g.g_weight,
+                    pow(2, level),
+                    level
+                );
+                internal_config.verbose_level = 0;
 
                 if(level == 1) {
 
