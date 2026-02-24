@@ -106,12 +106,12 @@ namespace GPU_HeiPa {
                 HostPartition in_partition = Solver(internal_config).solve(in_g);
 
                 if(level == 1) {
-
+                    ScopedTimer _t("recursive_bisection", "recursive_bisection", "propagate_solution");
                     propagate_solution(in_partition, in_g, mapping, pos);
                     return;
 
                 } else{
-                    
+                    ScopedTimer _t("recursive_bisection", "recursive_bisection", "create_subgraph_like_Henning");
                     
                     HostGraph left_graph, right_graph;
                     std::vector<u32> left_new_to_old = {}; // the mappings between new and old vertex IDs
@@ -122,6 +122,8 @@ namespace GPU_HeiPa {
                     pos_left_graph = pos_right_graph = pos;  // copy wont hurt because this is super small (like 10 entries)
                     pos_left_graph.push_back(0);
                     pos_right_graph.push_back(1);
+
+                    _t.stop();
 
                     recursive_bisection(left_graph, level-1, pos_left_graph, left_new_to_old); // go down to the next lower level
                     recursive_bisection(right_graph, level-1, pos_right_graph, right_new_to_old);
