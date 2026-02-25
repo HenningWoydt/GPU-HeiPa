@@ -46,14 +46,14 @@ int main(int argc, char *argv[]) {
 
     Configuration config;
     if (argc == 1) {
-        // Configuration config;
-        // config.print_help_message();
-        // return 0;
+        config.print_help_message();
+        return 0;
         {
             ScopedTimer _t("io", "main", "parse_args");
             std::vector<std::pair<std::string, std::string> > input = {
-                {"--graph", "../../ProMapRepo/data/mapping/rgg23.graph"},    // 100.054 in 334ms
+                // {"--graph", "../../ProMapRepo/data/mapping/rgg23.graph"}, // 100.054 in 334ms
                 // {"--graph", "../../ProMapRepo/data/mapping/cfd2.mtx.graph"}, // 92.920 in 40ms
+                {"--graph", "../../ProMapRepo/data/mapping/shipsec5.mtx.graph"},
                 {"--k", "32"},
                 {"--imbalance", "0.03"},
                 {"--config", "default"},
@@ -93,6 +93,8 @@ int main(int argc, char *argv[]) {
         config = Configuration(argc, argv);
     }
     verbose_level = config.verbose_level;
+
+    auto t_before_dtors = get_time_point();
     //
     {
         HostGraph host_g = from_file(config.graph_in);
@@ -105,6 +107,7 @@ int main(int argc, char *argv[]) {
 
         auto sp_solver = get_time_point();
         HostPartition host_partition = Solver(config).solve(host_g);
+        Kokkos::fence();
 
         if (verbose_level >= 1) {
             std::cout << "Solved in         : " << get_milli_seconds(sp_solver, get_time_point()) << std::endl;
@@ -121,8 +124,11 @@ int main(int argc, char *argv[]) {
                 std::cout << "Write partition in: " << io_ms << std::endl;
             }
         }
+        t_before_dtors = get_time_point();
     }
-    Kokkos::fence();
+    if (verbose_level >= 1) {
+        std::cout << "Destructed in     : " << get_milli_seconds(t_before_dtors, get_time_point()) << std::endl;
+    }
 
     //
     {
