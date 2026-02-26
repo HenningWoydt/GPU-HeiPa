@@ -92,9 +92,11 @@ namespace GPU_HeiPa {
 
                 std::vector<int> pos = {};
                 int level = (int)std::log2(config.k);
-                std::vector<vertex_t> mapping(host_g.n); // mapping between subgraph and original vertices
-                for (vertex_t u = 0; u < host_g.n; ++u) mapping[u] = u; // init with identity mapping
-
+                HostVertex mapping("mapping", host_g.n);
+                            
+                for (vertex_t u = 0; u < host_g.n; ++u) {
+                    mapping(u) = u;
+                }
                 solution = HostPartition(Kokkos::view_alloc(Kokkos::WithoutInitializing, "solution"), host_g.n);
     
                 global_g_w = host_g.g_weight;
@@ -115,7 +117,7 @@ namespace GPU_HeiPa {
             }
 
 
-            void recursive_bisection(HostGraph &in_g, int level, std::vector<int> &pos, std::vector<u32> &mapping, KokkosMemoryStack &mem_stack) {
+            void recursive_bisection(HostGraph &in_g, int level, std::vector<int> &pos, HostVertex &mapping, KokkosMemoryStack &mem_stack) {
                 
                 Configuration internal_config; 
 
@@ -528,7 +530,7 @@ namespace GPU_HeiPa {
                                  HostGraph &left_graph, HostGraph &right_graph,
                                  std::vector<u32> &left_new_to_old,
                                  std::vector<u32> &right_new_to_old,
-                                 std::vector<u32> &curr_mapping,
+                                 HostVertex &curr_mapping,
                                  KokkosMemoryStack &mem_stack
             ) {
                 // convert data from CPU to GPU
@@ -543,13 +545,22 @@ namespace GPU_HeiPa {
                 Graph in_graph_device = from_HostGraph(input_graph, mem_stack, upload ) ;
                 Kokkos::fence();
 
+                DeviceVertex curr_mapping_device = DeviceVertex( (vertex_t *) get_chunk_front(mem_stack, sizeof(vertex_t) * input_graph.n ), input_graph.n ) ;
+                Kokkos::fence();
+                Kokkos::deep_copy(curr_mapping_device, curr_mapping);
+                Kokkos::fence();
+                
+
                 create_subgraph_GPU_vertexParallel(
                     in_graph_device,
                     in_partition_device,
-                    mem_stack
+                    mem_stack,
+                    curr_mapping_device
                 ) ;
 
                 // convert back
+
+                pop_front(mem_stack);
 
                 free_graph(in_graph_device, mem_stack);
 
@@ -573,7 +584,8 @@ namespace GPU_HeiPa {
             void create_subgraph_GPU_vertexParallel(
                 Graph &input_graph,
                 UnmanagedDevicePartition &in_partition,
-                KokkosMemoryStack &mem_stack
+                KokkosMemoryStack &mem_stack,
+                DeviceVertex &curr_mapping
             ) {
 
                 UnmanagedDeviceVertex rename = UnmanagedDeviceVertex((vertex_t *) get_chunk_front(mem_stack, sizeof(vertex_t) * input_graph.n), input_graph.n);
@@ -675,74 +687,87 @@ namespace GPU_HeiPa {
                 });
                 Kokkos::fence();
 
-                vertex_t min_n = std::min(left_graph.n, right_graph.n);
+
+                //? Macht das wirklich was ich will?
+                Kokkos::parallel_scan("create neighborhood left graph", left_graph.n +1,
+                    KOKKOS_LAMBDA( vertex_t u, vertex_t &temp, bool final ) {
+                        u32 val = left_graph.neighborhood(u);
+                        if(final) {
+                            left_graph.neighborhood(u) = temp;
+                        }
+                        temp += val;
+
+                    }
+                );
+
+                Kokkos::parallel_scan("create neighborhood right graph", right_graph.n + 1, KOKKOS_LAMBDA (const vertex_t i, u32& update, const bool final) {
+                    const u32 val = right_graph.neighborhood(i);
+                    if (final) {
+                        right_graph.neighborhood(i) = update;
+                    }
+                    update += val;
+                });
+
+
+                DeviceVertex left_mapping_device = DeviceVertex( (vertex_t *) get_chunk_front(mem_stack, sizeof(vertex_t) * left_graph.n ), left_graph.n ) ;
+                DeviceVertex right_mapping_device = DeviceVertex( (vertex_t *) get_chunk_front(mem_stack, sizeof(vertex_t) * right_graph.n ), right_graph.n ) ;
 
                 
 
-                //TODO: copy back to CPU
-                free_graph(left_graph, mem_stack);
-                free_graph(right_graph, mem_stack);
-                /**/
-                pop_front(mem_stack); //remove rename
-                
-                
-                /*
-                
-                
+                Kokkos::parallel_for("write edges to subgraphs", input_graph.n,
+                    KOKKOS_LAMBDA( vertex_t u ) {
 
-                //TODO: parallel scan
-                for(vertex_t u = 1; u < min_n + 1; ++u) {
-                    left_graph.neighborhood(u) += left_graph.neighborhood(u-1);
-                    right_graph.neighborhood(u) += right_graph.neighborhood(u-1);
-                }
-                
-                for(vertex_t u = min_n + 1; u < left_graph.n + 1; ++u)
-                    left_graph.neighborhood(u) += left_graph.neighborhood(u-1);
-                
-                for(vertex_t u = min_n + 1; u < right_graph.n + 1; ++u)
-                    right_graph.neighborhood(u) += right_graph.neighborhood(u-1);
+                        partition_t my_part = in_partition(u);
 
-                
+                        if( my_part == 0) {
+                            
+                            left_graph.weights( rename(u) ) = input_graph.weights(u);
+                            left_mapping_device( rename(u) ) = curr_mapping(u);
 
-                // work on the mapping of new vertex IDs to old vertex IDs :
-                left_new_to_old.resize( num_vertices[0] );
-                right_new_to_old.resize( num_vertices[1 ]);
-                
-                //TODO: i guess this should become a view?
-                std::vector<u32>* mappings[2];
-                mappings[0] = &left_new_to_old;
-                mappings[1] = &right_new_to_old;
-
-
-                //? This has to be a parallel for over the vertices?
-                //? Loop over all edges?
-
-                #pragma omp parallel for
-                for( vertex_t u = 0; u < input_graph.n ; ++u) {
-                    partition_t my_part = input_partition(u);
-
-
-                    subgraphs[my_part]->weights( rename.at(u) ) = input_graph.weights(u);
-                    mappings[my_part]->at( rename.at(u) ) = curr_mapping.at(u);
-
-                    for(vertex_t i = input_graph.neighborhood(u); i < input_graph.neighborhood(u+1); ++i) {
-                        vertex_t v = input_graph.edges_v(i);
-                        partition_t neighbor_part = input_partition(v);
-
-                        if( my_part == neighbor_part) {
-
-                            vertex_t idx = --subgraphs[my_part]->neighborhood(rename.at(u));
-                            subgraphs[my_part]->edges_v(idx) = rename.at(v);
-                            subgraphs[my_part]->edges_w(idx) = input_graph.edges_w(i);
+                        }else{
+                            
+                            right_graph.weights( rename(u) ) = input_graph.weights(u);
+                            right_mapping_device( rename(u) ) = curr_mapping(u);
 
                         }
 
+                        for( u32 i = input_graph.neighborhood(u); i < input_graph.neighborhood(u+1); ++i) {
+                            vertex_t v = input_graph.edges_v(i);
+                            partition_t neighbor_part = in_partition(v);
+
+                            if(my_part == neighbor_part) {
+                            
+                                if(my_part == 0) {
+                                    
+                                    u32 idx = --left_graph.neighborhood(rename(u));
+                                    left_graph.edges_v(idx) = rename(v);
+                                    left_graph.edges_w(idx) = input_graph.edges_w(i);
+
+                                }else{
+
+                                    u32 idx = --right_graph.neighborhood(rename(u));
+                                    right_graph.edges_v(idx) = rename(v);
+                                    right_graph.edges_w(idx) = input_graph.edges_w(i);
+
+                                }
+                            
+                                
+                            }
+                        }
                     }
-                }
+                );
 
-             
-                */
+                //TODO: copy back this solution to host :)
+                pop_front(mem_stack); // rm right_mapping_device
+                pop_front(mem_stack); // rm left_mapping_device
 
+                
+                //TODO: copy back to CPU
+                free_graph(left_graph, mem_stack);
+                free_graph(right_graph, mem_stack);
+
+                pop_front(mem_stack); //remove rename
+                
 
                 return;
             }
