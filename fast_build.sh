@@ -32,5 +32,5 @@
           -DCMAKE_CXX_STANDARD=20 \
           -DCMAKE_CXX_EXTENSIONS=OFF \
           -DENABLE_PROFILER=0
- cmake --build . --parallel "$JOBS" --target GPU-HeiPa
+ #cmake --build . --parallel "$JOBS" --target GPU-HeiPa
  cmake --build . --parallel "$JOBS" --target GPU-HeiPa2k

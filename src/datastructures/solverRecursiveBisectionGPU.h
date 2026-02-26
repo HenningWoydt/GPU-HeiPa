@@ -631,50 +631,64 @@ namespace GPU_HeiPa {
                
                 //! Idea is at first: allocate and free the graphs in this method
                 
-                /*
+                std::cout << "Left graph - vertices: " << res_num_vertices.partial_0s 
+                          << ", edges: " << res_neighbors.partial_0s 
+                          << ", weights: " << res_weights.partial_0s << std::endl;
+                std::cout << "Right graph - vertices: " << res_num_vertices.partial_1s 
+                          << ", edges: " << res_neighbors.partial_1s 
+                          << ", weights: " << res_weights.partial_1s << std::endl;
                 
                 Graph left_graph = make_graph( res_num_vertices.partial_0s , res_neighbors.partial_0s , res_weights.partial_0s, mem_stack );
                 Graph right_graph = make_graph( res_num_vertices.partial_1s , res_neighbors.partial_1s , res_weights.partial_1s, mem_stack );
-
-                Graph* subgraphs[2]; 
-                subgraphs[0] = &left_graph;
-                subgraphs[1] = &right_graph;
+                Kokkos::fence();
 
 
+                Kokkos::parallel_for("count active edges", input_graph.n,
+                    KOKKOS_LAMBDA(vertex_t u) {
+                        partition_t my_part = in_partition(u);
+
+                        for( u32 i = input_graph.neighborhood(u); i < input_graph.neighborhood(u+1); ++i ) {
+                            vertex_t v = input_graph.edges_v(i);
+                            partition_t neighbor_part = in_partition(v);
+
+                            if( my_part == neighbor_part) {
+
+                                //! ---------------------------------
+                                //? Do i need to init neighborhood with 0s before this ??
+                                //! ---------------------------------
+                                if( my_part == 0) {
+                                    left_graph.neighborhood( rename(u) ) += 1;
+                                } else {
+                                    right_graph.neighborhood( rename(u)) += 1;
+                                }
+
+
+                            }
+                        }
+                    }
+                );
+
+
+                Kokkos::parallel_for("InitNeighborhoodEnd", 1, KOKKOS_LAMBDA(const int) {
+                    left_graph.neighborhood(left_graph.n) = 0;
+                    right_graph.neighborhood(right_graph.n) = 0;
+                });
+                Kokkos::fence();
+
+                vertex_t min_n = std::min(left_graph.n, right_graph.n);
+
+                
 
                 //TODO: copy back to CPU
                 free_graph(left_graph, mem_stack);
                 free_graph(right_graph, mem_stack);
-                */
+                /**/
                 pop_front(mem_stack); //remove rename
+                
+                
                 /*
                 
                 
-                //TODO: kokkos parallel for
-                //TODO: experiment: Is it better to parallelize over the vertices or edges? (no-atomics vs coalescing)
-                #pragma omp parallel for
-                for( vertex_t u = 0; u < input_graph.n ; ++u) {
-                    partition_t my_part = input_partition(u);
-
-                    for(vertex_t i = input_graph.neighborhood(u); i < input_graph.neighborhood(u+1); ++i) {
-                        vertex_t v = input_graph.edges_v(i);
-                        partition_t neighbor_part = input_partition(v);
-
-                        if( my_part == neighbor_part) {
-
-                            subgraphs[my_part]->neighborhood( rename.at(u) )++;
-
-                        }
-
-
-                    }
-                }
-
-                //? wie mache ich diese einzelnen calls, die nur ein thread machen soll ?
-                left_graph.neighborhood(left_graph.n) = 0;
-                right_graph.neighborhood(right_graph.n) = 0;
-
-                vertex_t min_n = std::min(left_graph.n, right_graph.n);
 
                 //TODO: parallel scan
                 for(vertex_t u = 1; u < min_n + 1; ++u) {
