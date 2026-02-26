@@ -102,11 +102,14 @@ namespace GPU_HeiPa {
                 KokkosMemoryStack mem_stack = initialize_kokkos_memory_stack(
                 30 * (size_t) host_g.n * sizeof(vertex_t) + // 20% buffer for vertices
                 10 * (size_t) host_g.m * sizeof(vertex_t), // Graph + coarsening overhead
-                "Stack"
+                "Jacobs internal stack"
             );
+                Kokkos::fence();
+
 
                 recursive_bisection(host_g, level, pos, mapping, mem_stack);
 
+                destroy(mem_stack);
 
                 return;
             }
@@ -129,7 +132,7 @@ namespace GPU_HeiPa {
                 internal_config.verbose_level = 0;
 
                 HostPartition in_partition = Solver(internal_config).solve(in_g);
-
+                Kokkos::fence;
 
                 HostGraph left_graph, right_graph;
                 std::vector<u32> left_new_to_old = {}; // the mappings between new and old vertex IDs
@@ -531,12 +534,14 @@ namespace GPU_HeiPa {
                 // convert data from CPU to GPU
                 
                 UnmanagedDevicePartition in_partition_device = UnmanagedDevicePartition((partition_t *) get_chunk_front(mem_stack, sizeof(partition_t) * input_graph.n), input_graph.n);
-                
-                Kokkos::deep_copy(in_partition_device, input_partition) ; //? legal conversion ?
+                Kokkos::fence();
 
+                Kokkos::deep_copy(in_partition_device, input_partition) ; //? legal conversion ?
+                Kokkos::fence();
 
                 f64 upload;
                 Graph in_graph_device = from_HostGraph(input_graph, mem_stack, upload ) ;
+                Kokkos::fence();
 
                 create_subgraph_GPU_vertexParallel(
                     in_graph_device,
@@ -571,7 +576,7 @@ namespace GPU_HeiPa {
                 KokkosMemoryStack &mem_stack
             ) {
 
-                UnmanagedDeviceVertex rename = UnmanagedDeviceVertex((vertex_t *) get_chunk_back(mem_stack, sizeof(vertex_t) * input_graph.n), input_graph.n);
+                UnmanagedDeviceVertex rename = UnmanagedDeviceVertex((vertex_t *) get_chunk_front(mem_stack, sizeof(vertex_t) * input_graph.n), input_graph.n);
                 auto rename_host = Kokkos::create_mirror_view(rename);
 
                 
@@ -625,7 +630,9 @@ namespace GPU_HeiPa {
                
                
                 //! Idea is at first: allocate and free the graphs in this method
-
+                
+                /*
+                
                 Graph left_graph = make_graph( res_num_vertices.partial_0s , res_neighbors.partial_0s , res_weights.partial_0s, mem_stack );
                 Graph right_graph = make_graph( res_num_vertices.partial_1s , res_neighbors.partial_1s , res_weights.partial_1s, mem_stack );
 
@@ -638,7 +645,7 @@ namespace GPU_HeiPa {
                 //TODO: copy back to CPU
                 free_graph(left_graph, mem_stack);
                 free_graph(right_graph, mem_stack);
-                
+                */
                 pop_front(mem_stack); //remove rename
                 /*
                 
