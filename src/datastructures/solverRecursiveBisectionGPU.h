@@ -33,7 +33,18 @@ namespace GPU_HeiPa {
     }
     };
 
-    class SolverRecursiveBisectionGood {
+    struct WeightAccumulators {
+    weight_t partial_0s = 0;
+    weight_t partial_1s = 0;
+    
+    KOKKOS_INLINE_FUNCTION
+    void operator+=(const WeightAccumulators& rhs) {
+        partial_0s += rhs.partial_0s;
+        partial_1s += rhs.partial_1s;
+    }
+    };
+
+    class SolverRecursiveBisectionGPU {
 
 
         public:
@@ -41,7 +52,7 @@ namespace GPU_HeiPa {
             weight_t global_g_w;
             HostPartition solution;
 
-            explicit SolverRecursiveBisectionGood(Configuration t_config) : config(std::move(t_config)) {
+            explicit SolverRecursiveBisectionGPU(Configuration t_config) : config(std::move(t_config)) {
                 global_g_w = 0;
         }
 
@@ -61,9 +72,7 @@ namespace GPU_HeiPa {
             }
 
 
-        
-
-        private:
+    
 
             bool isPowerOfTwo(u32 n) {
                 return (n > 0) && ((n & (n - 1)) == 0);
@@ -90,13 +99,20 @@ namespace GPU_HeiPa {
     
                 global_g_w = host_g.g_weight;
 
-                recursive_bisection(host_g, level, pos, mapping);
+                KokkosMemoryStack mem_stack = initialize_kokkos_memory_stack(
+                30 * (size_t) host_g.n * sizeof(vertex_t) + // 20% buffer for vertices
+                10 * (size_t) host_g.m * sizeof(vertex_t), // Graph + coarsening overhead
+                "Stack"
+            );
+
+                recursive_bisection(host_g, level, pos, mapping, mem_stack);
+
 
                 return;
             }
 
 
-            void recursive_bisection(HostGraph &in_g, int level, std::vector<int> &pos, std::vector<u32> &mapping) {
+            void recursive_bisection(HostGraph &in_g, int level, std::vector<int> &pos, std::vector<u32> &mapping, KokkosMemoryStack &mem_stack) {
                 
                 Configuration internal_config; 
 
@@ -114,6 +130,23 @@ namespace GPU_HeiPa {
 
                 HostPartition in_partition = Solver(internal_config).solve(in_g);
 
+
+                HostGraph left_graph, right_graph;
+                std::vector<u32> left_new_to_old = {}; // the mappings between new and old vertex IDs
+                std::vector<u32> right_new_to_old = {}; 
+                create_subgraph_GPU_wrapper(
+                    in_partition, in_g,
+                    left_graph, right_graph,
+                    left_new_to_old,
+                    right_new_to_old,
+                    mapping,
+                    mem_stack
+                );
+                return;
+
+                /*
+                
+                
                 if(level == 1) {
                     ScopedTimer _t("recursive_bisection", "recursive_bisection", "propagate_solution");
                     propagate_solution(in_partition, in_g, mapping, pos);
@@ -134,11 +167,11 @@ namespace GPU_HeiPa {
 
                     _t.stop();
 
-                    recursive_bisection(left_graph, level-1, pos_left_graph, left_new_to_old); // go down to the next lower level
-                    recursive_bisection(right_graph, level-1, pos_right_graph, right_new_to_old);
+                    recursive_bisection(left_graph, level-1, pos_left_graph, left_new_to_old, mem_stack); // go down to the next lower level
+                    recursive_bisection(right_graph, level-1, pos_right_graph, right_new_to_old, mem_stack);
                     return;
                 }
-                
+                */
             }
 
 
@@ -486,20 +519,41 @@ namespace GPU_HeiPa {
                 return;
             }
 
+           
+           
             void create_subgraph_GPU_wrapper(HostPartition &input_partition, HostGraph &input_graph,
                                  HostGraph &left_graph, HostGraph &right_graph,
                                  std::vector<u32> &left_new_to_old,
                                  std::vector<u32> &right_new_to_old,
-                                 std::vector<u32> &curr_mapping
+                                 std::vector<u32> &curr_mapping,
+                                 KokkosMemoryStack &mem_stack
             ) {
                 // convert data from CPU to GPU
                 
-                create_subgraph_GPU_vertexParallel() ;
+                UnmanagedDevicePartition in_partition_device = UnmanagedDevicePartition((partition_t *) get_chunk_front(mem_stack, sizeof(partition_t) * input_graph.n), input_graph.n);
+                
+                Kokkos::deep_copy(in_partition_device, input_partition) ; //? legal conversion ?
+
+
+                f64 upload;
+                Graph in_graph_device = from_HostGraph(input_graph, mem_stack, upload ) ;
+
+                create_subgraph_GPU_vertexParallel(
+                    in_graph_device,
+                    in_partition_device,
+                    mem_stack
+                ) ;
 
                 // convert back
 
+                free_graph(in_graph_device, mem_stack);
+
+                pop_front(mem_stack); //Remove the in_partition_device
+
                 return;
             }
+
+
 
             /*
             
@@ -511,39 +565,20 @@ namespace GPU_HeiPa {
             -> replace #pragma omp parallel for with Kokkos::for and change locations of memory
             ! But first i need to fix the logic for the mapping from new vertex IDs to the original ones!
             */
-            void create_subgraph_GPU_vertexParallel() {
+            void create_subgraph_GPU_vertexParallel(
+                Graph &input_graph,
+                UnmanagedDevicePartition &in_partition,
+                KokkosMemoryStack &mem_stack
+            ) {
 
-                HostGraph* subgraphs[2]; //TODO: this should be a graph on the GPU -> change input 
-                subgraphs[0] = &left_graph;
-                subgraphs[1] = &right_graph;
+                UnmanagedDeviceVertex rename = UnmanagedDeviceVertex((vertex_t *) get_chunk_back(mem_stack, sizeof(vertex_t) * input_graph.n), input_graph.n);
+                auto rename_host = Kokkos::create_mirror_view(rename);
 
-                vertex_t num_vertices[2], num_edges[2]; //TODO: this should all be on the GPU
-                weight_t weights[2]; //TODO: because i am using it in the following code
-                
-                //TODO: init on GPU
-                num_vertices[0] = num_vertices[1] = num_edges[0] = num_edges[1] = 0;
-                weights[0] = weights[1] = 0;
-
-                //TODO: should be on GPU
-                std::vector<u32> rename = std::vector<u32>(input_graph.n);
                 
 
-                //TODO: parallelize ? parallel scan over num_vertices[partition] ?
-                /*partition_t partition;
-                for(vertex_t u = 0; u < input_graph.n ; ++u) {
-                    partition = input_partition(u);
-
-                    //? looks like a prefix sum wrt rename
-                    //? but a typical reduction wrt num_vertices...
-                    //? split this into two loops? reduction & scan ?
-                    rename[u] = num_vertices[partition];
-                    num_vertices[partition]++ ; 
-
-                    //! these are definetly reductions, because ordering doesnt matter!
-                    weights[partition] += input_graph.weights(u);
-                    num_edges[partition] += input_graph.neighborhood( u+1 ) - input_graph.neighborhood(u); // fast upper bound
-                }
-                */
+                Accumulators res_num_vertices;
+                res_num_vertices.partial_0s = 0;
+                res_num_vertices.partial_1s = 0;
 
                 Kokkos::parallel_scan("rename vertices", input_graph.n,
                 KOKKOS_LAMBDA( u32 u, Accumulators &acc, bool final ) {
@@ -556,15 +591,58 @@ namespace GPU_HeiPa {
                         if(final) rename(u) = acc.partial_1s;
                         acc.partial_1s += 1;
                     }
-                } //TODO: retrieve the final result of the accumulation
+                }, res_num_vertices
                 );
 
+                //TODO: Combine the loops into a single on
+                WeightAccumulators res_weights;
 
-                // init the two HostGraphs
-                //TODO: do this on the GPU -> which function might be good for this?
-                allocate_memory(left_graph, num_vertices[0], num_edges[0], weights[0]);
-                allocate_memory(right_graph, num_vertices[1], num_edges[1], weights[1]);
+                res_weights.partial_0s = 0;
+                res_weights.partial_1s = 0;
 
+                Kokkos::parallel_reduce("reduction over the weights", input_graph.n, 
+                    KOKKOS_LAMBDA( u32 u, WeightAccumulators &acc) {
+                        partition_t partition = in_partition(u);
+                    
+                        if(partition == 0) acc.partial_0s += input_graph.weights(u);
+                        else acc.partial_1s += input_graph.weights(u);
+                    
+                }, res_weights);
+
+
+                Accumulators res_neighbors;
+                res_neighbors.partial_0s = 0;
+                res_neighbors.partial_1s = 0;
+        
+                Kokkos::parallel_reduce("reduction over the neighbors", input_graph.n,
+                    KOKKOS_LAMBDA( u32 u, Accumulators &acc) {
+                        partition_t partition = in_partition(u);
+                    
+                        if(partition == 0) acc.partial_0s += input_graph.neighborhood( u+1 ) - input_graph.neighborhood(u);
+                        else acc.partial_1s += input_graph.neighborhood( u+1 ) - input_graph.neighborhood(u);
+                    }, res_neighbors);
+                
+               
+               
+                //! Idea is at first: allocate and free the graphs in this method
+
+                Graph left_graph = make_graph( res_num_vertices.partial_0s , res_neighbors.partial_0s , res_weights.partial_0s, mem_stack );
+                Graph right_graph = make_graph( res_num_vertices.partial_1s , res_neighbors.partial_1s , res_weights.partial_1s, mem_stack );
+
+                Graph* subgraphs[2]; 
+                subgraphs[0] = &left_graph;
+                subgraphs[1] = &right_graph;
+
+
+
+                //TODO: copy back to CPU
+                free_graph(left_graph, mem_stack);
+                free_graph(right_graph, mem_stack);
+                
+                pop_front(mem_stack); //remove rename
+                /*
+                
+                
                 //TODO: kokkos parallel for
                 //TODO: experiment: Is it better to parallelize over the vertices or edges? (no-atomics vs coalescing)
                 #pragma omp parallel for
@@ -642,7 +720,7 @@ namespace GPU_HeiPa {
                 }
 
              
-
+                */
 
 
                 return;
