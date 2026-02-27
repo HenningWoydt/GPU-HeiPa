@@ -508,6 +508,7 @@ namespace GPU_HeiPa {
 
                     rename[u] = num_vertices[partition];
                     num_vertices[partition]++ ;
+                    
                     weights[partition] += input_graph.weights(u);
                     num_edges[partition] += input_graph.neighborhood( u+1 ) - input_graph.neighborhood(u); // fast upper bound
                 }
