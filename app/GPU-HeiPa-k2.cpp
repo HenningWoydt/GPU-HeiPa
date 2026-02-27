@@ -99,10 +99,11 @@ int main(int argc, char *argv[]) {
     verbose_level = config.verbose_level;
     //
     {
-        // HostGraph host_g = from_file(config.graph_in);
-
+        
+        /*
+        
         HostGraph host_g;
-        allocate_memory(host_g, 8, 12, 8);
+        allocate_memory(host_g, 8, 24, 8);
 
         host_g.neighborhood(0) = 0;
         host_g.neighborhood(1) = 3;
@@ -112,7 +113,7 @@ int main(int argc, char *argv[]) {
         host_g.neighborhood(5)= 15;
         host_g.neighborhood(6)= 19;
         host_g.neighborhood(7)= 21;
-        host_g.neighborhood(8) =  23;
+        host_g.neighborhood(8) =  24;
         
         
         host_g.edges_v(0) =  1;
@@ -142,8 +143,8 @@ int main(int argc, char *argv[]) {
 
         for(int i= 0; i < 24 ; ++i)
             host_g.edges_w(i) = 1;
-
-
+        */
+        HostGraph host_g = from_file(config.graph_in);
 
         f64 io_ms = get_milli_seconds(sp, get_time_point());
 

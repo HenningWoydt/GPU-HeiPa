@@ -126,8 +126,8 @@ inline void print_host_vertex(const HostVertex& v, const std::string& name) {
                 global_g_w = host_g.g_weight;
 
                 KokkosMemoryStack mem_stack = initialize_kokkos_memory_stack(
-                30 * (size_t) host_g.n * sizeof(vertex_t) + // 20% buffer for vertices
-                10 * (size_t) host_g.m * sizeof(vertex_t), // Graph + coarsening overhead
+                30 * 20 * (size_t) host_g.n * sizeof(vertex_t) + // 20% buffer for vertices
+                10 * 20 * (size_t) host_g.m * sizeof(vertex_t), // Graph + coarsening overhead
                 "Jacobs internal stack"
                 );
                 Kokkos::fence();
@@ -157,15 +157,20 @@ inline void print_host_vertex(const HostVertex& v, const std::string& name) {
                 );
                 internal_config.verbose_level = 0;
 
-                // HostPartition in_partition = Solver(internal_config).solve(in_g);
-                // Kokkos::fence();
+                HostPartition in_partition = Solver(internal_config).solve(in_g);
+                Kokkos::fence();
 
+                /*
+                
                 HostPartition in_partition("lol", in_g.n) ;
                 Kokkos::fence();
                 for(int i = 0; i < in_g.n; ++i) {
-                    in_partition(i) = i % 2;
+                    if(i < 4)
+                        in_partition(i) = 0;
+                    else
+                        in_partition(i) = 1;
                 }
-
+*/
                 if(level == 1) {
                     std::cout << "came until popagate step" << std::endl;
 
@@ -228,13 +233,13 @@ inline void print_host_vertex(const HostVertex& v, const std::string& name) {
                             }
                         
                             int msize = mapping.extent(0);
-                            std::cout << "mapping size: " << msize << std::endl;
+                           // std::cout << "mapping size: " << msize << std::endl;
 
                             for (vertex_t u = 0; u < local_graph.n; ++u) {
-                                if(u >= msize)
-                                    std::cout << "something wrong " <<std::endl;
+                                // if(u >= msize)
+                                //     std::cout << "something wrong " <<std::endl;
 
-                                std::cout << u <<std::endl;
+                               // std::cout << u <<std::endl;
                                 vertex_t original_id = mapping(u);
 
                                 partition_t full_id = global_partition_id + local_partition(u);
@@ -271,7 +276,8 @@ inline void print_host_vertex(const HostVertex& v, const std::string& name) {
                 Kokkos::deep_copy(curr_mapping_device, curr_mapping);
                 Kokkos::fence();
                 
-
+                /*
+                
                 create_subgraph_GPU_vertexParallel(
                     in_graph_device,
                     in_partition_device,
@@ -282,7 +288,20 @@ inline void print_host_vertex(const HostVertex& v, const std::string& name) {
                     left_graph_host,
                     right_graph_host
                 ) ;
+                */
 
+
+                build_subgraph_Henning_GPU(
+                    in_graph_device,
+                    in_partition_device,
+                    curr_mapping,
+                    //curr_mapping_device,
+                    left_mapping_host,
+                    right_mapping_host,
+                    left_graph_host,
+                    right_graph_host,
+                    mem_stack
+                ) ;
                 // convert back
 
                 pop_front(mem_stack);
@@ -295,6 +314,159 @@ inline void print_host_vertex(const HostVertex& v, const std::string& name) {
                 return;
             }
 
+
+
+
+            /*
+            Ich probier mal die methode von Henning irgendwie anzupassen, weil die funktioniert ja...
+            Vielleicht finde ich dann meinen Fehler
+            */
+            inline void build_subgraph_Henning_GPU(Graph &device_g,
+                                                      UnmanagedDevicePartition &tmp_part,
+                                                      const HostVertex curr_mapping,
+
+                                                      HostVertex &left_mapping_host,
+                                                      HostVertex &right_mapping_host,
+                                                      
+                                                      HostGraph &left_graph_host,
+                                                      HostGraph &right_graph_host,
+                                                      
+                                                      KokkosMemoryStack &mem_stack)
+                 {
+                
+                //UnmanagedDeviceVertex rename = UnmanagedDeviceVertex((vertex_t *) get_chunk_front(mem_stack, sizeof(vertex_t) * input_graph.n), input_graph.n);
+                // (".", curr_mapping.extent(0));
+                UnmanagedDeviceVertex n_to_o = UnmanagedDeviceVertex((vertex_t *) get_chunk_front(mem_stack, sizeof(vertex_t) * curr_mapping.extent(0)), curr_mapping.extent(0));
+                Kokkos::deep_copy(n_to_o, curr_mapping);
+                Kokkos::fence() ;
+
+
+                
+
+
+                const partition_t k = 2;
+                                                
+            
+                // 3) Non-leaf: build each child 
+                for (partition_t id = 0; id < k; ++id) {
+                    // --- First pass: compute sub_n, sub_m, sub_weight for this id
+                    vertex_t sub_n = 0;
+                    vertex_t sub_m = 0;
+                    weight_t sub_weight = 0;
+                
+                    Kokkos::parallel_reduce("SubN", device_g.n, KOKKOS_LAMBDA(const vertex_t u, vertex_t &lsum) {
+                        if (tmp_part(u) == id) lsum += 1;
+                    }, sub_n);
+                
+                    Kokkos::parallel_reduce("SubWeight", device_g.n, KOKKOS_LAMBDA(const vertex_t u, weight_t &lsum) {
+                        if (tmp_part(u) == id) lsum += device_g.weights(u);
+                    }, sub_weight);
+                
+                    //? I wonder if it makes a difference if you count the edges exact or make an approximation
+                    Kokkos::parallel_reduce("SubM", device_g.n, KOKKOS_LAMBDA(const vertex_t u, vertex_t &lsum) {
+                        if (tmp_part(u) == id) {
+                            vertex_t cnt = 0;
+                            for (u32 i = device_g.neighborhood(u); i < device_g.neighborhood(u + 1); ++i) {
+                                const vertex_t v = device_g.edges_v(i);
+                                if (tmp_part(v) == id) ++cnt;
+                            }
+                            lsum += cnt;
+                        }
+                    }, sub_m);
+                
+                    Kokkos::fence();
+                
+                    // Empty block => skip
+                    if (sub_n == 0) {
+                        continue;
+                    }
+                
+                    // --- Allocate child graph + mappings
+                    Graph child_g = make_graph(sub_n, sub_m, sub_weight, mem_stack);
+                    UnmanagedDeviceVertex child_n_to_o = UnmanagedDeviceVertex((vertex_t *) get_chunk_front(mem_stack, sizeof(vertex_t) * sub_n), sub_n);
+                    UnmanagedDeviceVertex child_o_to_n = UnmanagedDeviceVertex((vertex_t *) get_chunk_back(mem_stack, sizeof(vertex_t) * solution.extent(0)), solution.extent(0));
+                
+                    // --- Fill translation tables and weights
+                    Kokkos::parallel_scan("AssignLocalIndex", device_g.n, KOKKOS_LAMBDA(const vertex_t u, vertex_t &prefix, const bool final) {
+                        if (tmp_part(u) == id) {
+                            const vertex_t my_idx = prefix;
+                            if (final) {
+                                const vertex_t old_u = n_to_o(u);
+                                child_o_to_n(old_u) = my_idx;
+                                child_n_to_o(my_idx) = old_u;
+                                child_g.weights(my_idx) = device_g.weights(u);
+                            }
+                            prefix += 1;
+                        }
+                    });
+                    Kokkos::fence();
+                
+                    // init neighborhood(0)
+                    Kokkos::parallel_for("InitNeighborhood0", 1, KOKKOS_LAMBDA(const int) { child_g.neighborhood(0) = 0; });
+                    Kokkos::fence();
+                
+                    // --- Fill edges + neighborhood offsets
+                    Kokkos::parallel_scan("FillEdges", device_g.n, KOKKOS_LAMBDA(const vertex_t u, u32 &edge_prefix, const bool final) {
+                        if (tmp_part(u) == id) {
+                            u32 start = edge_prefix;
+                            u32 cnt = 0;
+                        
+                            for (u32 i = device_g.neighborhood(u); i < device_g.neighborhood(u + 1); ++i) {
+                                const vertex_t v = device_g.edges_v(i);
+                                if (tmp_part(v) == id) {
+                                    if (final) {
+                                        const vertex_t sub_v = child_o_to_n(n_to_o(v));
+                                        child_g.edges_v(start) = sub_v;
+                                        child_g.edges_w(start) = device_g.edges_w(i);
+                                    }
+                                    ++start;
+                                    ++cnt;
+                                }
+                            }
+                        
+                            if (final) {
+                                const vertex_t sub_u = child_o_to_n(n_to_o(u));
+                                child_g.neighborhood(sub_u + 1) = edge_prefix + cnt;
+                            }
+                        
+                            edge_prefix += cnt;
+                        }
+                    });
+                    Kokkos::fence();
+                
+                    // fill the u array
+                    Kokkos::parallel_for("fill_edges_u", child_g.n, KOKKOS_LAMBDA(const vertex_t u) {
+                        u32 begin = child_g.neighborhood(u);
+                        u32 end = child_g.neighborhood(u + 1);
+                        for (u32 i = begin; i < end; ++i) {
+                            child_g.edges_u(i) = u;
+                        }
+                    });
+                    Kokkos::fence();
+                
+                    if( id == 0) {
+                        left_graph_host = to_host_graph(child_g);
+                        left_mapping_host = HostVertex("host mapping left subgraph", child_g.n) ;
+                        Kokkos::fence();
+                        Kokkos::deep_copy(left_mapping_host, child_n_to_o);
+                    } else{
+                        right_graph_host = to_host_graph(child_g);
+                        right_mapping_host = HostVertex("host mapping right subgraph", child_g.n) ;
+                        Kokkos::fence();
+                        Kokkos::deep_copy(right_mapping_host, child_n_to_o);
+                    }
+
+                    // We no longer need child_o_to_n after edges built
+                    pop_back(mem_stack);
+                
+                    // --- Free child allocations (reverse of allocations for this child)
+                    pop_front(mem_stack); // child_n_to_o
+                    free_graph(child_g, mem_stack); // whatever make_graph allocated
+                }
+            
+                
+                
+            }
 
 
             /*
@@ -316,6 +488,8 @@ inline void print_host_vertex(const HostVertex& v, const std::string& name) {
 
                 UnmanagedDeviceVertex rename = UnmanagedDeviceVertex((vertex_t *) get_chunk_front(mem_stack, sizeof(vertex_t) * input_graph.n), input_graph.n);
                 
+                
+
                 Accumulators res_num_vertices;
                 res_num_vertices.partial_0s = 0;
                 res_num_vertices.partial_1s = 0;
@@ -334,6 +508,17 @@ inline void print_host_vertex(const HostVertex& v, const std::string& name) {
                     }
                 }, res_num_vertices
                 );
+
+                /*
+                
+                Kokkos::fence();
+                auto rename_host = Kokkos::create_mirror_view(rename);
+                Kokkos::deep_copy(rename_host, rename);
+                Kokkos::fence();
+                std::cout <<"print rename: " << std::endl;
+                for(int i = 0; i < input_graph.n ; ++i)
+                    std::cout << rename_host(i) << std::endl ;
+                */
 
                 //TODO: Combine the loops into a single on
                 WeightAccumulators res_weights;
@@ -366,14 +551,11 @@ inline void print_host_vertex(const HostVertex& v, const std::string& name) {
                 
                 Kokkos::fence();
                
-
+                //! Values to init seem correct (upon inspection)
                 Graph left_graph = make_graph( res_num_vertices.partial_0s , res_neighbors.partial_0s , res_weights.partial_0s, mem_stack );
                 Graph right_graph = make_graph( res_num_vertices.partial_1s , res_neighbors.partial_1s , res_weights.partial_1s, mem_stack );
                 Kokkos::fence();
 
-                
-
-                
                 Kokkos::parallel_for("count active edges", input_graph.n,
                     KOKKOS_LAMBDA(vertex_t u) {
                         partition_t my_part = in_partition(u);
@@ -401,7 +583,24 @@ inline void print_host_vertex(const HostVertex& v, const std::string& name) {
                         }
                     }
                 );
+                /*
+                
+                Kokkos::fence();
+                auto rn = Kokkos::create_mirror_view(right_graph.neighborhood);
+                Kokkos::deep_copy(rn, right_graph.neighborhood);
+                Kokkos::fence();
+                std::cout <<"neighborhood of right graph: " << std::endl;
+                for(int i = 0; i < right_graph.n ; ++i)
+                    std::cout << rn(i) << std::endl ;
 
+                Kokkos::fence();
+                auto ln = Kokkos::create_mirror_view(left_graph.neighborhood);
+                Kokkos::deep_copy(ln, left_graph.neighborhood);
+                Kokkos::fence();
+                std::cout <<"neighborhood of left graph: " << std::endl;
+                for(int i = 0; i < left_graph.n ; ++i)
+                    std::cout << ln(i) << std::endl ;
+                */
 
                 Kokkos::parallel_for("InitNeighborhoodEnd", 1, KOKKOS_LAMBDA(const int) {
                     left_graph.neighborhood(left_graph.n) = 0;
@@ -436,6 +635,7 @@ inline void print_host_vertex(const HostVertex& v, const std::string& name) {
                 DeviceVertex left_mapping_device = DeviceVertex( (vertex_t *) get_chunk_front(mem_stack, sizeof(vertex_t) * left_graph.n ), left_graph.n ) ;
                 DeviceVertex right_mapping_device = DeviceVertex( (vertex_t *) get_chunk_front(mem_stack, sizeof(vertex_t) * right_graph.n ), right_graph.n ) ;
 
+                //TODO allocate on the stack pls
                 left_mapping_host = HostVertex("host mapping left subgraph", left_graph.n) ;
                 right_mapping_host = HostVertex("host mapping right subgraph", right_graph.n) ;
                 Kokkos::fence();
@@ -490,11 +690,15 @@ inline void print_host_vertex(const HostVertex& v, const std::string& name) {
                 Kokkos::deep_copy(left_mapping_host, left_mapping_device);
                 Kokkos::deep_copy(right_mapping_host, right_mapping_device);
 
+                Kokkos::fence();
+
                 pop_front(mem_stack); // rm right_mapping_device
                 pop_front(mem_stack); // rm left_mapping_device
 
                 left_graph_host = to_host_graph(left_graph);
                 right_graph_host = to_host_graph(right_graph);
+
+                Kokkos::fence();
 
                 free_graph(left_graph, mem_stack);
                 free_graph(right_graph, mem_stack);
