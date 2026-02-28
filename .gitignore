@@ -14,3 +14,4 @@ extern/
 res/
 .clangd
 out.txt
+src/datastructures/solverRecursiveBisectionGPUGood.h
