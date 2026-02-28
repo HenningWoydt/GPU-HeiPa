@@ -619,16 +619,14 @@ inline void print_host_vertex(const HostVertex& v, const std::string& name) {
 
                 Kokkos::deep_copy(left_mapping_host, left_mapping_device);
                 Kokkos::deep_copy(right_mapping_host, right_mapping_device);
+                
+                left_graph_host = to_host_graph(left_graph);
+                right_graph_host = to_host_graph(right_graph);
 
                 Kokkos::fence();
 
                 pop_front(mem_stack); // rm right_mapping_device
                 pop_front(mem_stack); // rm left_mapping_device
-
-                left_graph_host = to_host_graph(left_graph);
-                right_graph_host = to_host_graph(right_graph);
-
-                Kokkos::fence();
 
                 free_graph(left_graph, mem_stack);
                 free_graph(right_graph, mem_stack);

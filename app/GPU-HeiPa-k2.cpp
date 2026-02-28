@@ -158,8 +158,8 @@ int main(int argc, char *argv[]) {
         
         //! Only change this line to use the new solver!
         // HostPartition host_partition = Solver(config).solve(host_g);
-        HostPartition host_partition = SolverRecursiveBisectionGPU(config).solve(host_g);
-        //HostPartition host_partition = SolverRecursiveBisectionGPUGood(config).solve(host_g);
+        // HostPartition host_partition = SolverRecursiveBisectionGPU(config).solve(host_g);
+        HostPartition host_partition = SolverRecursiveBisectionGPUGood(config).solve(host_g);
 
         if (verbose_level >= 1) {
             std::cout << "Solved in         : " << get_milli_seconds(sp_solver, get_time_point()) << std::endl;
