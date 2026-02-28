@@ -543,12 +543,19 @@ inline void print_host_vertex(const HostVertex& v, const std::string& name) {
                 Kokkos::parallel_reduce("reduction over the neighbors", input_graph.n,
                     KOKKOS_LAMBDA( u32 u, Accumulators &acc) {
                         partition_t partition = in_partition(u);
+                        vertex_t cnt = 0;
+
+                        for(int i = input_graph.neighborhood(u); i < input_graph.neighborhood(u+1); ++i) {
+                            const vertex_t v = input_graph.edges_v(i);
+                            if(in_partition(v) == partition) ++cnt;
+                        }
+
                     
-                        if(partition == 0) acc.partial_0s += input_graph.neighborhood( u+1 ) - input_graph.neighborhood(u);
-                        else acc.partial_1s += input_graph.neighborhood( u+1 ) - input_graph.neighborhood(u);
+                        if(partition == 0) acc.partial_0s += cnt;
+                        else acc.partial_1s += cnt;
                     }, res_neighbors);
                 
-                
+
                 Kokkos::fence();
                
                 //! Values to init seem correct (upon inspection)
