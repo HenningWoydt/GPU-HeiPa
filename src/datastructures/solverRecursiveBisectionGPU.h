@@ -140,17 +140,7 @@ inline void print_host_vertex(const HostVertex& v, const std::string& name) {
                 HostPartition in_partition = Solver(internal_config).solve(in_g);
                 Kokkos::fence();
 
-                /*
-                
-                HostPartition in_partition("lol", in_g.n) ;
-                Kokkos::fence();
-                for(int i = 0; i < in_g.n; ++i) {
-                    if(i < 4)
-                        in_partition(i) = 0;
-                    else
-                        in_partition(i) = 1;
-                }
-*/
+
                 if(level == 1) {
                     std::cout << "came until popagate step" << std::endl;
 
@@ -174,12 +164,6 @@ inline void print_host_vertex(const HostVertex& v, const std::string& name) {
                     );
                     
 
-                    //! print the graphs and mappings
-                    // print_host_graph(left_graph_host, "left_graph_host");
-                    // print_host_graph(right_graph_host, "right_graph_host");
-                    // print_host_vertex(left_mapping_host, "left_new_to_old");
-                    // print_host_vertex(right_mapping_host, "right_new_to_old");
-
                     std::vector<int> pos_left_graph, pos_right_graph;
                     pos_left_graph = pos_right_graph = pos;  // copy wont hurt because this is super small (like 10 entries)
                     pos_left_graph.push_back(0);
@@ -200,7 +184,6 @@ inline void print_host_vertex(const HostVertex& v, const std::string& name) {
              * and translates (propagates) the partition found on this graph, to a 
              * partition on the input graph
              * 
-             * ! there seems to be a bug here, maybe because of mapping?
              */
             void propagate_solution(const HostPartition& local_partition, const HostGraph& local_graph,
                         const HostVertex& mapping, const std::vector<int>& pos) {
