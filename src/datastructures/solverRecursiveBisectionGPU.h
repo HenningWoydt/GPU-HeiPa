@@ -26,25 +26,6 @@ namespace GPU_HeiPa {
    
 
 
-inline void print_host_graph(const HostGraph& g, const std::string& name) {
-    std::cout << "Graph: " << name << "\n";
-    std::cout << "n = " << g.n << ", m = " << g.m << ", g_weight = " << g.g_weight << "\n";
-    std::cout << "weights: ";
-    for (vertex_t u = 0; u < std::min((vertex_t)30, g.n); ++u) std::cout << g.weights(u) << " ";
-    std::cout << "\nneighborhood: ";
-    for (vertex_t u = 0; u < std::min((vertex_t)30, (vertex_t)(g.n + 1)); ++u) std::cout << g.neighborhood(u) << " ";
-    std::cout << "\nedges_v: ";
-    for (vertex_t e = 0; e < std::min((vertex_t)30, g.m); ++e) std::cout << g.edges_v(e) << " ";
-    std::cout << "\nedges_w: ";
-    for (vertex_t e = 0; e < std::min((vertex_t)30, g.m); ++e) std::cout << g.edges_w(e) << " ";
-    std::cout << "\n";
-}
-
-inline void print_host_vertex(const HostVertex& v, const std::string& name) {
-    std::cout << "Mapping: " << name << "\n";
-    for (vertex_t i = 0; i < std::min((vertex_t)30, (vertex_t)v.extent(0)); ++i) std::cout << v(i) << " ";
-    std::cout << "\n";
-}
 // ...existing code...
 
 

@@ -24,6 +24,27 @@ namespace GPU_HeiPa {
     class SolverRecursiveBisectionGPUGood {
 
 
+
+inline void print_host_graph(const HostGraph& g, const std::string& name) {
+    std::cout << "Graph: " << name << "\n";
+    std::cout << "n = " << g.n << ", m = " << g.m << ", g_weight = " << g.g_weight << "\n";
+    std::cout << "weights: ";
+    for (vertex_t u = 0; u < std::min((vertex_t)30, g.n); ++u) std::cout << g.weights(u) << " ";
+    std::cout << "\nneighborhood: ";
+    for (vertex_t u = 0; u < std::min((vertex_t)30, (vertex_t)(g.n + 1)); ++u) std::cout << g.neighborhood(u) << " ";
+    std::cout << "\nedges_v: ";
+    for (vertex_t e = 0; e < std::min((vertex_t)30, g.m); ++e) std::cout << g.edges_v(e) << " ";
+    std::cout << "\nedges_w: ";
+    for (vertex_t e = 0; e < std::min((vertex_t)30, g.m); ++e) std::cout << g.edges_w(e) << " ";
+    std::cout << "\n";
+}
+
+inline void print_host_vertex(const HostVertex& v, const std::string& name) {
+    std::cout << "Mapping: " << name << "\n";
+    for (vertex_t i = 0; i < std::min((vertex_t)30, (vertex_t)v.extent(0)); ++i) std::cout << v(i) << " ";
+    std::cout << "\n";
+}
+
         public:
             Configuration config;
             weight_t global_g_w;
@@ -31,23 +52,6 @@ namespace GPU_HeiPa {
             explicit SolverRecursiveBisectionGPUGood(Configuration t_config) : config(std::move(t_config)) {
                 global_g_w = 0;
         }
-
-            HostPartition solve(HostGraph &host_g) {
-
-                if (!isPowerOfTwo(config.k)) {
-                    throw std::invalid_argument("k must be a power of two");
-                }
-
-                if( config.k == 1) {
-                    throw std::invalid_argument("k must be at least 2");    
-                }
-                
-                HostPartition solution = internal_solve(host_g);
-
-                return solution;
-            }
-
-
     
 
             bool isPowerOfTwo(u32 n) {
@@ -64,27 +68,31 @@ namespace GPU_HeiPa {
               
              
             */
-            HostPartition internal_solve(HostGraph &host_g) {
+            HostPartition solve(HostGraph &host_g) {
+                
+                if (!isPowerOfTwo(config.k)) {
+                    throw std::invalid_argument("k must be a power of two");
+                }
+
+                if( config.k == 1) {
+                    throw std::invalid_argument("k must be at least 2");    
+                }
 
 
                 //TODO: configure this size
                 KokkosMemoryStack mem_stack = initialize_kokkos_memory_stack(
-                30 * 10 * (size_t) host_g.n * sizeof(vertex_t) + // 20% buffer for vertices
-                10 * 10 * (size_t) host_g.m * sizeof(vertex_t), // Graph + coarsening overhead
+                30 * 10 * 3* (size_t) host_g.n * sizeof(vertex_t) + // 20% buffer for vertices
+                10 * 10 * 3* (size_t) host_g.m * sizeof(vertex_t), // Graph + coarsening overhead
                 "Jacobs internal stack"
                 );
 
-                KokkosMemoryStack mem_stack_tmp = initialize_kokkos_memory_stack(
-                30 * 2 * (size_t) host_g.n * sizeof(vertex_t) + // 20% buffer for vertices
-                10 * 2 * (size_t) host_g.m * sizeof(vertex_t), // Graph + coarsening overhead
-                "Stack for migrating my code"
-                );
                 Kokkos::fence();
 
                 std::vector<int> pos = {};
                 int level = (int)std::log2(config.k);
 
-                UnmanagedDeviceVertex mapping = UnmanagedDeviceVertex((vertex_t *) get_chunk_front(mem_stack_tmp, sizeof(vertex_t) * host_g.n), host_g.n);
+                UnmanagedDeviceVertex mapping = UnmanagedDeviceVertex((vertex_t *) get_chunk_front(mem_stack, sizeof(vertex_t) * host_g.n), host_g.n);
+                Kokkos::fence();
                 Kokkos::parallel_for("fill mapping", host_g.n,
                     KOKKOS_LAMBDA(vertex_t u) {
                         mapping(u) = u;
@@ -99,20 +107,22 @@ namespace GPU_HeiPa {
                 
                 f64 speed;
                 Graph device_g = from_HostGraph(host_g, mem_stack, speed );
-
-                recursive_bisection(device_g, level, pos, mapping, mem_stack, mem_stack_tmp, solution_device);
+                Kokkos::fence();
+                recursive_bisection(device_g, level, pos, mapping, mem_stack, solution_device);
 
                 Kokkos::deep_copy(solution, solution_device);
                 Kokkos::fence();
 
 
-                pop_front(mem_stack); //rm device_g
-                pop_front(mem_stack_tmp); // rm mapping
+                free_graph(device_g, mem_stack);
                 
                 pop_front(mem_stack); // rm solution_device
+                
+                pop_front(mem_stack); // rm mapping
+                
 
                 destroy(mem_stack);
-                destroy(mem_stack_tmp);
+                // destroy(mem_stack_tmp);
 
                 return solution;
             }
@@ -124,7 +134,6 @@ namespace GPU_HeiPa {
                 std::vector<int> &pos, 
                 UnmanagedDeviceVertex &mapping,
                 KokkosMemoryStack &mem_stack,
-                KokkosMemoryStack &mem_stack_tmp,
                 UnmanagedDevicePartition &solution_d
             ) {
                 
@@ -141,15 +150,19 @@ namespace GPU_HeiPa {
                 UnmanagedDevicePartition in_partition = UnmanagedDevicePartition((partition_t *) get_chunk_back(mem_stack, sizeof(partition_t) * in_g.n), in_g.n);                    
                 
                 Solver solver( in_g, 2, adapt_imbalance, 0, true, in_partition, mem_stack);
+              
                 std::cout << "i am here  2" << std::endl;
                 Kokkos::fence();
                 
                 if(level == 1) {
                     ScopedTimer _t("recursive_bisection", "recursive_bisection", "propagate_solution");
                     std::cout << "i am here 3" << std::endl;
+
                     propagate_solution(in_partition, in_g.n, mapping, pos, solution_d);
-                    
+                    Kokkos::fence();
                     pop_back(mem_stack) ; //rm in_partition
+                    
+                    
                     std::cout << "i am here 4" << std::endl;
                     return;
 
@@ -164,27 +177,33 @@ namespace GPU_HeiPa {
 std::cout << "i am here 5" << std::endl;
                     create_subgraph_GPU_vertexParallel(
                         in_g, in_partition,
-                        mem_stack, mem_stack_tmp,
+                        mem_stack, 
                         mapping, left_mapping, right_mapping,
                         left_graph, right_graph
                     );
 
-                    pop_back(mem_stack) ; // rm in partition
+                    
                     std::vector<int> pos_left_graph, pos_right_graph;
                     pos_left_graph = pos_right_graph = pos;  
                     pos_left_graph.push_back(0);
                     pos_right_graph.push_back(1);
 
                     _t.stop();
+                    cudaDeviceSynchronize();
+                    cudaError_t err = cudaGetLastError();
+                    std::cout << cudaGetErrorString(err) << std::endl;
+
 std::cout << "i am here 6" << std::endl;
-                    recursive_bisection(left_graph, level-1, pos_left_graph, left_mapping, mem_stack, mem_stack_tmp, solution_d); // go down to the next lower level
-                    pop_front(mem_stack_tmp);
+                    recursive_bisection(left_graph, level-1, pos_left_graph, left_mapping, mem_stack, solution_d); // go down to the next lower level
                     free_graph(left_graph, mem_stack);
+                    pop_front(mem_stack);
                 
                     
-                    recursive_bisection(right_graph, level-1, pos_right_graph, right_mapping, mem_stack, mem_stack_tmp, solution_d);
-                    pop_front(mem_stack_tmp);
+                    recursive_bisection(right_graph, level-1, pos_right_graph, right_mapping, mem_stack, solution_d);
                     free_graph(right_graph, mem_stack);
+                    pop_front(mem_stack);
+                    
+                    pop_back(mem_stack) ; // rm in partition
                     return;
                 }
                 /**/
@@ -238,7 +257,6 @@ std::cout << "i am here 6" << std::endl;
                 Graph &input_graph,
                 UnmanagedDevicePartition &in_partition,
                 KokkosMemoryStack &mem_stack,
-                KokkosMemoryStack &mem_stack_tmp,
                 UnmanagedDeviceVertex &curr_mapping, 
                 UnmanagedDeviceVertex &left_mapping_device,
                 UnmanagedDeviceVertex &right_mapping_device,
@@ -300,10 +318,10 @@ std::cout << "i am here 6" << std::endl;
             
                 // step 2: allocate and make the subgraphs
                 
-                right_mapping_device = DeviceVertex( (vertex_t *) get_chunk_front(mem_stack_tmp, sizeof(vertex_t) * res_num_vertices.partial_1s ), res_num_vertices.partial_1s ) ;
-                left_mapping_device = DeviceVertex( (vertex_t *) get_chunk_front(mem_stack_tmp, sizeof(vertex_t) * res_num_vertices.partial_0s ), res_num_vertices.partial_0s ) ;
-                
+                right_mapping_device = DeviceVertex( (vertex_t *) get_chunk_front(mem_stack, sizeof(vertex_t) * res_num_vertices.partial_1s ), res_num_vertices.partial_1s ) ;
                 right_graph = make_graph( res_num_vertices.partial_1s , edges_and_weights.num_edges_1s , edges_and_weights.weight_1s, mem_stack );
+
+                left_mapping_device = DeviceVertex( (vertex_t *) get_chunk_front(mem_stack, sizeof(vertex_t) * res_num_vertices.partial_0s ), res_num_vertices.partial_0s ) ;
                 left_graph = make_graph( res_num_vertices.partial_0s , edges_and_weights.num_edges_0s , edges_and_weights.weight_0s  , mem_stack );
                 
                 Kokkos::fence();
