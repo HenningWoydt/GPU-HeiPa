@@ -27,7 +27,6 @@ namespace GPU_HeiPa {
         public:
             Configuration config;
             weight_t global_g_w;
-            HostPartition solution;
 
             explicit SolverRecursiveBisectionGPUGood(Configuration t_config) : config(std::move(t_config)) {
                 global_g_w = 0;
@@ -43,7 +42,7 @@ namespace GPU_HeiPa {
                     throw std::invalid_argument("k must be at least 2");    
                 }
                 
-                internal_solve(host_g);
+                HostPartition solution = internal_solve(host_g);
 
                 return solution;
             }
@@ -65,7 +64,7 @@ namespace GPU_HeiPa {
               
              
             */
-            void internal_solve(HostGraph &host_g) {
+            HostPartition internal_solve(HostGraph &host_g) {
 
 
                 //TODO: configure this size
@@ -93,28 +92,34 @@ namespace GPU_HeiPa {
                     }
                 );
                 
-
-                //TODO: need a gpu copy of this too
-                solution = HostPartition(Kokkos::view_alloc(Kokkos::WithoutInitializing, "solution"), host_g.n);
-    
                 global_g_w = host_g.g_weight;
 
+                //TODO: need a gpu copy of this too
+                HostPartition solution = HostPartition(Kokkos::view_alloc(Kokkos::WithoutInitializing, "solution"), host_g.n);
+                UnmanagedDevicePartition solution_device = UnmanagedDevicePartition((partition_t *) get_chunk_front(mem_stack, sizeof(partition_t) * host_g.n), host_g.n);
+                
 
-                recursive_bisection(host_g, level, pos, mapping, mem_stack, mem_stack_tmp);
+                recursive_bisection(host_g, level, pos, mapping, mem_stack, mem_stack_tmp, solution_device);
+
+                Kokkos::deep_copy(solution, solution_device);
+                Kokkos::fence();
 
                 pop_front(mem_stack_tmp); // rm mapping
+                
+                pop_front(mem_stack); // rm solution_device
 
                 destroy(mem_stack);
                 destroy(mem_stack_tmp);
 
-                return;
+                return solution;
             }
 
 
             void recursive_bisection(HostGraph &in_g, int level, std::vector<int> &pos, 
                 UnmanagedDeviceVertex &mapping,
                 KokkosMemoryStack &mem_stack,
-                KokkosMemoryStack &mem_stack_tmp
+                KokkosMemoryStack &mem_stack_tmp,
+                UnmanagedDevicePartition &solution_d
             ) {
                 
                 Configuration internal_config; 
@@ -137,11 +142,17 @@ namespace GPU_HeiPa {
 
                 if(level == 1) {
                     ScopedTimer _t("recursive_bisection", "recursive_bisection", "propagate_solution");
-                    HostVertex mapping_h("mh", mapping.extent(0));
-                    Kokkos::deep_copy(mapping_h, mapping);
+                    // HostVertex mapping_h("mh", mapping.extent(0));
+                    // Kokkos::deep_copy(mapping_h, mapping);
+                    // Kokkos::fence() ;
+
+                    UnmanagedDevicePartition device_part = UnmanagedDevicePartition((partition_t *) get_chunk_front(mem_stack, sizeof(partition_t) * in_g.n), in_g.n);
+                    
+                    Kokkos::deep_copy(device_part, in_partition);
                     Kokkos::fence() ;
 
-                    propagate_solution(in_partition, in_g, mapping_h, pos);
+                    propagate_solution(device_part, in_g, mapping, pos, solution_d);
+                    pop_front(mem_stack);
                     return;
 
                 } else{
@@ -163,16 +174,16 @@ namespace GPU_HeiPa {
                     );
                     
                     std::vector<int> pos_left_graph, pos_right_graph;
-                    pos_left_graph = pos_right_graph = pos;  // copy wont hurt because this is super small (like 10 entries)
+                    pos_left_graph = pos_right_graph = pos;  
                     pos_left_graph.push_back(0);
                     pos_right_graph.push_back(1);
 
                     _t.stop();
 
-                    recursive_bisection(left_graph_host, level-1, pos_left_graph, left_mapping, mem_stack, mem_stack_tmp); // go down to the next lower level
+                    recursive_bisection(left_graph_host, level-1, pos_left_graph, left_mapping, mem_stack, mem_stack_tmp, solution_d); // go down to the next lower level
                     pop_front(mem_stack_tmp);
                     
-                    recursive_bisection(right_graph_host, level-1, pos_right_graph, right_mapping, mem_stack, mem_stack_tmp);
+                    recursive_bisection(right_graph_host, level-1, pos_right_graph, right_mapping, mem_stack, mem_stack_tmp, solution_d);
                     pop_front(mem_stack_tmp);
 
                     return;
@@ -187,29 +198,31 @@ namespace GPU_HeiPa {
              * partition on the input graph
              *
              */
-            void propagate_solution(const HostPartition& local_partition, const HostGraph& local_graph,
-                        const HostVertex& mapping, const std::vector<int>& pos) {
+            void propagate_solution(
+                        //const HostPartition& local_partition,
+                        const UnmanagedDevicePartition &local_partition,
+                        const HostGraph& local_graph,
+                        const UnmanagedDeviceVertex &mapping,
+                        const std::vector<int>& pos,
+                        UnmanagedDevicePartition &solution
+                    ) {
                             
-                            // build global partition id from pos bits
-                            // small enough for cpu
                             partition_t global_partition_id = 0;
                             for (size_t i = 0; i < pos.size(); ++i) {
                                 //global_partition_id += pos[i] * pow(2, pos.size() - i);
                                 global_partition_id += pos[i] * ( 1 << (pos.size() - i) );
                             }
-
-                            //! this can happen on the GPU
-                            for (vertex_t u = 0; u < local_graph.n; ++u) {
-                                // if(u >= msize)
-                                //     std::cout << "something wrong " <<std::endl;
-
-                               // std::cout << u <<std::endl;
-                                vertex_t original_id = mapping(u);
-
-                                partition_t full_id = global_partition_id + local_partition(u);
                             
-                                solution(original_id) = full_id;
-                            }
+                            Kokkos::parallel_for("write final partition", local_graph.n,
+                                KOKKOS_LAMBDA( vertex_t u) {
+                                    vertex_t original_id = mapping(u);
+
+                                    partition_t full_id = global_partition_id + local_partition(u); 
+                            
+                                    solution(original_id) = full_id; 
+                                }
+                            );
+
                             return;
             }
 
