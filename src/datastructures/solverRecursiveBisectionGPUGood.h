@@ -85,7 +85,6 @@ namespace GPU_HeiPa {
                 int level = (int)std::log2(config.k);
 
                 UnmanagedDeviceVertex mapping = UnmanagedDeviceVertex((vertex_t *) get_chunk_front(mem_stack_tmp, sizeof(vertex_t) * host_g.n), host_g.n);
-                
                 Kokkos::parallel_for("fill mapping", host_g.n,
                     KOKKOS_LAMBDA(vertex_t u) {
                         mapping(u) = u;
@@ -94,12 +93,16 @@ namespace GPU_HeiPa {
                 
                 global_g_w = host_g.g_weight;
 
-                //TODO: need a gpu copy of this too
                 HostPartition solution = HostPartition(Kokkos::view_alloc(Kokkos::WithoutInitializing, "solution"), host_g.n);
                 UnmanagedDevicePartition solution_device = UnmanagedDevicePartition((partition_t *) get_chunk_front(mem_stack, sizeof(partition_t) * host_g.n), host_g.n);
+
                 
+                //TODO: use device graph instead of host graph
+                //TODO: Graph device_g = from_hostGraph(host_g, );
 
                 recursive_bisection(host_g, level, pos, mapping, mem_stack, mem_stack_tmp, solution_device);
+
+                //TODO: free device_g
 
                 Kokkos::deep_copy(solution, solution_device);
                 Kokkos::fence();
@@ -115,7 +118,10 @@ namespace GPU_HeiPa {
             }
 
 
-            void recursive_bisection(HostGraph &in_g, int level, std::vector<int> &pos, 
+            void recursive_bisection(
+                HostGraph &in_g, //TODO: Graph &in_g
+                int level, 
+                std::vector<int> &pos, 
                 UnmanagedDeviceVertex &mapping,
                 KokkosMemoryStack &mem_stack,
                 KokkosMemoryStack &mem_stack_tmp,
@@ -136,18 +142,31 @@ namespace GPU_HeiPa {
                 );
                 internal_config.verbose_level = 0;
 
+
+                //TODO: allocate device partition:
+                //TODO: UnmanagedDevicePartition in_partition = UnmanagedDevicePartition((partition_t *) get_chunk_front(mem_stack, sizeof(partition_t) * in_g.n), in_g.n);                    
+                //? which memstack?
+
+                //TODO: change to solver with device graph:
+                /*
+                    Solver(&in_g,
+                           2,
+                          adapt_imbalance,
+                           0,
+                          true,
+                        UnmanagedDevicePartition &dev_partition,
+                         mem_stack)
+                
+                */
                 HostPartition in_partition = Solver(internal_config).solve(in_g);
                 Kokkos::fence();
 
 
                 if(level == 1) {
                     ScopedTimer _t("recursive_bisection", "recursive_bisection", "propagate_solution");
-                    // HostVertex mapping_h("mh", mapping.extent(0));
-                    // Kokkos::deep_copy(mapping_h, mapping);
-                    // Kokkos::fence() ;
 
-                    UnmanagedDevicePartition device_part = UnmanagedDevicePartition((partition_t *) get_chunk_front(mem_stack, sizeof(partition_t) * in_g.n), in_g.n);
-                    
+                    //TODO remove
+                    UnmanagedDevicePartition device_part = UnmanagedDevicePartition((partition_t *) get_chunk_front(mem_stack, sizeof(partition_t) * in_g.n), in_g.n);                    
                     Kokkos::deep_copy(device_part, in_partition);
                     Kokkos::fence() ;
 
@@ -158,6 +177,8 @@ namespace GPU_HeiPa {
                 } else{
                     ScopedTimer _t("recursive_bisection", "recursive_bisection", "create_subgraph_like_Henning");
                     
+                    //TODO: change to device graphs
+                    //TODO: Graph left_graph, right_graph;
                     HostGraph left_graph_host, right_graph_host;
 
                     
@@ -229,7 +250,13 @@ namespace GPU_HeiPa {
 
         
            
-            void create_subgraph_GPU_wrapper(HostPartition &input_partition, HostGraph &input_graph,
+            void create_subgraph_GPU_wrapper(
+                                
+                                //TODO: UnmanagedDevicePartition &input_partition,
+                                //TODO: Graph &input_graph,
+                                HostPartition &input_partition, HostGraph &input_graph,
+                                
+                                //TODO: Graph &left_graph, &right_graph.
                                  HostGraph &left_graph_host, HostGraph &right_graph_host,
                                  UnmanagedDeviceVertex &left_mapping,
                                  UnmanagedDeviceVertex &right_mapping,
@@ -239,10 +266,11 @@ namespace GPU_HeiPa {
             ) {
                 // convert data from CPU to GPU
                 
+                //TODO: remove all of this
                 UnmanagedDevicePartition in_partition_device = UnmanagedDevicePartition((partition_t *) get_chunk_back(mem_stack, sizeof(partition_t) * input_graph.n), input_graph.n);
                 Kokkos::fence();
 
-                Kokkos::deep_copy(in_partition_device, input_partition) ; //? legal conversion ?
+                Kokkos::deep_copy(in_partition_device, input_partition) ; 
                 Kokkos::fence();
 
                 f64 upload;
@@ -275,6 +303,7 @@ namespace GPU_HeiPa {
 
                 // pop_front(mem_stack);
 
+                //TODO: remove all of this
                 free_graph(in_graph_device, mem_stack);
 
                 pop_back(mem_stack); //Remove the in_partition_device
@@ -298,8 +327,8 @@ namespace GPU_HeiPa {
                 UnmanagedDeviceVertex &curr_mapping, 
                 UnmanagedDeviceVertex &left_mapping_device,
                 UnmanagedDeviceVertex &right_mapping_device,
-                HostGraph &left_graph_host,
-                HostGraph &right_graph_host
+                HostGraph &left_graph_host, //TODO: Graph &left_graph_device,
+                HostGraph &right_graph_host //TODO: Graph &right_graph_device
             ) {
 
                 UnmanagedDeviceVertex rename = UnmanagedDeviceVertex((vertex_t *) get_chunk_back(mem_stack, sizeof(vertex_t) * input_graph.n), input_graph.n);
@@ -359,6 +388,7 @@ namespace GPU_HeiPa {
                 right_mapping_device = DeviceVertex( (vertex_t *) get_chunk_front(mem_stack_tmp, sizeof(vertex_t) * res_num_vertices.partial_1s ), res_num_vertices.partial_1s ) ;
                 left_mapping_device = DeviceVertex( (vertex_t *) get_chunk_front(mem_stack_tmp, sizeof(vertex_t) * res_num_vertices.partial_0s ), res_num_vertices.partial_0s ) ;
                 
+                //TODO: use reference from input
                 Graph right_graph = make_graph( res_num_vertices.partial_1s , edges_and_weights.num_edges_1s , edges_and_weights.weight_1s, mem_stack );
                 Graph left_graph = make_graph( res_num_vertices.partial_0s , edges_and_weights.num_edges_0s , edges_and_weights.weight_0s  , mem_stack );
                 
@@ -442,6 +472,7 @@ namespace GPU_HeiPa {
                 //Kokkos::deep_copy(left_mapping_host, left_mapping_device);
                 //Kokkos::deep_copy(right_mapping_host, right_mapping_device);
 
+                //TODO: remove
                 left_graph_host = to_host_graph(left_graph);
                 right_graph_host = to_host_graph(right_graph);
 
@@ -451,6 +482,7 @@ namespace GPU_HeiPa {
                 // pop_front(mem_stack); // rm right_mapping_device
                 // pop_front(mem_stack); // rm left_mapping_device
 
+                //TODO: do somewhere else
                 free_graph(left_graph, mem_stack);
                 free_graph(right_graph, mem_stack);
 
