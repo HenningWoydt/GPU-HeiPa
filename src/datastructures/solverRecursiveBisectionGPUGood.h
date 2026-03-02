@@ -81,8 +81,8 @@ inline void print_host_vertex(const HostVertex& v, const std::string& name) {
 
                 //TODO: configure this size
                 KokkosMemoryStack mem_stack = initialize_kokkos_memory_stack(
-                30 * 10 * 3* (size_t) host_g.n * sizeof(vertex_t) + // 20% buffer for vertices
-                10 * 10 * 3* (size_t) host_g.m * sizeof(vertex_t), // Graph + coarsening overhead
+                30  * 3* (size_t) host_g.n * sizeof(vertex_t) + // 20% buffer for vertices
+                10  * 3* (size_t) host_g.m * sizeof(vertex_t), // Graph + coarsening overhead
                 "Jacobs internal stack"
                 );
 
@@ -146,24 +146,21 @@ inline void print_host_vertex(const HostVertex& v, const std::string& name) {
                     level
                 );
                 
-                std::cout << "i am here 1" << std::endl;
+                
                 UnmanagedDevicePartition in_partition = UnmanagedDevicePartition((partition_t *) get_chunk_back(mem_stack, sizeof(partition_t) * in_g.n), in_g.n);                    
                 
                 Solver solver( in_g, 2, adapt_imbalance, 0, true, in_partition, mem_stack);
               
-                std::cout << "i am here  2" << std::endl;
                 Kokkos::fence();
                 
                 if(level == 1) {
                     ScopedTimer _t("recursive_bisection", "recursive_bisection", "propagate_solution");
-                    std::cout << "i am here 3" << std::endl;
-
+                    
                     propagate_solution(in_partition, in_g.n, mapping, pos, solution_d);
                     Kokkos::fence();
                     pop_back(mem_stack) ; //rm in_partition
                     
                     
-                    std::cout << "i am here 4" << std::endl;
                     return;
 
                 } else{
@@ -174,7 +171,6 @@ inline void print_host_vertex(const HostVertex& v, const std::string& name) {
 
                     UnmanagedDeviceVertex left_mapping ; // the mappings between new and old vertex IDs
                     UnmanagedDeviceVertex right_mapping ; 
-std::cout << "i am here 5" << std::endl;
                     create_subgraph_GPU_vertexParallel(
                         in_g, in_partition,
                         mem_stack, 
@@ -189,11 +185,7 @@ std::cout << "i am here 5" << std::endl;
                     pos_right_graph.push_back(1);
 
                     _t.stop();
-                    cudaDeviceSynchronize();
-                    cudaError_t err = cudaGetLastError();
-                    std::cout << cudaGetErrorString(err) << std::endl;
 
-std::cout << "i am here 6" << std::endl;
                     recursive_bisection(left_graph, level-1, pos_left_graph, left_mapping, mem_stack, solution_d); // go down to the next lower level
                     free_graph(left_graph, mem_stack);
                     pop_front(mem_stack);
@@ -396,6 +388,23 @@ std::cout << "i am here 6" << std::endl;
 
                     }
                 );
+                Kokkos::fence();
+
+                // fill the u array
+                Kokkos::parallel_for("fill_edges_u", left_graph.n, KOKKOS_LAMBDA(const vertex_t u) {
+                    u32 begin = left_graph.neighborhood(u);
+                    u32 end = left_graph.neighborhood(u + 1);
+                    for (u32 i = begin; i < end; ++i) {
+                        left_graph.edges_u(i) = u;
+                    }
+                });
+                Kokkos::parallel_for("fill_edges_u", right_graph.n, KOKKOS_LAMBDA(const vertex_t u) {
+                    u32 begin = right_graph.neighborhood(u);
+                    u32 end = right_graph.neighborhood(u + 1);
+                    for (u32 i = begin; i < end; ++i) {
+                        right_graph.edges_u(i) = u;
+                    }
+                });
                 Kokkos::fence();
 
                 pop_back(mem_stack); //remove rename
