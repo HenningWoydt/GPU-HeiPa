@@ -92,6 +92,9 @@ int main(int argc, char *argv[]) {
         ScopedTimer _t("io", "main", "parse_args");
         config = Configuration(argc, argv);
     }
+    
+    // config.verbose_level = 2;
+    
     verbose_level = config.verbose_level;
     //
     {
@@ -132,6 +135,7 @@ int main(int argc, char *argv[]) {
     }
 
     if (verbose_level >= 1) {
+        //! das hier macht gefühlt nix
         Profiler::instance().print_table(std::cout);
     }
 

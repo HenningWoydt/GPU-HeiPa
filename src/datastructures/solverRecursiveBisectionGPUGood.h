@@ -108,6 +108,7 @@ inline void print_host_vertex(const HostVertex& v, const std::string& name) {
                 f64 speed;
                 Graph device_g = from_HostGraph(host_g, mem_stack, speed );
                 Kokkos::fence();
+
                 recursive_bisection(device_g, level, pos, mapping, mem_stack, solution_device);
 
                 Kokkos::deep_copy(solution, solution_device);
@@ -115,14 +116,10 @@ inline void print_host_vertex(const HostVertex& v, const std::string& name) {
 
 
                 free_graph(device_g, mem_stack);
-                
                 pop_front(mem_stack); // rm solution_device
-                
                 pop_front(mem_stack); // rm mapping
-                
 
                 destroy(mem_stack);
-                // destroy(mem_stack_tmp);
 
                 return solution;
             }
@@ -149,7 +146,7 @@ inline void print_host_vertex(const HostVertex& v, const std::string& name) {
                 
                 UnmanagedDevicePartition in_partition = UnmanagedDevicePartition((partition_t *) get_chunk_back(mem_stack, sizeof(partition_t) * in_g.n), in_g.n);                    
                 
-                Solver solver( in_g, 2, adapt_imbalance, 0, true, in_partition, mem_stack);
+                Solver solver( in_g, 2, adapt_imbalance, 0, false, in_partition, mem_stack);
               
                 Kokkos::fence();
                 
@@ -160,11 +157,10 @@ inline void print_host_vertex(const HostVertex& v, const std::string& name) {
                     Kokkos::fence();
                     pop_back(mem_stack) ; //rm in_partition
                     
-                    
                     return;
 
                 } else{
-                    ScopedTimer _t("recursive_bisection", "recursive_bisection", "create_subgraph_like_Henning");
+                    ScopedTimer _t("recursive_bisection", "recursive_bisection", "create_subgraphs");
                     
                     
                     Graph left_graph, right_graph;

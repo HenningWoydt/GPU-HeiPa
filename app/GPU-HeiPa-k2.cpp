@@ -57,7 +57,6 @@ int main(int argc, char *argv[]) {
             ScopedTimer _t("io", "main", "parse_args");
             std::vector<std::pair<std::string, std::string> > input = {
                 {"--graph", "./res/graphs/144.graph"},    
-                //{"--graph", "./res/small_test"},
                 {"--mapping", "./res/mapping144.txt"},  
                 {"--k", "4"},
                 {"--imbalance", "0.03"},
@@ -101,50 +100,7 @@ int main(int argc, char *argv[]) {
     //
     {
         
-        /*
-        
-        HostGraph host_g;
-        allocate_memory(host_g, 8, 24, 8);
 
-        host_g.neighborhood(0) = 0;
-        host_g.neighborhood(1) = 3;
-        host_g.neighborhood(2) = 6;
-        host_g.neighborhood(3) = 9;
-        host_g.neighborhood(4) = 12;
-        host_g.neighborhood(5)= 15;
-        host_g.neighborhood(6)= 19;
-        host_g.neighborhood(7)= 21;
-        host_g.neighborhood(8) =  24;
-        
-        
-        host_g.edges_v(0) =  1;
-        host_g.edges_v(1) =  2;
-        host_g.edges_v(2) =  3;
-        host_g.edges_v(3) =  0;
-        host_g.edges_v(4) =  2;
-        host_g.edges_v(5) =  4;
-        host_g.edges_v(6) =  0;
-        host_g.edges_v(7) =  1;
-        host_g.edges_v(8) =  3;
-        host_g.edges_v(9) =  0;
-        host_g.edges_v(10) = 2  ;
-        host_g.edges_v(11) = 5  ;
-        host_g.edges_v(12) = 1  ;
-        host_g.edges_v(13) = 5  ;
-        host_g.edges_v(14) = 7  ;
-        host_g.edges_v(15) = 3  ;
-        host_g.edges_v(16) = 4  ;
-        host_g.edges_v(17) = 6  ;
-        host_g.edges_v(18) = 7  ;
-        host_g.edges_v(19) = 5  ;
-        host_g.edges_v(20) = 7  ;
-        host_g.edges_v(21) = 4  ;
-        host_g.edges_v(22) = 5  ;
-        host_g.edges_v(23) = 6  ;
-
-        for(int i= 0; i < 24 ; ++i)
-            host_g.edges_w(i) = 1;
-        */
         HostGraph host_g = from_file(config.graph_in);
 
         f64 io_ms = get_milli_seconds(sp, get_time_point());
@@ -155,11 +111,12 @@ int main(int argc, char *argv[]) {
 
 
         auto sp_solver = get_time_point();
-        
+        // config.verbose_level = 2;
         //! Only change this line to use the new solver!
-        // HostPartition host_partition = Solver(config).solve(host_g);
-        // HostPartition host_partition = SolverRecursiveBisectionGPU(config).solve(host_g);
-        HostPartition host_partition = SolverRecursiveBisectionGPUGood(config).solve(host_g);
+         //HostPartition host_partition = Solver(config).solve(host_g);
+         // HostPartition host_partition = SolverRecursiveBisectionGood(config).solve(host_g);
+         //HostPartition host_partition = SolverRecursiveBisectionGPU(config).solve(host_g);
+         HostPartition host_partition = SolverRecursiveBisectionGPUGood(config).solve(host_g);
 
         if (verbose_level >= 1) {
             std::cout << "Solved in         : " << get_milli_seconds(sp_solver, get_time_point()) << std::endl;
