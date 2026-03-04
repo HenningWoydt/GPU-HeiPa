@@ -29,10 +29,8 @@
 #include <Kokkos_Core.hpp>
 
 #include "../src/datastructures/solver.h"
-#include "../src/datastructures/solverRecursiveBisection.h"
-#include "../src/datastructures/solverRecursiveBisectionGood.h"
-#include "../src/datastructures/solverRecursiveBisectionGPU.h"
-#include "../src/datastructures/solverRecursiveBisectionGPUGood.h"
+#include "../src/datastructures/solverRecursiveBisectionHost.h"
+#include "../src/datastructures/solverRecursiveBisectionDevice.h"
 #include "../src/utility/configuration.h"
 
 using namespace GPU_HeiPa;
@@ -111,12 +109,8 @@ int main(int argc, char *argv[]) {
 
 
         auto sp_solver = get_time_point();
-        // config.verbose_level = 2;
-        //! Only change this line to use the new solver!
-         //HostPartition host_partition = Solver(config).solve(host_g);
-         // HostPartition host_partition = SolverRecursiveBisectionGood(config).solve(host_g);
-         //HostPartition host_partition = SolverRecursiveBisectionGPU(config).solve(host_g);
-         HostPartition host_partition = SolverRecursiveBisectionGPUGood(config).solve(host_g);
+        // HostPartition host_partition = SolverRecursiveBisectionDevice(config).solve(host_g);
+        HostPartition host_partition = SolverRecursiveBisectionHost(config).solve(host_g);
 
         if (verbose_level >= 1) {
             std::cout << "Solved in         : " << get_milli_seconds(sp_solver, get_time_point()) << std::endl;

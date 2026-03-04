@@ -1,5 +1,5 @@
-#ifndef GPU_HEIPA_SOLVER_REC_BISEC_GPU_GOOD_H
-#define GPU_HEIPA_SOLVER_REC_BISEC_GPU_GOOD_H
+#ifndef GPU_HEIPA_SOLVER_REC_BISEC_DEVICE_H
+#define GPU_HEIPA_SOLVER_REC_BISEC_DEVICE_H
 
 #include <vector>
 
@@ -21,35 +21,13 @@
 
 namespace GPU_HeiPa {
 
-    class SolverRecursiveBisectionGPUGood {
-
-
-
-inline void print_host_graph(const HostGraph& g, const std::string& name) {
-    std::cout << "Graph: " << name << "\n";
-    std::cout << "n = " << g.n << ", m = " << g.m << ", g_weight = " << g.g_weight << "\n";
-    std::cout << "weights: ";
-    for (vertex_t u = 0; u < std::min((vertex_t)30, g.n); ++u) std::cout << g.weights(u) << " ";
-    std::cout << "\nneighborhood: ";
-    for (vertex_t u = 0; u < std::min((vertex_t)30, (vertex_t)(g.n + 1)); ++u) std::cout << g.neighborhood(u) << " ";
-    std::cout << "\nedges_v: ";
-    for (vertex_t e = 0; e < std::min((vertex_t)30, g.m); ++e) std::cout << g.edges_v(e) << " ";
-    std::cout << "\nedges_w: ";
-    for (vertex_t e = 0; e < std::min((vertex_t)30, g.m); ++e) std::cout << g.edges_w(e) << " ";
-    std::cout << "\n";
-}
-
-inline void print_host_vertex(const HostVertex& v, const std::string& name) {
-    std::cout << "Mapping: " << name << "\n";
-    for (vertex_t i = 0; i < std::min((vertex_t)30, (vertex_t)v.extent(0)); ++i) std::cout << v(i) << " ";
-    std::cout << "\n";
-}
+    class SolverRecursiveBisectionDevice {
 
         public:
             Configuration config;
             weight_t global_g_w;
 
-            explicit SolverRecursiveBisectionGPUGood(Configuration t_config) : config(std::move(t_config)) {
+            explicit SolverRecursiveBisectionDevice(Configuration t_config) : config(std::move(t_config)) {
                 global_g_w = 0;
         }
     
@@ -79,7 +57,6 @@ inline void print_host_vertex(const HostVertex& v, const std::string& name) {
                 }
 
 
-                //TODO: configure this size
                 KokkosMemoryStack mem_stack = initialize_kokkos_memory_stack(
                 30  * (size_t) host_g.n * sizeof(vertex_t) + // 20% buffer for vertices
                 10  * (size_t) host_g.m * sizeof(vertex_t), // Graph + coarsening overhead
@@ -88,7 +65,7 @@ inline void print_host_vertex(const HostVertex& v, const std::string& name) {
 
                 Kokkos::fence();
 
-                std::vector<int> pos = {};
+                std::vector<u32> pos = {};
                 int level = (int)std::log2(config.k);
 
                 UnmanagedDeviceVertex mapping = UnmanagedDeviceVertex((vertex_t *) get_chunk_front(mem_stack, sizeof(vertex_t) * host_g.n), host_g.n);
@@ -128,7 +105,7 @@ inline void print_host_vertex(const HostVertex& v, const std::string& name) {
             void recursive_bisection(
                 Graph &in_g,
                 int level, 
-                std::vector<int> &pos, 
+                std::vector<u32> &pos, 
                 UnmanagedDeviceVertex &mapping,
                 KokkosMemoryStack &mem_stack,
                 UnmanagedDevicePartition &solution_d
@@ -139,8 +116,8 @@ inline void print_host_vertex(const HostVertex& v, const std::string& name) {
                     global_g_w,
                     config.k,
                     in_g.g_weight,
-                    pow(2, level),
-                    level
+                    ((1U) << level),
+                    static_cast<u64>(level)
                 );
                 
                 
@@ -175,7 +152,7 @@ inline void print_host_vertex(const HostVertex& v, const std::string& name) {
                     );
 
                     
-                    std::vector<int> pos_left_graph, pos_right_graph;
+                    std::vector<u32> pos_left_graph, pos_right_graph;
                     pos_left_graph = pos_right_graph = pos;  
                     pos_left_graph.push_back(0);
                     pos_right_graph.push_back(1);
@@ -205,17 +182,15 @@ inline void print_host_vertex(const HostVertex& v, const std::string& name) {
              *
              */
             void propagate_solution(
-                        //const HostPartition& local_partition,
                         const UnmanagedDevicePartition &local_partition,
                         const u32 n,
                         const UnmanagedDeviceVertex &mapping,
-                        const std::vector<int>& pos,
+                        const std::vector<u32>& pos,
                         UnmanagedDevicePartition &solution
                     ) {
                             
                             partition_t global_partition_id = 0;
                             for (size_t i = 0; i < pos.size(); ++i) {
-                                //global_partition_id += pos[i] * pow(2, pos.size() - i);
                                 global_partition_id += pos[i] * ( 1 << (pos.size() - i) );
                             }
                             
@@ -235,12 +210,6 @@ inline void print_host_vertex(const HostVertex& v, const std::string& name) {
 
         
            
-            /*
-            
-            Its not quite clear if parallelizing over vertices or over the edges is better here.
-            So i will try it out both versions and empirically find out which is better!
-            
-            */
             void create_subgraph_GPU_vertexParallel(
                 Graph &input_graph,
                 UnmanagedDevicePartition &in_partition,
@@ -284,7 +253,7 @@ inline void print_host_vertex(const HostVertex& v, const std::string& name) {
                         partition_t partition = in_partition(u);
                         vertex_t cnt = 0;
 
-                        for(int i = input_graph.neighborhood(u); i < input_graph.neighborhood(u+1); ++i) {
+                        for(u32 i = input_graph.neighborhood(u); i < input_graph.neighborhood(u+1); ++i) {
                             const vertex_t v = input_graph.edges_v(i);
                             if(in_partition(v) == partition) ++cnt;
                         }                        
@@ -404,7 +373,6 @@ inline void print_host_vertex(const HostVertex& v, const std::string& name) {
                 Kokkos::fence();
 
                 pop_back(mem_stack); //remove rename
-                
 
                 return;
             }
