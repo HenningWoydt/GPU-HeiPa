@@ -81,8 +81,8 @@ inline void print_host_vertex(const HostVertex& v, const std::string& name) {
 
                 //TODO: configure this size
                 KokkosMemoryStack mem_stack = initialize_kokkos_memory_stack(
-                30  * 3* (size_t) host_g.n * sizeof(vertex_t) + // 20% buffer for vertices
-                10  * 3* (size_t) host_g.m * sizeof(vertex_t), // Graph + coarsening overhead
+                30  * (size_t) host_g.n * sizeof(vertex_t) + // 20% buffer for vertices
+                10  * (size_t) host_g.m * sizeof(vertex_t), // Graph + coarsening overhead
                 "Jacobs internal stack"
                 );
 
