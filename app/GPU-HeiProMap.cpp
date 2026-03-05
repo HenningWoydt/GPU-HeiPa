@@ -46,14 +46,18 @@ int main(int argc, char *argv[]) {
 
     ProMapConfiguration config;
     if (argc == 1) {
-        // ProMapConfiguration config;
-        // config.print_help_message();
-        // return 0;
+        config.print_help_message();
+        return 0;
         //
         {
             ScopedTimer _t("io", "main", "parse_args");
             std::vector<std::pair<std::string, std::string> > input = {
-                {"--graph", "../../ProMapRepo/data/mapping/rgg23.graph"}, // comm cost 9543754, 1098 ms
+                // {"--graph", "../../ProMapRepo/data/mapping/rgg23.graph"}, // comm cost 9543754, 1098 ms
+                // {"--graph", "../../ProMapRepo/data/mapping/shipsec5.mtx.graph"},     // 1.778114 s
+                // {"--graph", "../../ProMapRepo/data/mapping/2cubes_sphere.mtx.graph"},
+                // {"--graph", "../../ProMapRepo/data/mapping/bmwcra_1.mtx.graph"}, // 5.71 s
+                // {"--graph", "../../ProMapRepo/data/mapping/europe_osm.graph"},
+                {"--graph", "../../ProMapRepo/data/mapping/cop20k_A.mtx.graph"},
                 {"--hierarchy", "4:8:6"},
                 {"--distance", "1:10:100"},
                 {"--imbalance", "0.03"},
@@ -95,6 +99,8 @@ int main(int argc, char *argv[]) {
         config = ProMapConfiguration(argc, argv);
     }
     verbose_level = config.verbose_level;
+
+    auto t_before_dtors = get_time_point();
     //
     {
         HostGraph host_g = from_file(config.graph_in);
@@ -136,8 +142,12 @@ int main(int argc, char *argv[]) {
                 std::cout << "Write partition in: " << io_ms << std::endl;
             }
         }
+
+        t_before_dtors = get_time_point();
     }
-    Kokkos::fence();
+    if (verbose_level >= 1) {
+        std::cout << "Destructed in     : " << get_milli_seconds(t_before_dtors, get_time_point()) << std::endl;
+    }
 
     //
     {
@@ -145,12 +155,12 @@ int main(int argc, char *argv[]) {
         Kokkos::finalize();
     }
 
-    if (verbose_level >= 2) {
+    if (verbose_level >= 1) {
         Profiler::instance().print_table(std::cout);
     }
 
     auto ep = get_time_point();
-    if (verbose_level >= 2) {
+    if (verbose_level >= 1) {
         std::cout << "Total Time spent in GPU-HeiProMap.cpp: " << get_seconds(sp, ep) << " seconds." << std::endl;
     }
 

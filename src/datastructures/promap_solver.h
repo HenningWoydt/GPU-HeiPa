@@ -152,7 +152,7 @@ namespace GPU_HeiPa {
             HostPartition host_partition;
             //
             {
-                ScopedTimer _t("misc", "Solver", "download_partition");
+                ScopedTimer _t("up/download", "Solver", "download_partition");
                 host_partition = HostPartition(Kokkos::view_alloc(Kokkos::WithoutInitializing, "host_partition"), graphs.back().n);
                 Kokkos::deep_copy(host_partition, partition.map);
             }

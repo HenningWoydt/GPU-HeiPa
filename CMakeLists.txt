@@ -15,9 +15,6 @@ set(CMAKE_CXX_EXTENSIONS OFF)
 set(CMAKE_POSITION_INDEPENDENT_CODE ON)
 set(CMAKE_EXPORT_COMPILE_COMMANDS ON)
 
-option(ENABLE_PROFILER "Enable profiler instrumentation" ON)
-
-
 # --- KaHIP library ---
 set(KaHIP_ROOT "${CMAKE_CURRENT_SOURCE_DIR}/extern/local/kahip")
 find_library(KAHIP_LIBRARY
