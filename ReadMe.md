@@ -22,7 +22,6 @@ GPU-HeiPa is a high-performance graph partitioning and process mapping framework
 - CMake 3.16+
 - C++20 compatible compiler (GCC 10+, Clang 11+)
 - CUDA Toolkit 11.0+ (for GPU backend)
-- OpenMP (for CPU backend)
 
 ### Quick Build
 
@@ -30,10 +29,7 @@ The project includes an automated build script that handles all dependencies:
 
 ```bash
 # Build with CUDA backend
-./build.sh Cuda
-
-# Build with OpenMP backend
-./build.sh OpenMP
+./build.sh
 ```
 
 The script automatically:
@@ -105,11 +101,11 @@ Map processes to a hierarchical architecture with communication cost optimizatio
 Automatically built by `build.sh`:
 - [Kokkos 5.0.0](https://github.com/kokkos/kokkos) - Performance portability
 - [Kokkos-Kernels 5.0.0](https://github.com/kokkos/kokkos-kernels) - Linear algebra kernels
-- [KaHIP](https://github.com/KaHIP/KaHIP) - Karlsruhe High Quality Partitioning
-- [METIS](http://glaros.dtc.umn.edu/gkhome/metis/metis/overview) - Graph partitioning
-- [GKlib](https://github.com/KarypisLab/GKlib) - Utility library
 
 ## License
 
 This project is licensed under the MIT License - see the [LICENSE](LICENSE) file for details.
+
+It includes METIS, which is licensed under the Apache License 2.0
+Copyright (c) Regents of the University of Minnesota.
 
