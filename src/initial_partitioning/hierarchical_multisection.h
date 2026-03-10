@@ -63,6 +63,7 @@ namespace GPU_HeiPa {
                                               u64 seed,
                                               bool use_ultra,
                                               const std::vector<partition_t> &index_vec, // as in your host code
+                                              const std::vector<partition_t> &k_rem,
                                               std::vector<partition_t> &identifier, // path of ids
                                               UnmanagedDevicePartition &global_partition, // size global_n
                                               KokkosMemoryStack &mem_stack) {
@@ -73,9 +74,7 @@ namespace GPU_HeiPa {
         // Allocate temp partition for *this* node
         UnmanagedDevicePartition tmp_part = UnmanagedDevicePartition((partition_t *) get_chunk_front(mem_stack, sizeof(partition_t) * device_g.n), device_g.n);
 
-        // Compute adaptive imbalance if you want (you used determine_adaptive_imbalance in host version)
-        // Here: just use global_imbalance directly (plug your adaptive formula if desired).
-        const f64 imb = global_imbalance;
+        const f64 imb = determine_adaptive_imbalance(global_imbalance, global_g_weight, global_k, device_g.g_weight, k_rem[l - 1 - identifier.size()], l - identifier.size());
 
         t.stop();
 
@@ -216,6 +215,7 @@ namespace GPU_HeiPa {
                 seed,
                 use_ultra,
                 index_vec,
+                k_rem,
                 identifier,
                 global_partition,
                 mem_stack
@@ -250,10 +250,19 @@ namespace GPU_HeiPa {
         Kokkos::parallel_for("InitIdMap", g.n, KOKKOS_LAMBDA(const vertex_t u) { dev_n_to_o(u) = u; });
         Kokkos::fence();
 
-        // index_vec (same as your host version idea)
-        const partition_t l = (partition_t) hierarchy.size();
+        partition_t l = (partition_t) hierarchy.size();
+
+        // index_vec as in your iterative version
         std::vector<partition_t> index_vec = {1};
-        for (partition_t i = 0; i < l - 1; ++i) index_vec.push_back(index_vec[i] * hierarchy[i]);
+        for (partition_t i = 0; i < l - 1; ++i) { index_vec.push_back(index_vec[i] * hierarchy[i]); }
+
+        // k_rem as in your iterative version
+        std::vector<partition_t> k_rem(l);
+        u32 p = 1;
+        for (partition_t i = 0; i < l; ++i) {
+            k_rem[i] = p * hierarchy[i];
+            p *= hierarchy[i];
+        }
 
         std::vector<partition_t> identifier;
         identifier.reserve(l);
@@ -271,6 +280,7 @@ namespace GPU_HeiPa {
                                       seed,
                                       use_ultra,
                                       index_vec,
+                                      k_rem,
                                       identifier,
                                       dev_global_part,
                                       mem_stack);
