@@ -27,6 +27,7 @@
 #ifndef GPU_HEIPA_METIS_INITIAL_PARTITIONING_H
 #define GPU_HEIPA_METIS_INITIAL_PARTITIONING_H
 
+/*
 #include "../../extern/local/METIS/include/metis.h"
 
 #include "../utility/definitions.h"
@@ -126,5 +127,6 @@ namespace GPU_HeiPa {
         Kokkos::fence();
     }
 }
+*/
 
 #endif //GPU_HEIPA_METIS_INITIAL_PARTITIONING_H

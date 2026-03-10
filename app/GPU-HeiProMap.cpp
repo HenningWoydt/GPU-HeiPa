@@ -47,6 +47,7 @@ int main(int argc, char *argv[]) {
     ProMapConfiguration config;
     if (argc == 1) {
         config.print_help_message();
+        Kokkos::finalize();
         return 0;
         //
         {

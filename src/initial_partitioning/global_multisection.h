@@ -36,6 +36,7 @@
 #include "metis_partitioning.h"
 #include "kaffpa_partitioning.h"
 #include "recursive_bisection_kway_partitioner.h"
+#include "kway_partitioner/kway_core.h"
 
 namespace GPU_HeiPa {
     inline f64 determine_adaptive_imbalance(const f64 global_imbalance,
@@ -156,7 +157,8 @@ namespace GPU_HeiPa {
         // partition current graph into k_here blocks (writes temp_partition for vertices 0..g.n-1)
         {
             // kaffpa_partition(g, (int) k, imb, seed, temp_partition, FAST);
-            metis_partition(g, (int) k, imb, seed, temp_partition, METIS_KWAY);
+            // metis_partition(g, (int) k, imb, seed, temp_partition, METIS_KWAY);
+            kway_partition(g, (int) k, imb, seed, temp_partition);
             // recursive_bisec_partition(g, k, imb, seed, temp_partition);
         }
 

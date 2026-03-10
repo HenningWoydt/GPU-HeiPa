@@ -27,6 +27,7 @@
 #ifndef GPU_HEIPA_KAFFPA_INITIAL_PARTITIONING_H
 #define GPU_HEIPA_KAFFPA_INITIAL_PARTITIONING_H
 
+/*
 #include "../../extern/local/kahip/include/kaHIP_interface.h"
 
 #include "../utility/definitions.h"
@@ -117,5 +118,6 @@ namespace GPU_HeiPa {
         Kokkos::fence();
     }
 }
+*/
 
 #endif //GPU_HEIPA_KAFFPA_INITIAL_PARTITIONING_H

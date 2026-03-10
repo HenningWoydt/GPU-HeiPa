@@ -41,6 +41,7 @@
 #include "../coarsening/two_hop_matching.h"
 #include "../refinement/jet_label_propagation.h"
 #include "../initial_partitioning/metis_partitioning.h"
+#include "../initial_partitioning/kway_partitioner/kway_core.h"
 #include "../utility/definitions.h"
 #include "../utility/configuration.h"
 #include "../utility/profiler.h"
@@ -444,7 +445,9 @@ namespace GPU_HeiPa {
             auto p = get_time_point();
 
             // Use METIS for initial partitioning
-            metis_partition(graphs.back(), (int) k, config.imbalance, config.seed, partition, METIS_RECURSIVE);
+            // metis_partition(graphs.back(), (int) k, config.imbalance, config.seed, partition, METIS_RECURSIVE);
+            kway_partition(graphs.back(), (int) k, config.imbalance, config.seed, partition);
+
 
             recalculate_weights(partition, graphs.back());
 
