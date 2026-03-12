@@ -88,7 +88,8 @@ file(GLOB_RECURSE HEADERS CONFIGURE_DEPENDS "src/*.h")
 add_executable(GPU-HeiPa app/GPU-HeiPa.cpp ${SOURCES} ${HEADERS})
 #add_executable(GPU-HeiProMap app/GPU-HeiProMap.cpp ${SOURCES} ${HEADERS})
 #add new executable for new solver (to execute both)
-add_executable(GPU-HeiPa2k app/GPU-HeiPa-k2.cpp ${SOURCES} ${HEADERS})
+#add_executable(GPU-HeiPa2k app/GPU-HeiPa-k2.cpp ${SOURCES} ${HEADERS})
+add_executable(GPU-HeiPa-memetic app/GPU-HeiPa-memetic.cpp ${SOURCES} ${HEADERS})
 
 target_link_libraries(GPU-HeiPa
         PRIVATE
@@ -100,7 +101,7 @@ target_link_libraries(GPU-HeiPa
         OpenMP::OpenMP_CXX
 )
 
-target_link_libraries(GPU-HeiPa2k
+target_link_libraries(GPU-HeiPa-memetic
         PRIVATE
         ${KAHIP_LIBRARY}
         ${METIS_LIBRARY}
@@ -123,7 +124,7 @@ target_link_libraries(GPU-HeiPa2k
 # Disable CUDA lazy loading via linker flags
 if(Kokkos_ENABLE_CUDA)
     target_link_options(GPU-HeiPa PRIVATE "LINKER:--require-defined,cudaDeviceSynchronize")
-    target_link_options(GPU-HeiPa2k PRIVATE "LINKER:--require-defined,cudaDeviceSynchronize")
+    target_link_options(GPU-HeiPa-memetic PRIVATE "LINKER:--require-defined,cudaDeviceSynchronize")
     #target_link_options(GPU-HeiProMap PRIVATE "LINKER:--require-defined,cudaDeviceSynchronize")
 endif()
 
@@ -135,6 +136,6 @@ target_compile_definitions(GPU-HeiPa PRIVATE
         ENABLE_PROFILER=$<IF:$<BOOL:${ENABLE_PROFILER}>,1,0>
 )
 
-target_compile_definitions(GPU-HeiPa2k PRIVATE
+target_compile_definitions(GPU-HeiPa-memetic PRIVATE
         ENABLE_PROFILER=$<IF:$<BOOL:${ENABLE_PROFILER}>,1,0>
 )
