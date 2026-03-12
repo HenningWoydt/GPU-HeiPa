@@ -47,7 +47,9 @@ namespace GPU_HeiPa {
 
     inline BlockConn init_BlockConn(const Graph &g,
                                     const Partition &partition,
-                                    KokkosMemoryStack &mem_stack) {
+                                    KokkosMemoryStack &mem_stack,
+                                    Kokkos::Cuda &exec_space
+                                ) {
         BlockConn bc;
         //
         {
@@ -64,7 +66,9 @@ namespace GPU_HeiPa {
         {
             ScopedTimer _t("refinement", "BlockConnectivity_fs", "set_rows");
 
-            Kokkos::parallel_scan("set_rows", g.n + 1, KOKKOS_LAMBDA(const u32 i, u32 &running, const bool final) {
+            Kokkos::parallel_scan("set_rows", 
+                Kokkos::RangePolicy<Kokkos::Cuda>(exec_space, 0, g.n + 1),
+                KOKKOS_LAMBDA(const u32 i, u32 &running, const bool final) {
                 if (i == 0) {
                     // first slot is 0
                     if (final) bc.row(0) = 0;
@@ -83,6 +87,7 @@ namespace GPU_HeiPa {
 
                 running += c;
             });
+            //TODO: make async in stream
             Kokkos::deep_copy(bc.size, Kokkos::subview(bc.row, g.n));
 
             KOKKOS_PROFILE_FENCE();
@@ -97,6 +102,7 @@ namespace GPU_HeiPa {
             Kokkos::deep_copy(bc.ids, NULL_PART);
             Kokkos::deep_copy(bc.weights, 0);
 
+            //TODO: change
             KOKKOS_PROFILE_FENCE();
         }
 
@@ -104,7 +110,9 @@ namespace GPU_HeiPa {
         {
             ScopedTimer _t("refinement", "BlockConnectivity_fs", "fill");
 
-            Kokkos::parallel_for("fill", g.m, KOKKOS_LAMBDA(const u32 i) {
+            Kokkos::parallel_for("fill", 
+                Kokkos::RangePolicy<Kokkos::Cuda>(exec_space, 0, g.m), 
+                KOKKOS_LAMBDA(const u32 i) {
                 vertex_t u = g.edges_u(i);
                 vertex_t v = g.edges_v(i);
                 weight_t w = g.edges_w(i);

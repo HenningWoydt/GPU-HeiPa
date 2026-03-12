@@ -33,6 +33,8 @@
 #include <KokkosSparse_CrsMatrix.hpp>
 #include <KokkosSparse_StaticCrsGraph.hpp>
 
+
+
 #include "graph.h"
 #include "host_graph.h"
 #include "kokkos_memory_stack.h"
@@ -46,6 +48,9 @@
 #include "../utility/profiler.h"
 #include "../utility/asserts.h"
 #include "../utility/edge_cut.h"
+
+#include <cuda_runtime.h>
+#include "omp.h"
 
 namespace GPU_HeiPa {
     class memeticSolver {
@@ -66,6 +71,9 @@ namespace GPU_HeiPa {
         
 
         std::vector<Partition> partitions = std::vector<Partition>(num_individuals);
+        
+        std::vector<cudaStream_t> cuda_streams = std::vector<cudaStream_t>(num_cpu_threads);
+        std::vector<Kokkos::Cuda> exec_spaces; //! is this the correct space Kokkos::Cuda ?
 
 
         std::vector<weight_t> curr_edge_cut = std::vector<weight_t>(num_individuals, 0);
@@ -316,6 +324,8 @@ namespace GPU_HeiPa {
                     destroy(mem_stacks[i]);
 
                 }
+
+                free_streams();
             }
 
             misc_ms += get_milli_seconds(p, get_time_point());
@@ -366,7 +376,9 @@ namespace GPU_HeiPa {
 
     private:
         void internal_solve(HostGraph &host_g, std::vector<KokkosMemoryStack> &mem_stacks) {
+            init_streams();
             initialize(host_g, mem_stacks[0]);
+
 
             const partition_t c = 8;
             const partition_t max_n = c * k;
@@ -392,7 +404,7 @@ namespace GPU_HeiPa {
             level_infos[level].n = graphs.back().n;
             level_infos[level].m = graphs.back().m;
 #endif
-
+            #pragma omp parallel for num_threads(num_cpu_threads)
             for(size_t i = 0; i < num_individuals ; ++i) {
                 initial_partitioning(mem_stacks[0], i);
             }
@@ -412,15 +424,25 @@ namespace GPU_HeiPa {
                 level -= 1;
 
                 //! do for all individuals in parallel
+                #pragma omp parallel for num_threads(num_cpu_threads)
                 for(size_t i = 0; i < num_individuals ; ++i) {
-                    uncontraction(level, i); 
+                    int tid = omp_get_thread_num();
+                    //std::cout << "hi from  thread " << tid << std::endl;
+                    uncontraction(level, i, tid); 
                 }
 
                 free_after_uncontraction(mem_stacks[0]); //! only one thread
 
                 //! all threads: use tid to pick mem_stack
+                //! this causes problems!
+                //! maybe using different execution spaces will fix my issues...
+                //#pragma omp parallel for num_threads(2)
                 for(size_t i = 0; i < num_individuals ; ++i) {
-                    refinement(level, mem_stacks[i], i); //! mem_stacks[i] should be tid not i
+                    int tid = 0;  // omp_get_thread_num();
+                    //if( tid < 0 || tid > 1)
+                      //  std::cout << "tid value error " << tid << std::endl;
+
+                    refinement(level, mem_stacks[i], i, i); //! mem_stacks[i] should be tid not i
                 }
 
 #if ENABLE_PROFILER
@@ -435,6 +457,26 @@ namespace GPU_HeiPa {
             }
         }
 
+
+        void init_streams() {
+            
+            for (size_t i = 0; i < num_cpu_threads; ++i) {
+                cudaStreamCreateWithFlags(&cuda_streams[i], cudaStreamNonBlocking);
+            }
+
+            for (size_t i = 0; i < num_cpu_threads; ++i) {
+                exec_spaces.emplace_back(Kokkos::Cuda(cuda_streams[i]));
+            }
+
+        }
+
+        void free_streams() {
+        
+            for (size_t i = 0; i < num_cpu_threads; ++i) {
+                cudaStreamDestroy(cuda_streams[i]);
+            }
+ 
+        }
 
         void initialize(HostGraph &host_g, KokkosMemoryStack &mem_stack) {
             auto p = get_time_point();
@@ -520,17 +562,18 @@ namespace GPU_HeiPa {
             assert_state_after_partition(graphs.back(), partitions[individual_id], config.k);
         }
 
-        void refinement(u32 level, KokkosMemoryStack &mem_stack, size_t individual_id) {
+        void refinement(u32 level, KokkosMemoryStack &mem_stack, size_t individual_id, size_t tid) {
             auto p = get_time_point();
 
             //! each thread needs their own values for this call, only graphs is shared (right?)
-            auto pair = jet_refine(graphs.back(), partitions[ individual_id ], k, lmax, use_ultra, level, curr_edge_cut[individual_id], curr_max_block_weight[individual_id], mem_stack);
+            auto pair = jet_refine(graphs.back(), partitions[ individual_id ], k, lmax, use_ultra, level, curr_edge_cut[individual_id], curr_max_block_weight[individual_id], mem_stack, exec_spaces[tid]);
             //! set threadlocal variables
             curr_edge_cut[individual_id] = pair.first;
             curr_max_block_weight[individual_id] = pair.second;
 
             //! fence for correct execution space
-            Kokkos::fence();
+            //Kokkos::fence();
+            exec_spaces[tid].fence();
 
             //! timing vectors too?...
             refinement_ms += get_milli_seconds(p, get_time_point());
@@ -546,10 +589,12 @@ namespace GPU_HeiPa {
             assert_state_after_partition(graphs.back(), partitions[individual_id], config.k);
         }
 
-        void uncontraction(u32 level, size_t individual_id) {
+
+
+        void uncontraction(u32 level, size_t individual_id, int tid) {
             auto p = get_time_point();
 
-            uncontract(partitions[individual_id], mappings.back());
+            uncontract(partitions[individual_id], mappings.back(), exec_spaces[tid]);
 
             //TODO: partition local value
             uncontraction_ms += get_milli_seconds(p, get_time_point());

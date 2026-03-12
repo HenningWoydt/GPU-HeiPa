@@ -179,13 +179,17 @@ namespace GPU_HeiPa {
     inline UnmanagedDeviceVertex jet_lp(LabelPropagation &lp,
                                         const Graph &g,
                                         const BlockConn &bc,
-                                        f64 conn_c) {
+                                        f64 conn_c,
+                                        Kokkos::Cuda &exec_space
+                                    ) {
         vertex_t num_pos = 0;
         //
         {
             ScopedTimer _t("refinement", "jetlp", "best_block");
 
-            Kokkos::parallel_for("best_block", g.n, KOKKOS_LAMBDA(const vertex_t u) {
+            Kokkos::parallel_for("best_block", 
+                Kokkos::RangePolicy<Kokkos::Cuda>(exec_space, 0, g.n),
+                KOKKOS_LAMBDA(const vertex_t u) {
                 if (lp.dest_cache(u) != NULL_PART) {
                     // cached for this vertex
                     lp.dest_part(u) = lp.dest_cache(u);
@@ -239,7 +243,9 @@ namespace GPU_HeiPa {
         {
             ScopedTimer _t("refinement", "jetlp", "best_block_filter");
 
-            Kokkos::parallel_scan("filter potentially viable moves", g.n, KOKKOS_LAMBDA(const u32 u, u32 &update, const bool final) {
+            Kokkos::parallel_scan("filter potentially viable moves", 
+                Kokkos::RangePolicy<Kokkos::Cuda>(exec_space, 0, g.n), 
+                KOKKOS_LAMBDA(const u32 u, u32 &update, const bool final) {
                 if (lp.dest_part(u) != NO_MOVE && lp.lock(u) == 0) {
                     if (final) {
                         lp.vtx1(update) = u;
@@ -251,7 +257,7 @@ namespace GPU_HeiPa {
                     lp.lock(u) = 0;
                 }
             }, lp.scan_host);
-            Kokkos::fence();
+            exec_space.fence();
             num_pos = lp.scan_host();
 
             KOKKOS_PROFILE_FENCE();
@@ -261,7 +267,9 @@ namespace GPU_HeiPa {
         {
             ScopedTimer _t("refinement", "jetlp", "afterburner");
 
-            Kokkos::parallel_for("afterburner heuristic", num_pos, KOKKOS_LAMBDA(const u32 i) {
+            Kokkos::parallel_for("afterburner heuristic",
+                Kokkos::RangePolicy<Kokkos::Cuda>(exec_space, 0, num_pos),
+                KOKKOS_LAMBDA(const u32 i) {
                 vertex_t u = lp.vtx1(i);
                 weight_t u_gain = lp.gain1(u);
                 partition_t old_u_id = lp.partition.map(u);
@@ -291,15 +299,19 @@ namespace GPU_HeiPa {
         {
             ScopedTimer _t("refinement", "jetlp", "afterburner_filter");
 
-            Kokkos::parallel_scan("filter beneficial moves", num_pos, KOKKOS_LAMBDA(const u32 i, u32 &update, const bool final) {
+            Kokkos::parallel_scan("filter beneficial moves", 
+                Kokkos::RangePolicy<Kokkos::Cuda>(exec_space, 0, num_pos),
+                KOKKOS_LAMBDA(const u32 i, u32 &update, const bool final) {
                 vertex_t v = lp.vtx1(i);
                 if (final && lp.lock(v)) {
                     lp.vtx2(update) = v;
                 }
                 update += lp.lock(v);
             }, lp.scan_host);
-            Kokkos::fence();
+            
+            exec_space.fence();
 
+            
             num_pos = lp.scan_host();
 
             KOKKOS_PROFILE_FENCE();
@@ -875,12 +887,17 @@ namespace GPU_HeiPa {
                                                     u32 level,
                                                     weight_t curr_edge_cut,
                                                     weight_t curr_max_weight,
-                                                    KokkosMemoryStack &mem_stack) {
+                                                    KokkosMemoryStack &mem_stack,
+                                                    Kokkos::Cuda &exec_space
+                                                ) {
+                                                    
         LabelPropagation lp = initialize_label_propagation(g.n, g.m, k, lmax, mem_stack);
+        //TODO: this has some copys i should change
 
         // copy partition
         {
             ScopedTimer _t("refinement", "JetLabelPropagation", "copy_partition");
+            //TODO: copy async
             copy_into(lp.partition, partition, g.n);
             KOKKOS_PROFILE_FENCE();
         }
@@ -888,7 +905,8 @@ namespace GPU_HeiPa {
         weight_t best_edge_cut = curr_edge_cut;
         weight_t best_max_weight = curr_max_weight;
 
-        BlockConn bc = init_BlockConn(g, lp.partition, mem_stack);
+        
+        BlockConn bc = init_BlockConn(g, lp.partition, mem_stack, exec_space);
 
         std::vector<f64> filter_ratios;
 
@@ -910,13 +928,15 @@ namespace GPU_HeiPa {
 
                 UnmanagedDeviceVertex moves;
                 if (curr_max_weight <= lmax) {
-                    moves = jet_lp(lp, g, bc, filter_ratio);
+                    //TODO: pass exec_space
+                    moves = jet_lp(lp, g, bc, filter_ratio, exec_space);
                     balance_iteration = 0;
 
                     // if lp found 0 moves, it will find 0 moves in the next iteration so skip
                     if (moves.extent(0) == 0) { break; }
                 } else {
                     if (balance_iteration < N_MAX_WEAK_ITERATIONS) {
+                        //TODO: pass exec_space
                         moves = rebalance_weak(lp, g, bc);
 
                         // if weak reb found 0 moves, it will find 0 moves in the next iteration so skip to stron rebalance
@@ -925,6 +945,7 @@ namespace GPU_HeiPa {
                             continue;
                         }
                     } else {
+                        //TODO: pass exec_space
                         moves = rebalance_strong(lp, g, bc);
 
                         // if strong reb found 0 moves, it will find 0 moves in the next iteration so skip
@@ -932,7 +953,8 @@ namespace GPU_HeiPa {
                     }
                     balance_iteration++;
                 }
-
+                
+                //TODO: pass exec_space
                 perform_moves(lp, g, bc, moves, curr_max_weight, curr_edge_cut);
 
                 if (best_max_weight > lmax && curr_max_weight < best_max_weight) {
@@ -962,8 +984,9 @@ namespace GPU_HeiPa {
                 }
             }
         }
-
+        //TODO: pass exec_space
         free_BlockConn(bc, mem_stack);
+        //TODO: pass exec_space
         free_LabelPropagation(lp, mem_stack);
 
         return std::make_pair(best_edge_cut, best_max_weight);

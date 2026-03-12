@@ -88,11 +88,15 @@ namespace GPU_HeiPa {
     }
 
     inline void uncontract(Partition &partition,
-                           const Mapping &mapping) {
+                           const Mapping &mapping,
+                           Kokkos::Cuda &exec_space
+                        ) {
         ScopedTimer _t("uncontraction", "partition", "uncontract");
 
         // reset activity
-        Kokkos::parallel_for("initialize", mapping.old_n, KOKKOS_LAMBDA(const vertex_t u) {
+        Kokkos::parallel_for("initialize",   
+            Kokkos::RangePolicy<Kokkos::Cuda>(exec_space, 0, mapping.old_n), 
+            KOKKOS_LAMBDA(const vertex_t u) {
             vertex_t new_v = mapping.mapping(u);
             partition.temp_map(u) = partition.map(new_v);
         });
@@ -100,6 +104,7 @@ namespace GPU_HeiPa {
 
         KOKKOS_PROFILE_FENCE();
     }
+
 
     inline void recalculate_weights(Partition &partition,
                                     const Graph &g) {
