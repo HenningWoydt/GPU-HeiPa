@@ -64,16 +64,14 @@ namespace GPU_HeiPa {
         size_t num_cpu_threads = 2;
         size_t num_individuals = 2;
         
-        //! need to have many partitions!
+
         std::vector<Partition> partitions = std::vector<Partition>(num_individuals);
-        //Partition partition;
 
 
-        
-        weight_t curr_edge_cut = 0;
-        weight_t curr_max_block_weight = 0;
-        weight_t initial_edge_cut = 0;
-        weight_t initial_max_block_weight = 0;
+        std::vector<weight_t> curr_edge_cut = std::vector<weight_t>(num_individuals, 0);
+        std::vector<weight_t> curr_max_block_weight = std::vector<weight_t>(num_individuals, 0);
+        std::vector<weight_t> initial_edge_cut = std::vector<weight_t>(num_individuals, 0);
+        std::vector<weight_t> initial_max_block_weight = std::vector<weight_t>(num_individuals, 0);
 
         f64 down_up_load_ms = 0.0;
         f64 misc_ms = 0.0;
@@ -267,16 +265,16 @@ namespace GPU_HeiPa {
             
             //TODO: pick best partition out of all of them
             size_t min_id = 0;
-            /*
-            
-            min_edgecut = curr_edge_cuts[0];
-            for(size_t i = 1; i < num_individuals; ++i) {
-                if ( curr_edge_cuts[i] < min_edgecut) {
+            weight_t min_edgecut = curr_edge_cut[0];
+            for(size_t i = 0; i < num_individuals; ++i) {
+                
+                std::cout << "fitness individual " << i << " = " << curr_edge_cut[i] << std::endl ;
+                if ( curr_edge_cut[i] < min_edgecut) {
                     min_id = i;
-                    min_edgecut = curr_edgecut[i];
+                    min_edgecut = curr_edge_cut[i];
                 }
             }
-            */
+            
             HostPartition host_partition;
             //
             {
@@ -337,10 +335,10 @@ namespace GPU_HeiPa {
             }
             if (config.verbose_level >= 2) {
                 std::cout << "------- Stat -------" << std::endl;
-                std::cout << "Init. edge-cut    : " << initial_edge_cut << std::endl;
-                std::cout << "Init. max block w : " << initial_max_block_weight << std::endl;
-                std::cout << "Final edge-cut    : " << curr_edge_cut << std::endl;
-                std::cout << "Final max block w : " << curr_max_block_weight << std::endl;
+                std::cout << "Init. edge-cut    : " << initial_edge_cut[min_id] << std::endl;
+                std::cout << "Init. max block w : " << initial_max_block_weight[min_id] << std::endl;
+                std::cout << "Final edge-cut    : " << curr_edge_cut[min_id] << std::endl;
+                std::cout << "Final max block w : " << curr_max_block_weight[min_id] << std::endl;
 
                 std::cout << "#empty partitions : " << n_empty_partitions << std::endl;
                 std::cout << "#oload partitions : " << n_overloaded_partitions << std::endl;
@@ -511,10 +509,10 @@ namespace GPU_HeiPa {
             ScopedTimer _t("initial_partitioning", "Partition", "first_stats");
 
             //TODO: partition-local variables
-            initial_edge_cut = edge_cut(graphs.back(), partitions[individual_id]); //! only reads graph and partition
-            curr_edge_cut = initial_edge_cut; //! threadlocal variable
-            initial_max_block_weight = max_weight(partitions[individual_id]); //! only reads graph and partition
-            curr_max_block_weight = initial_max_block_weight; //! threadlocal variable
+            initial_edge_cut[individual_id] = edge_cut(graphs.back(), partitions[individual_id]); //! only reads graph and partition
+            curr_edge_cut[individual_id] = initial_edge_cut[individual_id]; //! threadlocal variable
+            initial_max_block_weight[individual_id] = max_weight(partitions[individual_id]); //! only reads graph and partition
+            curr_max_block_weight[individual_id] = initial_max_block_weight[individual_id]; //! threadlocal variable
 
             Kokkos::fence(); //! threadlocal fence
             initial_partitioning_ms += get_milli_seconds(p, get_time_point());
@@ -526,10 +524,10 @@ namespace GPU_HeiPa {
             auto p = get_time_point();
 
             //! each thread needs their own values for this call, only graphs is shared (right?)
-            auto pair = jet_refine(graphs.back(), partitions[ individual_id ], k, lmax, use_ultra, level, curr_edge_cut, curr_max_block_weight, mem_stack);
+            auto pair = jet_refine(graphs.back(), partitions[ individual_id ], k, lmax, use_ultra, level, curr_edge_cut[individual_id], curr_max_block_weight[individual_id], mem_stack);
             //! set threadlocal variables
-            curr_edge_cut = pair.first;
-            curr_max_block_weight = pair.second;
+            curr_edge_cut[individual_id] = pair.first;
+            curr_max_block_weight[individual_id] = pair.second;
 
             //! fence for correct execution space
             Kokkos::fence();
@@ -538,8 +536,8 @@ namespace GPU_HeiPa {
             refinement_ms += get_milli_seconds(p, get_time_point());
 
             //! threadlocal variables
-            ASSERT(curr_edge_cut == edge_cut(graphs.back(), partition));
-            ASSERT(curr_max_block_weight == max_weight(partition));
+            ASSERT(curr_edge_cut[individual_id] == edge_cut(graphs.back(), partitions[individual_id]));
+            ASSERT(curr_max_block_weight[individual_id] == max_weight(partitions[individual_id]));
 
 #if ENABLE_PROFILER
             level_infos[level].t_refinement = get_milli_seconds(p, get_time_point());
