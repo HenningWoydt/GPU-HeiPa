@@ -66,8 +66,8 @@ namespace GPU_HeiPa {
         std::vector<Graph> graphs;
         std::vector<Mapping> mappings;
 
-        size_t num_cpu_threads = 2;
-        size_t num_individuals = 2;
+        size_t num_cpu_threads = 4;
+        size_t num_individuals = 4;
         
 
         std::vector<Partition> partitions = std::vector<Partition>(num_individuals);
@@ -436,13 +436,14 @@ namespace GPU_HeiPa {
                 //! all threads: use tid to pick mem_stack
                 //! this causes problems!
                 //! maybe using different execution spaces will fix my issues...
-                //#pragma omp parallel for num_threads(2)
+                //! -> actually helps... wtf
+                #pragma omp parallel for num_threads(num_cpu_threads)
                 for(size_t i = 0; i < num_individuals ; ++i) {
-                    int tid = 0;  // omp_get_thread_num();
+                    int tid =  omp_get_thread_num();
                     //if( tid < 0 || tid > 1)
                       //  std::cout << "tid value error " << tid << std::endl;
 
-                    refinement(level, mem_stacks[i], i, i); //! mem_stacks[i] should be tid not i
+                    refinement(level, mem_stacks[tid], i, tid); //! mem_stacks[i] should be tid not i
                 }
 
 #if ENABLE_PROFILER

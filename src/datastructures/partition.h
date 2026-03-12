@@ -187,6 +187,16 @@ namespace GPU_HeiPa {
         Kokkos::deep_copy(dst.bweights, src.bweights);
     }
 
+    inline void copy_into(Partition &dst, const Partition &src, u32 n, Kokkos::Cuda &exec_space) {
+        dst.n = src.n;
+        dst.k = src.k;
+        dst.lmax = src.lmax;
+
+        auto rN = std::make_pair<size_t, size_t>(0, n);
+        Kokkos::deep_copy(exec_space, Kokkos::subview(dst.map, rN), Kokkos::subview(src.map, rN));
+        Kokkos::deep_copy(exec_space, dst.bweights, src.bweights);
+    }
+
     struct PartitionHost {
         vertex_t n = 0;
         partition_t k = 0;
