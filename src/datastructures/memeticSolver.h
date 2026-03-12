@@ -61,12 +61,15 @@ namespace GPU_HeiPa {
         std::vector<Graph> graphs;
         std::vector<Mapping> mappings;
 
+        size_t num_cpu_threads = 2;
+        size_t num_individuals = 2;
+        
         //! need to have many partitions!
-        // std::vector<Partition> partitions;
-        Partition partition;
+        std::vector<Partition> partitions = std::vector<Partition>(num_individuals);
+        //Partition partition;
 
-        size_t num_cpu_threads = 1;
 
+        
         weight_t curr_edge_cut = 0;
         weight_t curr_max_block_weight = 0;
         weight_t initial_edge_cut = 0;
@@ -261,12 +264,25 @@ namespace GPU_HeiPa {
             internal_solve(host_g, mem_stacks);
 
             auto p = get_time_point();
+            
+            //TODO: pick best partition out of all of them
+            size_t min_id = 0;
+            /*
+            
+            min_edgecut = curr_edge_cuts[0];
+            for(size_t i = 1; i < num_individuals; ++i) {
+                if ( curr_edge_cuts[i] < min_edgecut) {
+                    min_id = i;
+                    min_edgecut = curr_edgecut[i];
+                }
+            }
+            */
             HostPartition host_partition;
             //
             {
                 ScopedTimer _t("up/download", "Solver", "download_partition");
                 host_partition = HostPartition(Kokkos::view_alloc(Kokkos::WithoutInitializing, "host_partition"), graphs.back().n);
-                Kokkos::deep_copy(host_partition, partition.map);
+                Kokkos::deep_copy(host_partition, partitions[min_id].map);
             }
             f64 down_ms = get_milli_seconds(p, get_time_point());
             down_up_load_ms += down_ms;
@@ -277,7 +293,7 @@ namespace GPU_HeiPa {
             weight_t sum_too_much = 0;
             if (config.verbose_level >= 2) {
                 ScopedTimer _t("misc", "Solver", "calc_stats");
-                PartitionHost partition_host = to_host_partition(partition);
+                PartitionHost partition_host = to_host_partition(partitions[min_id]);
                 for (partition_t id = 0; id < config.k; ++id) {
                     n_empty_partitions += partition_host.bweights(id) == 0;
                     n_overloaded_partitions += partition_host.bweights(id) > lmax;
@@ -289,22 +305,19 @@ namespace GPU_HeiPa {
             {
                 ScopedTimer _t("misc", "Solver", "free_memory");
 
-                //TODO: do for all mem_stacks:
-                //? or is this only to be done for one "master" stack?
-                // free_partition(partition, mem_stack);
-                // free_graph(graphs.back(), mem_stack);
-                // graphs.pop_back();
-                // assert_is_empty(mem_stack);
-                // destroy(mem_stack);
+                for (size_t i = num_individuals; i-- > 0; ) {
+                    free_partition(partitions[i], mem_stacks[0]);
+                }
 
-
-                //! übergangslösung:
-
-                free_partition(partition, mem_stacks[0]);
                 free_graph(graphs.back(), mem_stacks[0]);
                 graphs.pop_back();
-                assert_is_empty(mem_stacks[0]);
-                destroy(mem_stacks[0]);
+
+                for(size_t i= 0; i < num_cpu_threads ; ++i ) {
+   
+                    assert_is_empty(mem_stacks[i]);
+                    destroy(mem_stacks[i]);
+
+                }
             }
 
             misc_ms += get_milli_seconds(p, get_time_point());
@@ -355,7 +368,7 @@ namespace GPU_HeiPa {
 
     private:
         void internal_solve(HostGraph &host_g, std::vector<KokkosMemoryStack> &mem_stacks) {
-            initialize(host_g, mem_stacks);
+            initialize(host_g, mem_stacks[0]);
 
             const partition_t c = 8;
             const partition_t max_n = c * k;
@@ -381,62 +394,51 @@ namespace GPU_HeiPa {
             level_infos[level].n = graphs.back().n;
             level_infos[level].m = graphs.back().m;
 #endif
-            //! create initial population
-            initial_partitioning(mem_stacks[0]) ; //doesnt even use mem_stack...
 
-            /*
-            TODO: goal is this:
-            for(size_t i = 0; i < num_cpu_threads ; ++i) {
-            ? how is mem_stack even used?
-                initial_partitioning(mem_stacks[i], i);
+            for(size_t i = 0; i < num_individuals ; ++i) {
+                initial_partitioning(mem_stacks[0], i);
             }
             
-            */
+
 
 #if ENABLE_PROFILER
-            level_infos[level].max_b_weight = max_weight(partition);
-            level_infos[level].imb = (f64) level_infos[level].max_b_weight / ((f64) host_g.g_weight / (f64) config.k);
-            level_infos[level].edge_cut = edge_cut(graphs.back(), partition);
-            level_infos[level].empty_partitions = n_empty_blocks(partition);
-            level_infos[level].oload_partitions = n_oload_blocks(partition);
-            level_infos[level].sum_oload_weights = sum_oload_weight(partition);
+            // level_infos[level].max_b_weight = max_weight(partitions[0]); //! übergangslösung
+            // level_infos[level].imb = (f64) level_infos[level].max_b_weight / ((f64) host_g.g_weight / (f64) config.k);
+            // level_infos[level].edge_cut = edge_cut(graphs.back(), partition);
+            // level_infos[level].empty_partitions = n_empty_blocks(partition);
+            // level_infos[level].oload_partitions = n_oload_blocks(partition);
+            // level_infos[level].sum_oload_weights = sum_oload_weight(partition);
 #endif
 
             while (!mappings.empty()) {
                 level -= 1;
 
                 //! do for all individuals in parallel
-                uncontraction(level); //! all threads
+                for(size_t i = 0; i < num_individuals ; ++i) {
+                    uncontraction(level, i); 
+                }
+
                 free_after_uncontraction(mem_stacks[0]); //! only one thread
 
-                refinement(level, mem_stacks[0]); //! all threads: use tid to pick mem_stack
-
-                /*
-                TODO: goal is this:
-                for(size_t i = 0; i < num_cpu_threads ; ++i) {
-                    uncontraction(level, mem_stacks[i]);
-
-                    ? maybe split this into two loops here...
-                    ? to free the last graph by one thread
-                    refinement(level, mem_stacks[i]);
-
+                //! all threads: use tid to pick mem_stack
+                for(size_t i = 0; i < num_individuals ; ++i) {
+                    refinement(level, mem_stacks[i], i); //! mem_stacks[i] should be tid not i
                 }
-                
-                */
 
 #if ENABLE_PROFILER
-                level_infos[level].max_b_weight = max_weight(partition);
-                level_infos[level].imb = (f64) level_infos[level].max_b_weight / ((f64) host_g.g_weight / (f64) config.k);
-                level_infos[level].edge_cut = edge_cut(graphs.back(), partition);
-                level_infos[level].empty_partitions = n_empty_blocks(partition);
-                level_infos[level].oload_partitions = n_oload_blocks(partition);
-                level_infos[level].sum_oload_weights = sum_oload_weight(partition);
+               //TODO: make it work for partition vector
+               // level_infos[level].max_b_weight = max_weight(partition);
+               // level_infos[level].imb = (f64) level_infos[level].max_b_weight / ((f64) host_g.g_weight / (f64) config.k);
+               // level_infos[level].edge_cut = edge_cut(graphs.back(), partition);
+               // level_infos[level].empty_partitions = n_empty_blocks(partition);
+               // level_infos[level].oload_partitions = n_oload_blocks(partition);
+               // level_infos[level].sum_oload_weights = sum_oload_weight(partition);
 #endif
             }
         }
 
-        // TODO: adjust this function to work with multiple mem_stacks
-        void initialize(HostGraph &host_g, std::vector<KokkosMemoryStack> &mem_stacks) {
+
+        void initialize(HostGraph &host_g, KokkosMemoryStack &mem_stack) {
             auto p = get_time_point();
 
             n = host_g.n;
@@ -447,10 +449,13 @@ namespace GPU_HeiPa {
 
             f64 up_ms = 0;
             
-            graphs.emplace_back(from_HostGraph(host_g, mem_stacks[0], up_ms));
+            graphs.emplace_back(from_HostGraph(host_g, mem_stack, up_ms));
 
-            //! this should be done for ALL mem_stacks & partitions
-            partition = initialize_partition(n, k, lmax, mem_stacks[0]);
+    
+            for(size_t i = 0; i < num_individuals ; ++i) {
+                partitions[i] = initialize_partition(n, k, lmax, mem_stack);
+            }
+
 
             misc_ms += get_milli_seconds(p, get_time_point());
             misc_ms -= up_ms;
@@ -463,7 +468,8 @@ namespace GPU_HeiPa {
             auto p = get_time_point();
 
             //! only need one of these right?
-            mappings.emplace_back(two_hop_matcher_get_mapping(graphs.back(), partition, lmax, mem_stack));
+            //! shouldnt matter which partition i pass, since this function doesnt use it anyway
+            mappings.emplace_back(two_hop_matcher_get_mapping(graphs.back(), partitions[0], lmax, mem_stack));
 
             Kokkos::fence();
             coarsening_ms += get_milli_seconds(p, get_time_point());
@@ -478,11 +484,11 @@ namespace GPU_HeiPa {
         void contraction(u32 level, KokkosMemoryStack &mem_stack) {
             auto p = get_time_point();
 
-            //! only need one graph right?
             graphs.emplace_back(from_Graph_Mapping(graphs.back(), mappings.back(), mem_stack));
             
-            //! do for all partitions
-            contract(partition, mappings.back());
+            for(size_t i = 0; i < num_individuals ; ++i) {
+                contract(partitions[i], mappings.back());
+            }
 
             Kokkos::fence();
             contraction_ms += get_milli_seconds(p, get_time_point());
@@ -495,38 +501,32 @@ namespace GPU_HeiPa {
         }
 
         //! this doesnt even use mem_stack...
-        void initial_partitioning(KokkosMemoryStack &mem_stack /*, int thread_id, size_t individual_id  */) {
+        void initial_partitioning(KokkosMemoryStack &mem_stack, size_t individual_id) {
             auto p = get_time_point();
 
-            // Use METIS for initial partitioning
-            //! partition threadlocal, seed should vary
-            //! graph doesnt change in this call
-            metis_partition(graphs.back(), (int) k, config.imbalance, config.seed, partition, METIS_RECURSIVE);
-            // metis_partition(graphs.back(), (int) k, config.imbalance, individual_id_seed, partition[ individual_id ], METIS_RECURSIVE);
+            metis_partition(graphs.back(), (int) k, config.imbalance, config.seed + individual_id, partitions[ individual_id ], METIS_RECURSIVE);
 
-
-            //! sets partition weights, graph stays const
-            recalculate_weights(partition, graphs.back());
-            // recalculate_weights(partition[i], graphs.back());
+            recalculate_weights(partitions[individual_id], graphs.back());
 
             ScopedTimer _t("initial_partitioning", "Partition", "first_stats");
 
-            initial_edge_cut = edge_cut(graphs.back(), partition); //! only reads graph and partition
+            //TODO: partition-local variables
+            initial_edge_cut = edge_cut(graphs.back(), partitions[individual_id]); //! only reads graph and partition
             curr_edge_cut = initial_edge_cut; //! threadlocal variable
-            initial_max_block_weight = max_weight(partition); //! only reads graph and partition
+            initial_max_block_weight = max_weight(partitions[individual_id]); //! only reads graph and partition
             curr_max_block_weight = initial_max_block_weight; //! threadlocal variable
 
             Kokkos::fence(); //! threadlocal fence
             initial_partitioning_ms += get_milli_seconds(p, get_time_point());
 
-            assert_state_after_partition(graphs.back(), partition, config.k);
+            assert_state_after_partition(graphs.back(), partitions[individual_id], config.k);
         }
 
-        void refinement(u32 level, KokkosMemoryStack &mem_stack) {
+        void refinement(u32 level, KokkosMemoryStack &mem_stack, size_t individual_id) {
             auto p = get_time_point();
 
             //! each thread needs their own values for this call, only graphs is shared (right?)
-            auto pair = jet_refine(graphs.back(), partition, k, lmax, use_ultra, level, curr_edge_cut, curr_max_block_weight, mem_stack);
+            auto pair = jet_refine(graphs.back(), partitions[ individual_id ], k, lmax, use_ultra, level, curr_edge_cut, curr_max_block_weight, mem_stack);
             //! set threadlocal variables
             curr_edge_cut = pair.first;
             curr_max_block_weight = pair.second;
@@ -545,23 +545,22 @@ namespace GPU_HeiPa {
             level_infos[level].t_refinement = get_milli_seconds(p, get_time_point());
 #endif
 
-            assert_state_after_partition(graphs.back(), partition, config.k);
+            assert_state_after_partition(graphs.back(), partitions[individual_id], config.k);
         }
 
-        void uncontraction(u32 level) {
+        void uncontraction(u32 level, size_t individual_id) {
             auto p = get_time_point();
 
-            //! each thread needs to call this with their own partition
-            //! mapping is const, only need one
-            uncontract(partition, mappings.back());
+            uncontract(partitions[individual_id], mappings.back());
 
+            //TODO: partition local value
             uncontraction_ms += get_milli_seconds(p, get_time_point());
 
 #if ENABLE_PROFILER
             level_infos[level].t_uncontraction = get_milli_seconds(p, get_time_point());
 #endif
 
-            assert_state_after_partition(graphs.back(), partition, config.k);
+            assert_state_after_partition(graphs.back(), partitions[individual_id], config.k);
         }
 
         void free_after_uncontraction(KokkosMemoryStack &mem_stack) {
