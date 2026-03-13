@@ -30,9 +30,6 @@
 #include "../utility/definitions.h"
 #include "../datastructures/kokkos_memory_stack.h"
 #include "distance_oracle_matrix.h"
-#include "distance_oracle_binary.h"
-#include "distance_oracle_division_store.h"
-#include "distance_oracle_division.h"
 
 
 namespace GPU_HeiPa {
@@ -52,15 +49,6 @@ namespace GPU_HeiPa {
         return initialize_distance_oracle_matrix(k, hierarchy, distances, mem_stack);
     }
 
-    // Specialization for binary
-    template<>
-    inline DistanceOracleBinary initialize_distance_oracle<DistanceOracleBinary>(partition_t k,
-                                                                                 std::vector<partition_t> &hierarchy,
-                                                                                 std::vector<weight_t> &distances,
-                                                                                 KokkosMemoryStack &mem_stack) {
-        return initialize_distance_oracle_binary(k, hierarchy, distances, mem_stack);
-    }
-
     // Declaration
     template<typename DOracle>
     void free_distance_oracle(DOracle &oracle, KokkosMemoryStack &mem_stack);
@@ -69,12 +57,6 @@ namespace GPU_HeiPa {
     template<>
     inline void free_distance_oracle<DistanceOracleMatrix>(DistanceOracleMatrix &oracle, KokkosMemoryStack &mem_stack) {
         free_distance_oracle_matrix(oracle, mem_stack);
-    }
-
-    // Specialization for binary
-    template<>
-    inline void free_distance_oracle<DistanceOracleBinary>(DistanceOracleBinary &oracle, KokkosMemoryStack &mem_stack) {
-        free_distance_oracle_binary(oracle, mem_stack);
     }
 }
 

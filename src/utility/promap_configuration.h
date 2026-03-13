@@ -72,7 +72,7 @@ namespace GPU_HeiPa {
         int verbose_level = 1;
 
         // distance oracle
-        std::string distance_oracle_string;
+        std::string distance_oracle_string = "matrix";
 
         // device space info
         std::string device_space;
@@ -120,17 +120,13 @@ namespace GPU_HeiPa {
             config = get("--config");
 
             // random initialization
-            if (is_set("--seed")) {
-                seed = std::stoull(get("--seed"));
-            } else {
-                seed = std::random_device{}();
-            }
+            seed = std::random_device{}();
 
             if (is_set("--verbose-level")) {
                 verbose_level = std::stoi(get("--verbose-level"));
             }
 
-            distance_oracle_string = get("--distance-oracle");
+            // distance_oracle_string = get("--distance-oracle");
 
             device_space = get_kokkos_execution_space_as_str();
         }

@@ -115,8 +115,6 @@ int main(int argc, char *argv[]) {
         if (config.config == "IM") {
             if (config.distance_oracle_string == "matrix") {
                 host_partition = ProMapSolver<DistanceOracleMatrix>(config).solve(host_g);
-            } else if (config.distance_oracle_string == "binary") {
-                host_partition = ProMapSolver<DistanceOracleBinary>(config).solve(host_g);
             } else {
                 std::cerr << "Error: Invalid distance oracle string: " << config.distance_oracle_string << std::endl;
             }
