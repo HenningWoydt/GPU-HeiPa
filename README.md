@@ -42,8 +42,6 @@ Find mapping $\Pi : V \to [k]$ that:
 
 ---
 
----
-
 ## Quick Start
 
 ### Prerequisites
