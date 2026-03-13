@@ -104,7 +104,7 @@ Partition a graph into k balanced blocks:
 | `--imbalance` | `-e` | Maximum imbalance (0.0-1.0) | `0.03` |
 | `--config` | `-c` | Configuration: `default`, `ultra` | *required* |
 | `--mapping` | `-m` | Output partition file | `GPU-HeiPa_par.txt` |
-| `--verbose-level` | | Verbosity (0=quiet, 1=normal, 2=detailed) | `1` |
+| `--verbose-level` | | Verbosity (0=quiet, 1=normal) | `1` |
 
 **Configuration Presets:**
 - `default` - Faster, good quality
@@ -141,7 +141,7 @@ Map processes to a hierarchical architecture optimizing for communication costs:
 | `--imbalance` | `-e` | Maximum imbalance | `0.03` |
 | `--config` | `-c` | Configuration: `IM`, `HM`, `HM-ultra` | *required* |
 | `--mapping` | `-m` | Output mapping file | `GPU-HeiProMap_par.txt` |
-| `--verbose-level` | | Verbosity (0=quiet, 1=normal, 2=detailed) | `1` |
+| `--verbose-level` | | Verbosity (0=quiet, 1=normal) | `1` |
 
 **Configuration Presets:**
 - `IM` - Fastest, lowest quality
