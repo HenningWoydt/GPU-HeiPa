@@ -464,7 +464,8 @@ namespace GPU_HeiPa {
         void refinement(u32 level, KokkosMemoryStack &mem_stack) {
             auto p = get_time_point();
 
-            auto pair = jet_refine(graphs.back(), partition, k, lmax, use_ultra, level, curr_edge_cut, curr_max_block_weight, mem_stack);
+            Kokkos::Cuda space;
+            auto pair = jet_refine(graphs.back(), partition, k, lmax, use_ultra, level, curr_edge_cut, curr_max_block_weight, mem_stack, space);
             curr_edge_cut = pair.first;
             curr_max_block_weight = pair.second;
 
@@ -484,7 +485,8 @@ namespace GPU_HeiPa {
         void uncontraction(u32 level, KokkosMemoryStack &mem_stack) {
             auto p = get_time_point();
 
-            uncontract(partition, mappings.back());
+            Kokkos::Cuda space;
+            uncontract(partition, mappings.back(), space);
 
             free_graph(graphs.back(), mem_stack);
             graphs.pop_back();
