@@ -87,7 +87,7 @@ namespace GPU_HeiPa {
 
                 running += c;
             });
-            //TODO: make async in stream
+
             Kokkos::deep_copy(exec_space, bc.size, Kokkos::subview(bc.row, g.n));
             exec_space.fence();
             KOKKOS_PROFILE_FENCE();
@@ -102,7 +102,6 @@ namespace GPU_HeiPa {
             Kokkos::deep_copy(exec_space, bc.ids, NULL_PART);
             Kokkos::deep_copy(exec_space, bc.weights, 0);
             exec_space.fence();
-            //TODO: change
             KOKKOS_PROFILE_FENCE();
         }
 

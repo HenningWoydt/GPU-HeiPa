@@ -73,7 +73,7 @@ namespace GPU_HeiPa {
         std::vector<Partition> partitions = std::vector<Partition>(num_individuals);
         
         std::vector<cudaStream_t> cuda_streams = std::vector<cudaStream_t>(num_cpu_threads);
-        std::vector<Kokkos::Cuda> exec_spaces; //! is this the correct space Kokkos::Cuda ?
+        std::vector<Kokkos::Cuda> exec_spaces; 
 
 
         std::vector<weight_t> curr_edge_cut = std::vector<weight_t>(num_individuals, 0);
@@ -440,10 +440,9 @@ namespace GPU_HeiPa {
                 #pragma omp parallel for num_threads(num_cpu_threads)
                 for(size_t i = 0; i < num_individuals ; ++i) {
                     int tid =  omp_get_thread_num();
-                    //if( tid < 0 || tid > 1)
-                      //  std::cout << "tid value error " << tid << std::endl;
 
-                    refinement(level, mem_stacks[tid], i, tid); //! mem_stacks[i] should be tid not i
+    //                refinement(level, mem_stacks[i], i, i); //! mem_stacks[i] should be tid not i
+                      refinement(level, mem_stacks[tid], i, tid); //! mem_stacks[i] should be tid not i
                 }
 
 #if ENABLE_PROFILER

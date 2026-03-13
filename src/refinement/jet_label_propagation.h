@@ -73,7 +73,9 @@ namespace GPU_HeiPa {
                                                          const vertex_t t_m,
                                                          const partition_t t_k,
                                                          const weight_t t_lmax,
-                                                         KokkosMemoryStack &mem_stack) {
+                                                         KokkosMemoryStack &mem_stack,
+                                                         Kokkos::Cuda &exec_space
+                                                        ) {
         ScopedTimer _t("refinement", "JetLabelPropagation", "allocate");
 
         LabelPropagation lp;
@@ -100,14 +102,14 @@ namespace GPU_HeiPa {
         lp.underloaded_blocks = UnmanagedDevicePartition((partition_t *) get_chunk_back(mem_stack, sizeof(partition_t) * lp.k), lp.k);
 
         lp.zeros = UnmanagedDeviceU32((u32 *) get_chunk_back(mem_stack, sizeof(u32) * lp.n), lp.n);
-        Kokkos::deep_copy(lp.zeros, 0);
+        Kokkos::deep_copy(exec_space, lp.zeros, 0);
 
         lp.idx = DeviceScalarU32("idx");
 
         lp.lock = UnmanagedDeviceU32((u32 *) get_chunk_back(mem_stack, sizeof(u32) * lp.n), lp.n);
         lp.dest_cache = UnmanagedDevicePartition((partition_t *) get_chunk_back(mem_stack, sizeof(partition_t) * lp.n), lp.n);
-        Kokkos::deep_copy(lp.lock, 0);
-        Kokkos::deep_copy(lp.dest_cache, NULL_PART);
+        Kokkos::deep_copy(exec_space, lp.lock, 0);
+        Kokkos::deep_copy(exec_space, lp.dest_cache, NULL_PART);
 
         lp.host_pinned_u32 = HostScalarPinnedU32("pinned_u32");
         lp.scan_host = HostScalarPinnedVertex("scan host");
@@ -118,6 +120,8 @@ namespace GPU_HeiPa {
         lp.cut_change1 = Kokkos::subview(lp.reduce_locs, 0);
         lp.cut_change2 = Kokkos::subview(lp.reduce_locs, 1);
         lp.host_max_part = Kokkos::subview(lp.reduce_locs, 2);
+
+        exec_space.fence(); 
 
         return lp;
     }
@@ -932,13 +936,11 @@ namespace GPU_HeiPa {
                                                     Kokkos::Cuda &exec_space
                                                 ) {
                                                     
-        LabelPropagation lp = initialize_label_propagation(g.n, g.m, k, lmax, mem_stack);
-        //TODO: this has some copys i should change
+        LabelPropagation lp = initialize_label_propagation(g.n, g.m, k, lmax, mem_stack, exec_space);
 
         // copy partition
         {
             ScopedTimer _t("refinement", "JetLabelPropagation", "copy_partition");
-            //TODO: copy async
             copy_into(lp.partition, partition, g.n, exec_space);
             exec_space.fence();
             KOKKOS_PROFILE_FENCE();
