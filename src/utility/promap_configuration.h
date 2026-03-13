@@ -42,9 +42,7 @@ namespace GPU_HeiPa {
             {"--hierarchy", "-h", "Hierarchy in the form a1:a2:...:al .", "", "", false},
             {"--distance", "-d", "Distance in the form d1:d2:...:dl .", "", "", false},
             {"--imbalance", "-e", "Allowed imbalance (for example 0.03).", "0.03", "", false},
-            {"--config", "-c", "Broad Config.", "", "", false},
-            {"--seed", "-s", "Seed for more randomness.", "0", "", false},
-            {"--distance-oracle", "", "Which Distance Oracle to use {matrix, division, binary}.", "binary", "", false},
+            {"--config", "-c", "Algorithm Config {IM, HM, HM-ultra}.", "", "", false},
             {"--verbose-level", "", "Whether to print.", "1", "", false},
         };
 

@@ -1,6 +1,30 @@
 #!/usr/bin/env bash
 set -euo pipefail
 
+# Parse arguments
+DOWNLOAD_KOKKOS=ON
+MAX_THREADS=""
+KOKKOS_ARCH=""
+
+for arg in "$@"; do
+  case "$arg" in
+    --download-kokkos=*)
+      DOWNLOAD_KOKKOS="${arg#*=}"
+      ;;
+    --max-threads=*)
+      MAX_THREADS="${arg#*=}"
+      ;;
+    --kokkos-arch=*)
+      KOKKOS_ARCH="${arg#*=}"
+      ;;
+    *)
+      echo "Unknown argument: $arg"
+      echo "Usage: $0 [--download-kokkos=ON|OFF] [--max-threads=N] [--kokkos-arch=ARCH]"
+      exit 1
+      ;;
+  esac
+done
+
 BACKEND="Cuda"
 BACKEND_LOWER="$(echo "$BACKEND" | tr '[:upper:]' '[:lower:]')"
 
@@ -15,11 +39,12 @@ case "$BACKEND_LOWER" in
 esac
 
 echo "==> Building with backend: ${BACKEND}"
+echo "==> Download Kokkos: ${DOWNLOAD_KOKKOS}"
 
 # ---- detect GPU arch and map to Kokkos flag ----
 detect_kokkos_arch() {
-  # Allow manual override (e.g. KOKKOS_ARCH=Kokkos_ARCH_AMPERE86)
-  if [ -n "${KOKKOS_ARCH:-}" ]; then
+  # Use command-line argument if provided
+  if [ -n "${KOKKOS_ARCH}" ]; then
     echo "${KOKKOS_ARCH}=ON"
     return 0
   fi
@@ -62,13 +87,14 @@ calc_jobs() {
   if [ "$j" -lt 1 ]; then j=1; fi
   echo "$j"
 }
-JOBS="${MAX_THREADS:-$(calc_jobs)}"
-echo "Building with $JOBS parallel jobs (override with MAX_THREADS)."
 
-# clean previous externals
-rm -rf extern/local
-rm -rf extern/kokkos-5.0.0
-rm -rf extern/kokkos-kernels-5.0.0
+# Use command-line argument if provided, otherwise calculate
+if [ -n "${MAX_THREADS}" ]; then
+  JOBS="${MAX_THREADS}"
+else
+  JOBS="$(calc_jobs)"
+fi
+echo "Building with $JOBS parallel jobs."
 
 ROOT=${PWD}
 GCC=$(which gcc || true)
@@ -76,118 +102,132 @@ GCC=$(which gcc || true)
 echo "Root            : ${ROOT}"
 echo "Using C compiler: ${GCC:-<system default>}"
 
-# make local folder for all includes
-mkdir -p extern
-cd extern && rm -rf local && mkdir local && cd "${ROOT}"
+if [ "$DOWNLOAD_KOKKOS" = "ON" ]; then
+  # ---- Download and build Kokkos dependencies ----
+  
+  # clean previous externals
+  rm -rf extern/local
+  rm -rf extern/kokkos-5.0.0
+  rm -rf extern/kokkos-kernels-5.0.0
 
-# --- Download Kokkos-Kernels 5.0.0 ---
-echo "Downloading Kokkos-Kernels 5.0.0..."
-if (
-  cd extern \
-  && rm -f kokkos-kernels-5.0.0.tar.gz \
-  && rm -rf kokkos-kernels-5.0.0 \
-  && wget -q https://github.com/kokkos/kokkos-kernels/releases/download/5.0.0/kokkos-kernels-5.0.0.tar.gz \
-  && tar -xzf kokkos-kernels-5.0.0.tar.gz \
-  && rm -f kokkos-kernels-5.0.0.tar.gz
-); then
-  echo "Kokkos-Kernels 5.0.0 downloaded and extracted successfully."
+  # make local folder for all includes
+  mkdir -p extern
+  cd extern && rm -rf local && mkdir local && cd "${ROOT}"
+
+  # --- Download Kokkos-Kernels 5.0.0 ---
+  echo "Downloading Kokkos-Kernels 5.0.0..."
+  if (
+    cd extern \
+    && rm -f kokkos-kernels-5.0.0.tar.gz \
+    && rm -rf kokkos-kernels-5.0.0 \
+    && wget -q https://github.com/kokkos/kokkos-kernels/releases/download/5.0.0/kokkos-kernels-5.0.0.tar.gz \
+    && tar -xzf kokkos-kernels-5.0.0.tar.gz \
+    && rm -f kokkos-kernels-5.0.0.tar.gz
+  ); then
+    echo "Kokkos-Kernels 5.0.0 downloaded and extracted successfully."
+  else
+    echo "Failed to download Kokkos-Kernels!" >&2
+    exit 1
+  fi
+
+  # --- Download Kokkos 5.0.0 ---
+  echo "Downloading Kokkos 5.0.0..."
+  if (
+    cd extern \
+    && rm -f kokkos-5.0.0.tar.gz \
+    && rm -rf kokkos-5.0.0 \
+    && wget -q https://github.com/kokkos/kokkos/releases/download/5.0.0/kokkos-5.0.0.tar.gz \
+    && tar -xzf kokkos-5.0.0.tar.gz \
+    && rm -f kokkos-5.0.0.tar.gz
+  ); then
+    echo "Kokkos 5.0.0 downloaded and extracted successfully."
+  else
+    echo "Failed to download Kokkos!" >&2
+    exit 1
+  fi
+
+  # Compiler for CMake (C++): Kokkos nvcc_wrapper for CUDA
+  export CXX="${ROOT}/extern/kokkos-5.0.0/bin/nvcc_wrapper"
+  if [ ! -x "$CXX" ]; then
+    echo "Error: nvcc_wrapper not found at $CXX"
+    echo "Make sure kokkos source was extracted and CUDA toolkit is installed."
+    exit 2
+  fi
+
+  # Disable CUDA lazy loading - force eager module loading
+  export CUDA_MODULE_LOADING=EAGER
+  echo "CUDA lazy loading disabled (CUDA_MODULE_LOADING=EAGER)"
+
+  echo "Using C++ compiler: ${CXX}"
+
+  # ---- backend-specific flags ----
+  KOKKOS_COMMON="-DCMAKE_INSTALL_PREFIX=${ROOT}/extern/local/kokkos \
+                 -DKokkos_ENABLE_SERIAL=ON \
+                 -DCMAKE_BUILD_TYPE=Release \
+                 -DKokkos_ENABLE_DEBUG=OFF \
+                 -DKokkos_ENABLE_DEBUG_BOUNDS_CHECK=OFF \
+                 -DKokkos_ENABLE_TUNING=ON"
+
+  KOKKOS_BACKEND="-DKokkos_ENABLE_CUDA=ON -DKokkos_ENABLE_OPENMP=OFF -DKokkos_ENABLE_CUDA_LAMBDA=ON"
+
+  # Strong optimization defaults for Release
+  CXX_RELEASE_FLAGS="-O3 -DNDEBUG -march=native -mtune=native -fno-math-errno -fomit-frame-pointer"
+
+  # --- build kokkos ---
+  echo "Building Kokkos 5.0.0..."
+  if (
+    cd "${ROOT}/extern/kokkos-5.0.0" \
+    && mkdir -p build && cd build \
+    && cmake .. \
+      ${KOKKOS_COMMON} \
+      ${KOKKOS_BACKEND} \
+      -DCMAKE_CXX_STANDARD=20 \
+      -DCMAKE_CXX_EXTENSIONS=OFF \
+      -DCMAKE_CXX_FLAGS_RELEASE="${CXX_RELEASE_FLAGS}" \
+      -DCMAKE_CXX_FLAGS="-w" \
+      ${ARCH_FLAG:+-D${ARCH_FLAG}} \
+    && make install -j "$JOBS"
+  ); then
+    echo "Kokkos 5.0.0 build completed successfully."
+  else
+    echo "Kokkos 5.0.0 build failed!" >&2
+    exit 1
+  fi
+
+  echo "Building Kokkos-Kernels 5.0.0..."
+  if (
+    cd "${ROOT}/extern/kokkos-kernels-5.0.0" \
+    && mkdir -p build && cd build \
+    && cmake .. \
+      -DCMAKE_INSTALL_PREFIX="${ROOT}/extern/local/kokkos-kernels" \
+      -DCMAKE_PREFIX_PATH="${ROOT}/extern/local/kokkos" \
+      -DCMAKE_BUILD_TYPE=Release \
+      -DCMAKE_CXX_STANDARD=20 \
+      -DCMAKE_CXX_EXTENSIONS=OFF \
+      -DKokkosKernels_ENABLE_TESTS=OFF \
+      -DKokkosKernels_ENABLE_EXAMPLES=OFF \
+      -DKokkosKernels_ENABLE_PERFTESTS=OFF \
+      -DCMAKE_CXX_FLAGS_RELEASE="${CXX_RELEASE_FLAGS}" \
+      -DCMAKE_CXX_FLAGS="-w" \
+      ${KOKKOS_BACKEND} \
+    && make install -j "$JOBS"
+  ); then
+    echo "Kokkos-Kernels 5.0.0 build completed successfully."
+  else
+    echo "Kokkos-Kernels 5.0.0 build failed!" >&2
+    exit 1
+  fi
+  cd "${ROOT}"
 else
-  echo "Failed to download Kokkos-Kernels!" >&2
-  exit 1
+  echo "Skipping Kokkos download and build (using existing installation)."
 fi
-
-# --- Download Kokkos 5.0.0 ---
-echo "Downloading Kokkos 5.0.0..."
-if (
-  cd extern \
-  && rm -f kokkos-5.0.0.tar.gz \
-  && rm -rf kokkos-5.0.0 \
-  && wget -q https://github.com/kokkos/kokkos/releases/download/5.0.0/kokkos-5.0.0.tar.gz \
-  && tar -xzf kokkos-5.0.0.tar.gz \
-  && rm -f kokkos-5.0.0.tar.gz
-); then
-  echo "Kokkos 5.0.0 downloaded and extracted successfully."
-else
-  echo "Failed to download Kokkos!" >&2
-  exit 1
-fi
-
-# Compiler for CMake (C++): Kokkos nvcc_wrapper for CUDA
-export CXX="${ROOT}/extern/kokkos-5.0.0/bin/nvcc_wrapper"
-if [ ! -x "$CXX" ]; then
-  echo "Error: nvcc_wrapper not found at $CXX"
-  echo "Make sure kokkos source was extracted and CUDA toolkit is installed."
-  exit 2
-fi
-
-# Disable CUDA lazy loading - force eager module loading
-export CUDA_MODULE_LOADING=EAGER
-echo "CUDA lazy loading disabled (CUDA_MODULE_LOADING=EAGER)"
-
-echo "Using C++ compiler: ${CXX}"
-
-# ---- backend-specific flags ----
-KOKKOS_COMMON="-DCMAKE_INSTALL_PREFIX=${ROOT}/extern/local/kokkos \
-               -DKokkos_ENABLE_SERIAL=ON \
-               -DCMAKE_BUILD_TYPE=Release \
-               -DKokkos_ENABLE_DEBUG=OFF \
-               -DKokkos_ENABLE_DEBUG_BOUNDS_CHECK=OFF \
-               -DKokkos_ENABLE_TUNING=ON"
-
-KOKKOS_BACKEND="-DKokkos_ENABLE_CUDA=ON -DKokkos_ENABLE_OPENMP=OFF -DKokkos_ENABLE_CUDA_LAMBDA=ON"
-
-# Strong optimization defaults for Release
-CXX_RELEASE_FLAGS="-O3 -DNDEBUG -march=native -mtune=native -fno-math-errno -fomit-frame-pointer"
-
-# --- build kokkos ---
-echo "Building Kokkos 5.0.0..."
-if (
-  cd "${ROOT}/extern/kokkos-5.0.0" \
-  && mkdir -p build && cd build \
-  && cmake .. \
-    ${KOKKOS_COMMON} \
-    ${KOKKOS_BACKEND} \
-    -DCMAKE_CXX_STANDARD=20 \
-    -DCMAKE_CXX_EXTENSIONS=OFF \
-    -DCMAKE_CXX_FLAGS_RELEASE="${CXX_RELEASE_FLAGS}" \
-    -DCMAKE_CXX_FLAGS="-w" \
-    ${ARCH_FLAG:+-D${ARCH_FLAG}} \
-  && make install -j "$JOBS"
-); then
-  echo "Kokkos 5.0.0 build completed successfully."
-else
-  echo "Kokkos 5.0.0 build failed!" >&2
-  exit 1
-fi
-
-echo "Building Kokkos-Kernels 5.0.0..."
-if (
-  cd "${ROOT}/extern/kokkos-kernels-5.0.0" \
-  && mkdir -p build && cd build \
-  && cmake .. \
-    -DCMAKE_INSTALL_PREFIX="${ROOT}/extern/local/kokkos-kernels" \
-    -DCMAKE_PREFIX_PATH="${ROOT}/extern/local/kokkos" \
-    -DCMAKE_BUILD_TYPE=Release \
-    -DCMAKE_CXX_STANDARD=20 \
-    -DCMAKE_CXX_EXTENSIONS=OFF \
-    -DKokkosKernels_ENABLE_TESTS=OFF \
-    -DKokkosKernels_ENABLE_EXAMPLES=OFF \
-    -DKokkosKernels_ENABLE_PERFTESTS=OFF \
-    -DCMAKE_CXX_FLAGS_RELEASE="${CXX_RELEASE_FLAGS}" \
-    -DCMAKE_CXX_FLAGS="-w" \
-    ${KOKKOS_BACKEND} \
-  && make install -j "$JOBS"
-); then
-  echo "Kokkos-Kernels 5.0.0 build completed successfully."
-else
-  echo "Kokkos-Kernels 5.0.0 build failed!" >&2
-  exit 1
-fi
-cd "${ROOT}"
 
 # --- build GPU-HeiPa ---
 echo "Building GPU-HeiPa..."
-rm -rf build && mkdir -p build
+if [ "$DOWNLOAD_KOKKOS" = "ON" ]; then
+  rm -rf build
+fi
+mkdir -p build
 cd build
 cmake .. -DCMAKE_BUILD_TYPE=Release \
          -DCMAKE_PREFIX_PATH="${ROOT}/extern/local/kokkos;${ROOT}/extern/local/kokkos-kernels" \

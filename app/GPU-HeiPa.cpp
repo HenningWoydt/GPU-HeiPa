@@ -57,8 +57,7 @@ int main(int argc, char *argv[]) {
                 {"--k", "32"},
                 {"--imbalance", "0.03"},
                 {"--config", "default"},
-                {"--seed", "1"},
-                {"--verbose-level", "2"}
+                {"--verbose-level", "1"}
             };
 
             std::vector<std::string> args = {"GPU-HeiPa"};

@@ -53,17 +53,14 @@ namespace GPU_HeiPa {
             {"--mapping", "-m", "Output filepath to the generated mapping.", "GPU-HeiPa_par.txt", "", false},
             {"--k", "-k", "Number of blocks k", "", "", false},
             {"--imbalance", "-e", "Allowed imbalance (for example 0.03).", "0.03", "", false},
-            {"--config", "-c", "Broad Config.", "", "", false},
-            {"--statistics", "", "Output filepath to the statistics file.", "GPU-HeiPa_stats.JSON", "", false},
-            {"--seed", "-s", "Seed for more randomness.", "0", "", false},
-            {"--verbose-level", "", "Whether to print.", "2", "", false},
+            {"--config", "-c", "Algorithm Config {default, ultra}.", "", "", false},
+            {"--verbose-level", "", "Whether to print.", "1", "", false},
         };
 
     public:
         // graph information
         std::string graph_in;
         std::string mapping_out;
-        std::string statistics_out;
 
         // partition information
         partition_t k = 0;
@@ -109,7 +106,6 @@ namespace GPU_HeiPa {
             // extract info
             graph_in = get("--graph");
             mapping_out = get("--mapping");
-            statistics_out = get("--statistics");
 
             k = (partition_t) std::stoul(get("--k"));
 
@@ -119,11 +115,7 @@ namespace GPU_HeiPa {
             config = get("--config");
 
             // random initialization
-            if (is_set("--seed")) {
-                seed = std::stoull(get("--seed"));
-            } else {
-                seed = std::random_device{}();
-            }
+            seed = std::random_device{}();
 
             verbose_level = 1;
             if (is_set("--verbose-level")) {
@@ -198,7 +190,6 @@ namespace GPU_HeiPa {
 
             s += tabs + to_JSON_MACRO(graph_in);
             s += tabs + to_JSON_MACRO(mapping_out);
-            s += tabs + to_JSON_MACRO(statistics_out);
             s += tabs + to_JSON_MACRO(k);
             s += tabs + to_JSON_MACRO(imbalance);
             s += tabs + to_JSON_MACRO(config);

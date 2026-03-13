@@ -63,8 +63,6 @@ int main(int argc, char *argv[]) {
                 {"--distance", "1:10:100"},
                 {"--imbalance", "0.03"},
                 {"--config", "IM"},
-                {"--seed", "1"},
-                {"--distance-oracle", "matrix"},
                 {"--verbose-level", "1"}
             };
 

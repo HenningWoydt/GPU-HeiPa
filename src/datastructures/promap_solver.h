@@ -164,7 +164,7 @@ namespace GPU_HeiPa {
             size_t n_overloaded_partitions = 0;
             weight_t sum_too_much = 0;
             PartitionHost partition_host;
-            if (config.verbose_level >= 2) {
+            if (config.verbose_level >= 1) {
                 ScopedTimer _t("misc", "Solver", "calc_stats");
                 max_block_w = max_weight(partition);
                 partition_host = to_host_partition(partition);
@@ -204,19 +204,16 @@ namespace GPU_HeiPa {
                 std::cout << "distances         : " << to_str(distances) << std::endl;
                 std::cout << "imbalance         : " << config.imbalance << std::endl;
                 std::cout << "Lmax              : " << lmax << std::endl;
-            }
-            if (config.verbose_level >= 2) {
+
                 std::cout << "------- Stat -------" << std::endl;
                 std::cout << "Init. comm-cost   : " << initial_comm_cost << std::endl;
                 std::cout << "Init. max block w : " << initial_max_block_weight << std::endl;
                 std::cout << "Final comm-cost   : " << curr_comm_cost << std::endl;
                 std::cout << "Final max block w : " << max_block_w << std::endl;
-
                 std::cout << "#empty partitions : " << n_empty_partitions << std::endl;
                 std::cout << "#oload partitions : " << n_overloaded_partitions << std::endl;
                 std::cout << "Sum oload weights : " << sum_too_much << std::endl;
-            }
-            if (config.verbose_level >= 1) {
+
                 std::cout << "------- Time -------" << std::endl;
                 std::cout << "Coarsening        : " << coarsening_ms << std::endl;
                 std::cout << "Contraction       : " << contraction_ms << std::endl;
