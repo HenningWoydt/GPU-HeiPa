@@ -653,7 +653,7 @@ namespace GPU_HeiPa {
                 parent_ids.push_back(1);
 
 
-                Partition offspring = backbone_based_crossover( graphs.back(), parent_ids, k, lmax, mem_stack );
+                Partition offspring = backbone_based_crossover( graphs.back(), parent_ids, partitions, k, lmax, mem_stack );
                 // determine edgecut and max block weight 
                 // pass these values instead of zeros
                 // jet_refine( graphs.back(), offspring, k, lmax, use_ultra, level, 0, 0, mem_stack, exec_spaces[0] );
