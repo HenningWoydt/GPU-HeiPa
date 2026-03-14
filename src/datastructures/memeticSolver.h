@@ -42,6 +42,7 @@
 #include "partition.h"
 #include "../coarsening/two_hop_matching.h"
 #include "../refinement/jet_label_propagation.h"
+#include "../refinement/memetic_refinement.h"
 #include "../initial_partitioning/metis_partitioning.h"
 #include "../utility/definitions.h"
 #include "../utility/configuration.h"
@@ -68,6 +69,7 @@ namespace GPU_HeiPa {
 
         size_t num_cpu_threads = 4;
         size_t num_individuals = 4;
+        int num_crossovers = 1;
         
 
         std::vector<Partition> partitions = std::vector<Partition>(num_individuals);
@@ -261,8 +263,8 @@ namespace GPU_HeiPa {
             //! maybe adjust sizes here, only memstack 0 needs a lot of space...
             for (size_t i = 0; i < num_cpu_threads; ++i) {
                 mem_stacks[i] = initialize_kokkos_memory_stack(
-                    30 * (size_t) host_g.n * sizeof(vertex_t) +
-                    10 * (size_t) host_g.m * sizeof(vertex_t),
+                    30 * 10* (size_t) host_g.n * sizeof(vertex_t) +
+                    10 * 10*(size_t) host_g.m * sizeof(vertex_t),
                     "Stack_" + std::to_string(i)
                 );
             }
@@ -453,24 +455,34 @@ namespace GPU_HeiPa {
 
                 }
             
-            {
-                //scope for refinement
-                auto p = get_time_point();
+                {
+                    //scope for refinement
+                    auto p = get_time_point();
 
-                #pragma omp parallel for num_threads(num_cpu_threads)
-                for(size_t i = 0; i < num_individuals ; ++i) {
-                    size_t tid = static_cast<size_t>(  omp_get_thread_num() );
+                    #pragma omp parallel for num_threads(num_cpu_threads)
+                    for(size_t i = 0; i < num_individuals ; ++i) {
+                        size_t tid = static_cast<size_t>(  omp_get_thread_num() );
 
-    //                refinement(level, mem_stacks[i], i, i); //! mem_stacks[i] should be tid not i
-                      refinement(level, mem_stacks[tid], i, tid ); 
-                
+        //                refinement(level, mem_stacks[i], i, i); //! mem_stacks[i] should be tid not i
+                        refinement(level, mem_stacks[tid], i, tid ); 
+                    
+                    }
+
+                    refinement_ms += get_milli_seconds(p, get_time_point());
+#if ENABLE_PROFILER
+                    level_infos[level].t_refinement = get_milli_seconds(p, get_time_point());
+#endif
                 }
 
-                refinement_ms += get_milli_seconds(p, get_time_point());
-#if ENABLE_PROFILER
-                level_infos[level].t_refinement = get_milli_seconds(p, get_time_point());
-#endif
-            }
+
+                {
+                    
+                    if (level == 2)
+                        memetic_refinement(level, mem_stacks[1]);
+                    
+                    
+                }
+
 
 
 #if ENABLE_PROFILER
@@ -623,6 +635,59 @@ namespace GPU_HeiPa {
             Kokkos::fence();
         }
 
+
+
+        void memetic_refinement(u32 level, KokkosMemoryStack &mem_stack) {
+
+            //!
+            //! No need to determine fitness of the individuals,
+            //! we already store these values in "curr_edge_cut" !!
+
+            for(int i = 0; i < num_crossovers; ++i) {
+
+                // need to determine parents (maybe just an index array into partitions!)
+                std::vector<int> parent_ids;
+                // parent_indices.push_back( tournament_selection() );
+                // stub for now:
+                parent_ids.push_back(0);
+                parent_ids.push_back(1);
+
+
+                Partition offspring = backbone_based_crossover( graphs.back(), parent_ids, k, lmax, mem_stack );
+                // determine edgecut and max block weight 
+                // pass these values instead of zeros
+                // jet_refine( graphs.back(), offspring, k, lmax, use_ultra, level, 0, 0, mem_stack, exec_spaces[0] );
+
+                UpdatePopulation(offspring, mem_stack);
+
+            }
+
+            return;
+        }
+
+        
+
+
+
+        void UpdatePopulation(Partition &offspring, KokkosMemoryStack &mem_stack) {
+
+            // if offspring_fitness < population_fitness_best
+            // insert offspring into population
+            // ... do the whole distance stuff too...
+            
+            
+            
+            auto rN = std::make_pair<size_t, size_t>(0, graphs.back().n);
+            deep_copy(Kokkos::subview(partitions[0].map, rN), Kokkos::subview(offspring.map, rN));
+            deep_copy(partitions[0].bweights, offspring.bweights);
+            free_partition(offspring, mem_stack);
+
+            curr_edge_cut[0] =  edge_cut(graphs.back(), partitions[0]);
+            curr_max_block_weight[0] = max_weight(partitions[0]);
+
+
+            return;
+        }
 
 
     };
