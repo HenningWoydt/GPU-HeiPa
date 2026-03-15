@@ -3,12 +3,19 @@
 
 #include <Kokkos_Core.hpp>
 #include <bitset>
+#include <numeric>
 
 #include "../utility/definitions.h"
 #include "../datastructures/partition.h"
 
 
 namespace GPU_HeiPa {
+
+
+struct KeyTuple {
+    u32 key_count;
+    u64 key;
+};
 
     inline int tournament_selection() {
 
@@ -51,7 +58,6 @@ namespace GPU_HeiPa {
     ) {
 
         //setup: get the vectors onto the GPU
-
         auto parent_ids_device = Kokkos::View<int*, Kokkos::MemoryTraits<Kokkos::Unmanaged>>(
             (int *) get_chunk_back(mem_stack, sizeof(int) * parent_ids.size()), 
             parent_ids.size()
@@ -69,92 +75,66 @@ namespace GPU_HeiPa {
         Partition child;
         child = initialize_partition( graph.n , k, lmax, mem_stack);
 
-        UnmanagedDeviceU64 keys = UnmanagedDeviceU64((u64 *) get_chunk_back(mem_stack, sizeof(u64) * graph.n), graph.n);
-        Kokkos::parallel_for(
-            "fill keys array", graph.n,
-            KOKKOS_LAMBDA(vertex_t u) {
-                keys(u) = determine_key(u, parent_ids_device, population_device); 
-            }
+        u64 num_buckets = pow(k, parent_ids.size()); //! if k is not a power of 2, get next biggest power of two!
+
+        auto buckets = Kokkos::View<KeyTuple *, Kokkos::MemoryTraits<Kokkos::Unmanaged>>(
+            (KeyTuple *) get_chunk_back(mem_stack, sizeof(KeyTuple) * num_buckets), num_buckets 
         );
-
-        /*
-        */
-
-        // reduce by key
-        u32 num_buckets = static_cast<u32>(pow(16, parent_ids.size())); //TODO: no static assignment of 256
-        UnmanagedDeviceU32 buckets = UnmanagedDeviceU32((u32 *) get_chunk_back(mem_stack, sizeof(u32) * num_buckets), num_buckets);
+      
         
         Kokkos::parallel_for(
-            "count keys", graph.n,
+            "init buckets", num_buckets,
+            KOKKOS_LAMBDA(u64 index) {
+                buckets(index).key_count = 0;
+                buckets(index).key = index;
+            }
+        );
+
+        Kokkos::parallel_for(
+            "fill buckets", graph.n,
             KOKKOS_LAMBDA(vertex_t u) {
-                Kokkos::atomic_fetch_add(&buckets(keys(u)), 1 );
+                u64 key = determine_key(u, parent_ids_device, population_device); 
+                Kokkos::atomic_fetch_add(&buckets( key ).key_count, 1);
             }
         );
 
-        // Copy buckets from device to host
-        std::vector<u32> host_buckets(num_buckets);
-        Kokkos::deep_copy(Kokkos::View<u32*, Kokkos::HostSpace>(host_buckets.data(), num_buckets), buckets);
+        // sort descending based on key_count
+        // after sorting, the k most frequent keys will be at the top
+        // and you can query them via .key
+        Kokkos::sort(buckets, KOKKOS_LAMBDA(const KeyTuple& a, const KeyTuple& b) {
+            return a.key_count > b.key_count;
+        });
 
-        std::vector<std::pair<u32, u32>> bucket_counts(num_buckets);
-        for (u32 i = 0; i < num_buckets; ++i) {
-            bucket_counts[i] = {host_buckets[i], i};
-        }
 
-        std::partial_sort(
-            bucket_counts.begin(),
-            bucket_counts.begin() + k,
-            bucket_counts.end(),
-            [](const std::pair<u32, u32> &a, const std::pair<u32, u32> &b) {
-                return a.first > b.first;
+
+        Kokkos::parallel_for(
+            "create new offspring", graph.n,
+            KOKKOS_LAMBDA(vertex_t u) {
+                partition_t id;
+                bool in_backbone = false;
+                u64 key = determine_key(u, parent_ids_device, population_device); 
+                
+                for(size_t i = 0; i < k; ++i) {
+                    if( key == buckets(i).key ){
+                        id = i;
+                        in_backbone = true;
+                        break;
+                    }
+                }
+
+                if( !in_backbone )
+                    id = (u % k); //TODO: determine random id between 0 and k-1
+
+                child.map(u) = id;
             }
         );
-        std::vector<u32> top_k_indices(k);
-        for (u32 i = 0; i < k; ++i) {
-            top_k_indices[i] = bucket_counts[i].second;
-        }
-        
-        // Print host_buckets
-        std::cout << "host_buckets: ";
-        for (u32 i = 0; i < num_buckets; ++i) {
-            std::cout << host_buckets[i] << " ";
-        }
-        std::cout << std::endl;
-
-        // Print top_k_indices
-        std::cout << "top_k_indices: ";
-        for (u32 i = 0; i < k; ++i) {
-            std::cout << top_k_indices[i] << " ";
-            std::cout << "with value: " << host_buckets[top_k_indices[i]] << " ";
-        }
-        std::cout << std::endl;
-        
-        std::cout << "top_k_indices (binary): ";
-        for (u32 i = 0; i < k; ++i) {
-            std::bitset<32> binary(top_k_indices[i]);
-            std::cout << binary.to_string().substr(32 - 4 * parent_ids.size()) << std::endl;
-        }
-        std::cout << std::endl;
-
-        pop_back(mem_stack);
 
         
-        pop_back(mem_stack); //rm keys
+        pop_back(mem_stack); //rm buckets
         pop_back(mem_stack); //rm population
         pop_back(mem_stack); //rm parent_ids
 
-        //! stub for now:
-        /*
-        
-        partition_t k_capture = k;
-        Kokkos::parallel_for("create offspring", graph.n,
-            KOKKOS_LAMBDA( u32 u ) {
-                child.map(u) = u % k_capture;
-                Kokkos::atomic_fetch_add(&child.bweights(u % k_capture), graph.weights(u) );
-            }
-        );
-        Kokkos::fence();
 
-        */
         return child;
 
     }
