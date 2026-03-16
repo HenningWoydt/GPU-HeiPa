@@ -194,5 +194,5 @@ This project is licensed under the **MIT License** - see the [LICENSE](LICENSE) 
 
 **Copyright (c) 2026 Henning Woydt**
 
-This project includes modified versions of METIS, which is licensed under the Apache License 2.0.  
+This project includes a modified version of METIS, which is licensed under the Apache License 2.0.  
 Copyright (c) Regents of the University of Minnesota.
