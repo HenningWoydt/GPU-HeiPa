@@ -135,6 +135,23 @@ namespace GPU_HeiPa {
         return max_val;
     }
 
+    inline weight_t max_weight(const Partition &partition, Kokkos::Cuda &exec_space) {
+        weight_t max_val = 0;
+
+        Kokkos::parallel_reduce(
+            "compute_max_weight",
+            Kokkos::RangePolicy<Kokkos::Cuda>(exec_space, 0, partition.k),
+            KOKKOS_LAMBDA(const partition_t i, weight_t &local_max) {
+                                    if (partition.bweights(i) > local_max) {
+                                        local_max = partition.bweights(i);
+                                    }
+                                },
+                                Kokkos::Max<weight_t>(max_val)
+        );
+
+        return max_val;
+    }
+
     inline partition_t n_empty_blocks(const Partition &partition) {
         partition_t s = 0;
 

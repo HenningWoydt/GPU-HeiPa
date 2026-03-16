@@ -10,7 +10,7 @@ build/
 data/
 
 extern/
-
+tests/
 res/
 .clangd
 out.txt

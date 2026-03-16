@@ -72,6 +72,9 @@ namespace GPU_HeiPa {
         u32 num_crossovers = 1;
         u32 num_parents = 2;
         u32 tournament_size = 2;
+
+        size_t orga_stack = num_cpu_threads;
+        size_t partition_stack = num_cpu_threads + 1;
         
 
         std::vector<Partition> partitions = std::vector<Partition>(num_individuals);
@@ -263,16 +266,31 @@ namespace GPU_HeiPa {
         HostPartition solve(HostGraph &host_g) {
             auto sp = get_time_point();
 
-            std::vector<KokkosMemoryStack> mem_stacks(num_cpu_threads);
+            std::vector<KokkosMemoryStack> mem_stacks(num_cpu_threads + 2 );
 
-            //! maybe adjust sizes here, only memstack 0 needs a lot of space...
+            //! maybe adjust sizes here
             for (size_t i = 0; i < num_cpu_threads; ++i) {
                 mem_stacks[i] = initialize_kokkos_memory_stack(
-                    30 * 10* (size_t) host_g.n * sizeof(vertex_t) +
-                    10 * 10*(size_t) host_g.m * sizeof(vertex_t),
+                    10 * (size_t) host_g.n * sizeof(vertex_t) +
+                    10 *(size_t) host_g.m * sizeof(vertex_t),
                     "Stack_" + std::to_string(i)
                 );
             }
+
+            //! use this for the coarsening and mapping and stuff
+            mem_stacks[ orga_stack ] = initialize_kokkos_memory_stack(
+                    30 * (size_t) host_g.n * sizeof(vertex_t) +
+                    10 *(size_t) host_g.m * sizeof(vertex_t),
+                    "Stack for mappings and graphs"
+                );
+            
+            //! use this to hold all partitions!
+            mem_stacks[ partition_stack ] = initialize_kokkos_memory_stack(
+                    ( num_individuals + 5 ) * (size_t) host_g.n * sizeof(vertex_t) +
+                    10 *(size_t) host_g.m * sizeof(vertex_t),
+                    "Stack for partitions" 
+                );
+
             
             internal_solve(host_g, mem_stacks);
 
@@ -319,13 +337,13 @@ namespace GPU_HeiPa {
                 ScopedTimer _t("misc", "Solver", "free_memory");
 
                 for (size_t i = num_individuals; i-- > 0; ) {
-                    free_partition(partitions[i], mem_stacks[0]);
+                    free_partition(partitions[i], mem_stacks[ partition_stack ]);
                 }
 
-                free_graph(graphs.back(), mem_stacks[0]);
+                free_graph(graphs.back(), mem_stacks[ orga_stack ]);
                 graphs.pop_back();
 
-                for(size_t i= 0; i < num_cpu_threads ; ++i ) {
+                for(size_t i= 0; i < num_cpu_threads + 2 ; ++i ) {
    
                     assert_is_empty(mem_stacks[i]);
                     destroy(mem_stacks[i]);
@@ -384,7 +402,7 @@ namespace GPU_HeiPa {
     private:
         void internal_solve(HostGraph &host_g, std::vector<KokkosMemoryStack> &mem_stacks) {
             init_streams();
-            initialize(host_g, mem_stacks[0]);
+            initialize(host_g, mem_stacks);
 
 
             const partition_t c = 8;
@@ -399,8 +417,8 @@ namespace GPU_HeiPa {
                 level_infos[level].m = graphs.back().m;
 #endif
 
-                coarsening(level, mem_stacks[0]);
-                contraction(level, mem_stacks[0]);
+                coarsening(level, mem_stacks[ orga_stack ]);
+                contraction(level, mem_stacks[ orga_stack ]);
 
                 level += 1;
             }
@@ -419,6 +437,7 @@ namespace GPU_HeiPa {
             for(size_t i = 0; i < num_individuals ; ++i) {
                 size_t tid = static_cast<size_t>(  omp_get_thread_num() );
                 initial_partitioning( i, tid );
+                
             }
             ScopedTimer _t("initial_partitioning", "Partition", "first_stats");
 
@@ -449,7 +468,7 @@ namespace GPU_HeiPa {
                         uncontraction( level, i, tid ); 
                     }
                     
-                    free_after_uncontraction(mem_stacks[0]); 
+                    free_after_uncontraction(mem_stacks[ orga_stack ]); 
                     
                     
                     uncontraction_ms += get_milli_seconds(p, get_time_point());
@@ -479,11 +498,18 @@ namespace GPU_HeiPa {
 #endif
                 }
 
+                {
+                   // std::cout << "Edge cuts of all individuals in level " << level  << ": ";
+                   // for (size_t i = 0; i < curr_edge_cut.size(); ++i) {
+                   //     std::cout << curr_edge_cut[i];
+                   //     if (i + 1 < curr_edge_cut.size()) std::cout << ", ";
+                   // }
+                   // std::cout << std::endl;
+                }
 
                 {
                     
-                    if (level == 2)
-                        memetic_refinement(level, mem_stacks[1]);
+                    memetic_refinement(level, mem_stacks[ partition_stack ]);
                     
                     
                 }
@@ -523,7 +549,7 @@ namespace GPU_HeiPa {
  
         }
 
-        void initialize(HostGraph &host_g, KokkosMemoryStack &mem_stack) {
+        void initialize(HostGraph &host_g, std::vector<KokkosMemoryStack> &mem_stacks) {
             auto p = get_time_point();
 
             n = host_g.n;
@@ -534,11 +560,11 @@ namespace GPU_HeiPa {
 
             f64 up_ms = 0;
             
-            graphs.emplace_back(from_HostGraph(host_g, mem_stack, up_ms));
+            graphs.emplace_back(from_HostGraph(host_g, mem_stacks[ orga_stack ], up_ms));
 
     
             for(size_t i = 0; i < num_individuals ; ++i) {
-                partitions[i] = initialize_partition(n, k, lmax, mem_stack);
+                partitions[i] = initialize_partition(n, k, lmax, mem_stacks[ partition_stack ]);
             }
 
 
@@ -552,8 +578,7 @@ namespace GPU_HeiPa {
         void coarsening(u32 level, KokkosMemoryStack &mem_stack) {
             auto p = get_time_point();
 
-            //! only need one of these right?
-            //! shouldnt matter which partition i pass, since this function doesnt use it anyway
+
             mappings.emplace_back(two_hop_matcher_get_mapping(graphs.back(), partitions[0], lmax, mem_stack));
 
             Kokkos::fence();
@@ -594,9 +619,12 @@ namespace GPU_HeiPa {
 
             recalculate_weights(partitions[individual_id], graphs.back());
             
-            initial_edge_cut[individual_id] = edge_cut(graphs.back(), partitions[individual_id]); //! only reads graph and partition
+            //! these calls are done on the GPU
+            //! i think if multiple threads submit work to the same stream somthing goes wrong!
+            initial_edge_cut[individual_id] = edge_cut(graphs.back(), partitions[individual_id], exec_spaces[tid]); //! only reads graph and partition
             curr_edge_cut[individual_id] = initial_edge_cut[individual_id]; //! threadlocal variable
-            initial_max_block_weight[individual_id] = max_weight(partitions[individual_id]); //! only reads graph and partition
+
+            initial_max_block_weight[individual_id] = max_weight(partitions[individual_id], exec_spaces[tid] ); //! only reads graph and partition
             curr_max_block_weight[individual_id] = initial_max_block_weight[individual_id]; //! threadlocal variable
 
             exec_spaces[tid].fence();
@@ -667,6 +695,10 @@ namespace GPU_HeiPa {
                 Partition offspring = backbone_based_crossover( graphs.back(), parent_ids, partitions, k, lmax, mem_stack );
 
                 edge_cut_offspring[i] =  edge_cut(graphs.back(), offspring);
+
+               // std::cout << "Edge cut of offspring " << i << ": " << edge_cut_offspring[i] << std::endl;
+
+
                 max_block_weight_offspring[i] = max_weight(offspring);
 
                 auto pair = jet_refine( graphs.back(), offspring, k, lmax, use_ultra, level, 
@@ -674,6 +706,11 @@ namespace GPU_HeiPa {
 
                 edge_cut_offspring[i] = pair.first;
                 max_block_weight_offspring[i] = pair.second;
+
+                //std::cout << "Edge cut of offspring after refinement " << i << ": " << edge_cut_offspring[i] << std::endl;
+
+
+                assert_state_after_partition(graphs.back(), offspring, config.k);
 
                 UpdatePopulation(offspring, mem_stack, i);
 
@@ -684,7 +721,7 @@ namespace GPU_HeiPa {
 
         
 
-
+        //! bug happens even if i dont call this function
         //TODO: add distance stuff
         void UpdatePopulation(
             Partition &offspring, 

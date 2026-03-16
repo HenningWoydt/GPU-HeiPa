@@ -82,6 +82,9 @@ set(CMAKE_CXX_FLAGS_RELEASE "-O3 -DNDEBUG -march=native -pipe -finline-functions
 set(CMAKE_CXX_FLAGS_RELWITHDEBINFO "-O3 -march=native -DNDEBUG -pipe -fno-inline-functions -ftree-vectorize -funroll-loops -falign-loops -fno-rtti -Wall -Wextra -pedantic -Wno-unused-variable -Wno-unused-parameter -Wconversion -Wsign-conversion -Wfloat-conversion")
 set(CMAKE_CXX_FLAGS_DEBUG "-g -march=native -pipe -Wall -Wextra -Wno-unused-variable -Wno-unused-parameter -Wconversion -Wsign-conversion -Wfloat-conversion -pedantic")
 
+option(ENABLE_PROFILER "Enable profiler" OFF)
+option(ASSERT_ENABLED "Enable assertions" OFF)
+
 file(GLOB_RECURSE SOURCES CONFIGURE_DEPENDS "src/*.cpp")
 file(GLOB_RECURSE HEADERS CONFIGURE_DEPENDS "src/*.h")
 
@@ -138,4 +141,5 @@ target_compile_definitions(GPU-HeiPa PRIVATE
 
 target_compile_definitions(GPU-HeiPa-memetic PRIVATE
         ENABLE_PROFILER=$<IF:$<BOOL:${ENABLE_PROFILER}>,1,0>
+        ASSERT_ENABLED=$<IF:$<BOOL:${ASSERT_ENABLED}>,1,0>
 )

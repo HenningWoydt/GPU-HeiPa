@@ -87,6 +87,30 @@ namespace GPU_HeiPa {
         return sum / 2;
     }
 
+    inline weight_t edge_cut(const Graph &g,
+                             const Partition &partition,
+                             Kokkos::Cuda &exec_space) {
+        weight_t sum = 0;
+
+        Kokkos::parallel_reduce("edge_cut",
+            Kokkos::RangePolicy<Kokkos::Cuda>(exec_space, 0, g.m),
+            KOKKOS_LAMBDA(const u32 i, weight_t &local_sum) {
+            vertex_t u = g.edges_u(i);
+            vertex_t v = g.edges_v(i);
+            weight_t w = g.edges_w(i);
+
+            partition_t u_id = partition.map(u);
+            partition_t v_id = partition.map(v);
+
+            local_sum += w * (u_id != v_id);
+        }, sum);
+        Kokkos::fence();
+
+        return sum / 2;
+    }
+
+
+
     inline weight_t edge_cut_update(weight_t old_edge_cut,
                                     const Graph &g,
                                     const Partition &partition,

@@ -21,7 +21,7 @@ struct KeyTuple {
 };
 
     inline int tournament_selection(
-        std::vector<weight_t> &fitness_values,
+        const std::vector<weight_t> &fitness_values,
         u32 tournament_size
     ) {
         
