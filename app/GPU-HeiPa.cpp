@@ -37,7 +37,7 @@ int main(int argc, char *argv[]) {
     auto sp = get_time_point();
     std::ios::sync_with_stdio(false);
     std::cout.tie(nullptr);
-    int verbose_level = 1;
+    int verbose_level = 2;
     //
     {
         ScopedTimer _t("io", "main", "Kokkos::initialize");
@@ -92,7 +92,7 @@ int main(int argc, char *argv[]) {
         config = Configuration(argc, argv);
     }
     
-    // config.verbose_level = 2;
+    config.verbose_level = 2;
     
     verbose_level = config.verbose_level;
 

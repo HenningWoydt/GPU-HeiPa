@@ -69,7 +69,9 @@ namespace GPU_HeiPa {
 
         size_t num_cpu_threads = 4;
         size_t num_individuals = 4;
-        int num_crossovers = 1;
+        u32 num_crossovers = 1;
+        u32 num_parents = 2;
+        u32 tournament_size = 2;
         
 
         std::vector<Partition> partitions = std::vector<Partition>(num_individuals);
@@ -82,6 +84,9 @@ namespace GPU_HeiPa {
         std::vector<weight_t> curr_max_block_weight = std::vector<weight_t>(num_individuals, 0);
         std::vector<weight_t> initial_edge_cut = std::vector<weight_t>(num_individuals, 0);
         std::vector<weight_t> initial_max_block_weight = std::vector<weight_t>(num_individuals, 0);
+
+        std::vector<weight_t> edge_cut_offspring = std::vector<weight_t>(num_crossovers, 0);
+        std::vector<weight_t> max_block_weight_offspring = std::vector<weight_t>(num_crossovers, 0);
 
         f64 down_up_load_ms = 0.0;
         f64 misc_ms = 0.0;
@@ -639,26 +644,38 @@ namespace GPU_HeiPa {
 
         void memetic_refinement(u32 level, KokkosMemoryStack &mem_stack) {
 
-            //!
-            //! No need to determine fitness of the individuals,
-            //! we already store these values in "curr_edge_cut" !!
 
-            for(int i = 0; i < num_crossovers; ++i) {
+            for(u32 i = 0; i < num_crossovers; ++i) {
 
-                // need to determine parents (maybe just an index array into partitions!)
+                
                 std::vector<int> parent_ids;
-                // parent_indices.push_back( tournament_selection() );
-                // stub for now:
-                parent_ids.push_back(0);
-                parent_ids.push_back(1);
+
+                for(u32 j= 0; j < num_parents; ++j) {
+                    parent_ids.push_back( tournament_selection( curr_edge_cut , tournament_size) );
+                }
+
+                // Ensure parent_ids[0] != parent_ids[1]
+                if (parent_ids.size() == 2 && parent_ids[0] == parent_ids[1]) {
+                    int new_parent = parent_ids[0];
+                    while (new_parent == parent_ids[0]) {
+                        new_parent = static_cast<int>(rand() % num_individuals);
+                    }
+                    parent_ids[1] = new_parent;
+                }
 
 
                 Partition offspring = backbone_based_crossover( graphs.back(), parent_ids, partitions, k, lmax, mem_stack );
-                // determine edgecut and max block weight 
-                // pass these values instead of zeros
-                // jet_refine( graphs.back(), offspring, k, lmax, use_ultra, level, 0, 0, mem_stack, exec_spaces[0] );
 
-                UpdatePopulation(offspring, mem_stack);
+                edge_cut_offspring[i] =  edge_cut(graphs.back(), offspring);
+                max_block_weight_offspring[i] = max_weight(offspring);
+
+                auto pair = jet_refine( graphs.back(), offspring, k, lmax, use_ultra, level, 
+                                        edge_cut_offspring[i], max_block_weight_offspring[i], mem_stack, exec_spaces[0] );
+
+                edge_cut_offspring[i] = pair.first;
+                max_block_weight_offspring[i] = pair.second;
+
+                UpdatePopulation(offspring, mem_stack, i);
 
             }
 
@@ -668,24 +685,40 @@ namespace GPU_HeiPa {
         
 
 
+        //TODO: add distance stuff
+        void UpdatePopulation(
+            Partition &offspring, 
+            KokkosMemoryStack &mem_stack,
+            u32 offspring_id
+        
+        ) {
 
-        void UpdatePopulation(Partition &offspring, KokkosMemoryStack &mem_stack) {
 
-            // if offspring_fitness < population_fitness_best
-            // insert offspring into population
-            // ... do the whole distance stuff too...
+            size_t worst_id = 0;
+            weight_t worst_edgecut = curr_edge_cut[0];
+            for (size_t i = 1; i < curr_edge_cut.size(); ++i) {
+                if (curr_edge_cut[i] > worst_edgecut) {
+                    worst_edgecut = curr_edge_cut[i];
+                    worst_id = i;
+                }
+            }
+
+
+            // for now: replace worst individual
+            if( edge_cut_offspring[offspring_id] < worst_edgecut ) {
+                
+                auto rN = std::make_pair<size_t, size_t>(0, graphs.back().n);
+                deep_copy(Kokkos::subview(partitions[ worst_id ].map, rN), Kokkos::subview(offspring.map, rN));
+                deep_copy(partitions[ worst_id ].bweights, offspring.bweights);
             
-            
-            
-            auto rN = std::make_pair<size_t, size_t>(0, graphs.back().n);
-            deep_copy(Kokkos::subview(partitions[0].map, rN), Kokkos::subview(offspring.map, rN));
-            deep_copy(partitions[0].bweights, offspring.bweights);
+                curr_edge_cut[ worst_id  ] = edge_cut_offspring[offspring_id];
+                curr_max_block_weight[ worst_id ] = max_block_weight_offspring[offspring_id];
+
+            }
+                        
             free_partition(offspring, mem_stack);
 
-            curr_edge_cut[0] =  edge_cut(graphs.back(), partitions[0]);
-            curr_max_block_weight[0] = max_weight(partitions[0]);
-
-
+            
             return;
         }
 
