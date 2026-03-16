@@ -301,6 +301,7 @@ namespace GPU_HeiPa {
             pop_back(mem_stack);
             pop_back(mem_stack);
             pop_back(mem_stack);
+            pop_back(mem_stack);
 
             KOKKOS_PROFILE_FENCE();
         }
