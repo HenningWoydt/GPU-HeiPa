@@ -1,6 +1,6 @@
 <div align="center">
 
-# **GPU**-accelerated Heidelberg **Partitioning** and **Process Mapping**
+# **GPU**-Accelerated Heidelberg **Partitioning** and **Process Mapping**
 
 [![License: MIT](https://img.shields.io/badge/License-MIT-blue.svg)](LICENSE)
 [![C++20](https://img.shields.io/badge/C%2B%2B-20-blue.svg)](https://isocpp.org/)
