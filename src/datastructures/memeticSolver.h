@@ -98,6 +98,7 @@ namespace GPU_HeiPa {
         f64 initial_partitioning_ms = 0.0;
         f64 uncontraction_ms = 0.0;
         f64 refinement_ms = 0.0;
+        f64 memetic_ms = 0.0 ;
 
         struct level_info {
             u32 level;
@@ -115,6 +116,7 @@ namespace GPU_HeiPa {
             f64 t_contraction;
             f64 t_uncontraction;
             f64 t_refinement;
+            // f64 t_memetic;
         };
 
 #if ENABLE_PROFILER
@@ -381,14 +383,15 @@ namespace GPU_HeiPa {
             }
             if (config.verbose_level >= 1) {
                 std::cout << "------- Time -------" << std::endl;
-                std::cout << "Coarsening        : " << coarsening_ms << std::endl; //! -------------------
+                std::cout << "Coarsening        : " << coarsening_ms << std::endl; 
                 std::cout << "Contraction       : " << contraction_ms << std::endl;
-                std::cout << "Init. Part.       : " << initial_partitioning_ms << std::endl; //! these timings need special attention
+                std::cout << "Init. Part.       : " << initial_partitioning_ms << std::endl; 
                 std::cout << "Uncontraction     : " << uncontraction_ms << std::endl;
-                std::cout << "Refinement        : " << refinement_ms << std::endl;  //! ---------------
+                std::cout << "Refinement        : " << refinement_ms << std::endl;  
+                std::cout << "Memetic stuff     : " << memetic_ms << std::endl;  
                 std::cout << "Down/Upload       : " << down_up_load_ms << std::endl;
                 std::cout << "Misc              : " << misc_ms << std::endl;
-                std::cout << "ALL               : " << coarsening_ms + contraction_ms + initial_partitioning_ms + uncontraction_ms + refinement_ms + down_up_load_ms + misc_ms << std::endl;
+                std::cout << "ALL               : " << coarsening_ms + contraction_ms + initial_partitioning_ms + uncontraction_ms + refinement_ms + memetic_ms + down_up_load_ms + misc_ms << std::endl;
             }
             if (config.verbose_level >= 2) {
 #if ENABLE_PROFILER
@@ -486,10 +489,7 @@ namespace GPU_HeiPa {
                     #pragma omp parallel for num_threads(num_cpu_threads)
                     for(size_t i = 0; i < num_individuals ; ++i) {
                         size_t tid = static_cast<size_t>(  omp_get_thread_num() );
-
-        //                refinement(level, mem_stacks[i], i, i); //! mem_stacks[i] should be tid not i
                         refinement(level, mem_stacks[tid], i, tid ); 
-                    
                     }
 
                     refinement_ms += get_milli_seconds(p, get_time_point());
@@ -508,16 +508,16 @@ namespace GPU_HeiPa {
                 }
 
                 {
+                    auto p = get_time_point();
                     
                     memetic_refinement(level, mem_stacks[ partition_stack ]);
                     
-                    
+                    memetic_ms += get_milli_seconds(p, get_time_point());
                 }
 
 
 
 #if ENABLE_PROFILER
-               //TODO: make it work for partition vector
                // level_infos[level].max_b_weight = max_weight(partition);
                // level_infos[level].imb = (f64) level_infos[level].max_b_weight / ((f64) host_g.g_weight / (f64) config.k);
                // level_infos[level].edge_cut = edge_cut(graphs.back(), partition);
@@ -619,13 +619,12 @@ namespace GPU_HeiPa {
 
             recalculate_weights(partitions[individual_id], graphs.back());
             
-            //! these calls are done on the GPU
-            //! i think if multiple threads submit work to the same stream somthing goes wrong!
-            initial_edge_cut[individual_id] = edge_cut(graphs.back(), partitions[individual_id], exec_spaces[tid]); //! only reads graph and partition
-            curr_edge_cut[individual_id] = initial_edge_cut[individual_id]; //! threadlocal variable
+            
+            initial_edge_cut[individual_id] = edge_cut(graphs.back(), partitions[individual_id], exec_spaces[tid]); 
+            curr_edge_cut[individual_id] = initial_edge_cut[individual_id]; 
 
-            initial_max_block_weight[individual_id] = max_weight(partitions[individual_id], exec_spaces[tid] ); //! only reads graph and partition
-            curr_max_block_weight[individual_id] = initial_max_block_weight[individual_id]; //! threadlocal variable
+            initial_max_block_weight[individual_id] = max_weight(partitions[individual_id], exec_spaces[tid] ); 
+            curr_max_block_weight[individual_id] = initial_max_block_weight[individual_id]; 
 
             exec_spaces[tid].fence();
 
@@ -694,6 +693,16 @@ namespace GPU_HeiPa {
 
                 Partition offspring = backbone_based_crossover( graphs.back(), parent_ids, partitions, k, lmax, mem_stack );
 
+               // auto bweights_host = Kokkos::create_mirror_view(offspring.bweights);
+               // Kokkos::deep_copy(bweights_host, offspring.bweights);
+//
+               // std::cout << "Block weights of offspring " << i << ": ";
+               // for (partition_t j = 0; j < k; ++j) {
+               //     std::cout << bweights_host(j);
+               //     if (j + 1 < k) std::cout << ", ";
+               // }
+               // std::cout << std::endl;
+
                 edge_cut_offspring[i] =  edge_cut(graphs.back(), offspring);
 
                // std::cout << "Edge cut of offspring " << i << ": " << edge_cut_offspring[i] << std::endl;
@@ -721,7 +730,6 @@ namespace GPU_HeiPa {
 
         
 
-        //! bug happens even if i dont call this function
         //TODO: add distance stuff
         void UpdatePopulation(
             Partition &offspring, 

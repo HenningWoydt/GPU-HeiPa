@@ -7,6 +7,7 @@
 #include <unordered_set>
 #include <random>
 #include <vector>
+#include <Kokkos_Random.hpp>
 
 #include "../utility/definitions.h"
 #include "../datastructures/partition.h"
@@ -22,7 +23,7 @@ struct KeyTuple {
 
     inline int tournament_selection(
         const std::vector<weight_t> &fitness_values,
-        u32 tournament_size
+        const u32 tournament_size
     ) {
         
         // get num_parents random numbers between [0, num_individuals)
@@ -110,6 +111,8 @@ struct KeyTuple {
         Partition child;
         child = initialize_partition( graph.n , k, lmax, mem_stack);
 
+        Kokkos::Random_XorShift64_Pool<> random_pool(12345);
+
         //setup: get the vectors onto the GPU
         auto parent_ids_device = Kokkos::View<int*, Kokkos::MemoryTraits<Kokkos::Unmanaged>>(
             (int *) get_chunk_back(mem_stack, sizeof(int) * parent_ids.size()), 
@@ -131,6 +134,9 @@ struct KeyTuple {
         auto buckets = Kokkos::View<KeyTuple *, Kokkos::MemoryTraits<Kokkos::Unmanaged>>(
             (KeyTuple *) get_chunk_back(mem_stack, sizeof(KeyTuple) * num_buckets), num_buckets 
         );
+
+        UnmanagedDeviceF64 distribution = UnmanagedDeviceF64((f64 *) get_chunk_back(mem_stack, sizeof(f64) * k), k);
+
       
         
         Kokkos::parallel_for(
@@ -157,7 +163,7 @@ struct KeyTuple {
         });
 
 
-
+        // assign vertices of the backbone to the offspring
         Kokkos::parallel_for(
             "create new offspring", graph.n,
             KOKKOS_LAMBDA(vertex_t u) {
@@ -169,21 +175,73 @@ struct KeyTuple {
                     if( key == buckets(i).key ){
                         id = i;
                         in_backbone = true;
+                        Kokkos::atomic_fetch_add( &child.bweights(id), graph.weights(u) );
                         break;
                     }
                 }
 
                 if( !in_backbone ){
-                    //! this kind of works quite well for some reason lol
-                    id = (u % k); //TODO: determine random id between 0 and k-1
+                    id = 5*k ; //! mark as not assigned 
                 }
 
                 child.map(u) = id;
-                Kokkos::atomic_fetch_add( &child.bweights(id), graph.weights(u) );
+                                    
             }
         );
 
-        
+
+
+        Kokkos::parallel_scan(
+            "create distribution", k,
+            KOKKOS_LAMBDA(partition_t id, f64 &update, bool final) {
+
+                weight_t sum = 0;
+                weight_t inverse_weight = ( lmax - child.bweights(id) );
+
+                for(partition_t i = 0; i < k; ++i) {
+                    sum += ( lmax - child.bweights(i) );
+                }
+
+                update += static_cast<double>(inverse_weight) / static_cast<double>(sum); 
+                if(final) {
+                    distribution(id) = update;
+                }
+                
+            }
+        );
+
+       // auto distribution_host = Kokkos::create_mirror_view(distribution);
+       // Kokkos::deep_copy(distribution_host, distribution);
+//
+       // for (partition_t i = 0; i < k; ++i) {
+       //     std::cout << "distribution[" << i << "] = " << distribution_host(i) << std::endl;
+       // }
+
+        // assign remaining vertices
+        Kokkos::parallel_for(
+            "assign leftovers", graph.n,
+            KOKKOS_LAMBDA(vertex_t u) {
+                
+                if(child.map(u) == 5*k) {
+                    
+                    auto gen = random_pool.get_state();
+                    f64 rand = gen.drand(0.0, 1.0);
+                    random_pool.free_state(gen);
+                    
+
+                    for(u32 i = 0; i < k; ++i) {
+                        if( ( rand < distribution(i) ) || ( i == (k-1) ) ) {
+                            child.map(u) = i;
+                            Kokkos::atomic_fetch_add( &child.bweights(i), graph.weights(u) );
+                            break;
+                        }
+                    }
+
+                }
+            }
+        );
+
+        pop_back(mem_stack); //rm distribution
         pop_back(mem_stack); //rm buckets
         pop_back(mem_stack); //rm population
         pop_back(mem_stack); //rm parent_ids
