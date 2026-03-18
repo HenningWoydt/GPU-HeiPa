@@ -685,6 +685,7 @@ namespace GPU_HeiPa {
             return (curr_edge_cut[id] + BETA/min_distances[id]);
         }
 
+
         void memetic_refinement(u32 level, KokkosMemoryStack &mem_stack) {
 
 
@@ -769,15 +770,15 @@ namespace GPU_HeiPa {
 
             u32 offspring_distance = determine_min_distance_offspring(graphs.back(), partitions, offspring, k, mem_stack);
 
-            std::cout << "Min distances: ";
-            for (size_t i = 0; i < min_distances.size(); ++i) {
-                std::cout << min_distances[i];
-                if (i + 1 < min_distances.size()) std::cout << ", ";
-            }
-            std::cout << std::endl;
-
-            std::cout << "min distance: " << min_distance_population << std::endl;
-            std::cout << "Offspring distance: " << offspring_distance << std::endl;
+            // std::cout << "Min distances: ";
+            // for (size_t i = 0; i < min_distances.size(); ++i) {
+            //     std::cout << min_distances[i];
+            //     if (i + 1 < min_distances.size()) std::cout << ", ";
+            // }
+            // std::cout << std::endl;
+// 
+            // std::cout << "min distance: " << min_distance_population << std::endl;
+            // std::cout << "Offspring distance: " << offspring_distance << std::endl;
             
 
             // weight_t worst_edgecut = curr_edge_cut[0];

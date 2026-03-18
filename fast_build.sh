@@ -31,7 +31,7 @@
           -DCMAKE_PREFIX_PATH="${ROOT}/extern/local/kokkos;${ROOT}/extern/local/kokkos-kernels" \
           -DCMAKE_CXX_STANDARD=20 \
           -DCMAKE_CXX_EXTENSIONS=OFF \
-          -DENABLE_PROFILER=1 \
+          -DENABLE_PROFILER=0 \
           -DASSERT_ENABLED=0
  #cmake --build . --parallel "$JOBS" --target GPU-HeiPa
  cmake --build . --parallel "$JOBS" --target GPU-HeiPa-memetic

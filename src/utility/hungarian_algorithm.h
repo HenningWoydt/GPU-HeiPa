@@ -9,6 +9,10 @@
 
 namespace GPU_HeiPa {
 
+/*
+    This was claudecoded, because i didnt find a library which implements it the way i want
+    + i want to minimize dependencies
+*/
 class HungarianAlgorithm {
 public:
     /**
@@ -19,17 +23,13 @@ public:
      * @param n: dimension of the square matrix (n x n)
      * @return: maximum total weight of the optimal matching
      */
-    static weight_t solve(const u32* weight_matrix, u32 n) {
+    static u32 solve(const u32* weight_matrix, u32 n) {
         if (n == 0) return 0;
-        if (n == 1) return static_cast<weight_t>(weight_matrix[0]);
+        if (n == 1) return weight_matrix[0];
 
         std::vector<u32> matching(n);
-        solve_with_matching(weight_matrix, n, matching);
+        u32 total = solve_with_matching(weight_matrix, n, matching);
         
-        weight_t total = 0;
-        for (u32 i = 0; i < n; ++i) {
-            total += static_cast<weight_t>(weight_matrix[i * n + matching[i]]);
-        }
         return total;
     }
 
@@ -41,7 +41,7 @@ public:
      * @param matching: output array where matching[i] = j means row i is matched to column j
      * @return: maximum total weight
      */
-    static weight_t solve_with_matching(
+    static u32 solve_with_matching(
         const u32* weight_matrix, 
         u32 n, 
         std::vector<u32>& matching
@@ -49,7 +49,7 @@ public:
         if (n == 0) return 0;
         if (n == 1) {
             matching.assign(1, 0);
-            return static_cast<weight_t>(weight_matrix[0]);
+            return weight_matrix[0];
         }
 
         // Create cost matrix: cost[i][j] = max_val - weight[i][j]
@@ -123,9 +123,9 @@ public:
             }
         }
 
-        weight_t total = 0;
+        u32 total = 0;
         for (u32 i = 0; i < n; ++i) {
-            total += static_cast<weight_t>(weight_matrix[i * n + matching[i]]);
+            total += weight_matrix[i * n + matching[i]];
         }
 
         return total;
@@ -137,6 +137,6 @@ private:
     }
 };
 
-} // namespace GPU_HeiPa
+} 
 
 #endif // GPU_HEIPA_HUNGARIAN_ALGORITHM_H

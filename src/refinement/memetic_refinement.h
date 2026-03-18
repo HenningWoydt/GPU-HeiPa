@@ -264,7 +264,7 @@ struct KeyTuple {
      * @param k: dimension of the square matrix
      * @return: maximum weight of the optimal matching
      */
-    inline weight_t max_matching(
+    inline u32 max_matching(
         const UnmanagedDeviceU32 &sim_matrix,
         const u32 k
     ) {
@@ -280,7 +280,7 @@ struct KeyTuple {
         }
 
         // Apply Hungarian algorithm for maximum weight matching
-        weight_t result = HungarianAlgorithm::solve(matrix_host.data(), k);
+        u32 result = HungarianAlgorithm::solve(matrix_host.data(), k);
         
         return result;
     }
@@ -319,7 +319,12 @@ struct KeyTuple {
         Kokkos::fence();
 
         // get maximum matching on matrix
-        u32 similarity = static_cast<u32>(max_matching(sim_matrix, k));
+        u32 similarity = max_matching(sim_matrix, k);
+
+        // Print similarity matrix and similarity value
+        auto sim_matrix_host = Kokkos::create_mirror_view(sim_matrix);
+        Kokkos::deep_copy(sim_matrix_host, sim_matrix);
+
         distance = graph.n - similarity;
 
         pop_back(mem_stack); //rm sim_matrix
@@ -374,6 +379,7 @@ struct KeyTuple {
         //! #pragma omp parallel collapse
         for(size_t i = 0; i < pop_size; ++i) {
             for(size_t j = i + 1; j < pop_size; ++j) {
+            
                 u32 dis = determine_distance(
                         graph,
                         population[i],
