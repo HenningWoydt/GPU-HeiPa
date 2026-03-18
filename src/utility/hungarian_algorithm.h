@@ -66,7 +66,8 @@ public:
         }
 
         // Hungarian algorithm implementation
-        std::vector<s64> u(n + 1, 0), v(n + 1, 0), p(n + 1, 0), way(n + 1, 0);
+        std::vector<s64> u(n + 1, 0), v(n + 1, 0);
+        std::vector<u32> p(n + 1, 0), way(n + 1, 0);
 
         for (u32 i = 1; i <= n; ++i) {
             p[0] = i;

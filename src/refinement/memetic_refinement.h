@@ -319,7 +319,7 @@ struct KeyTuple {
         Kokkos::fence();
 
         // get maximum matching on matrix
-        u32 similarity = max_matching(sim_matrix, k);
+        u32 similarity = static_cast<u32>(max_matching(sim_matrix, k));
         distance = graph.n - similarity;
 
         pop_back(mem_stack); //rm sim_matrix
@@ -335,12 +335,12 @@ struct KeyTuple {
         partition_t k,
         KokkosMemoryStack &mem_stack
     ) {
-        u32 pop_size = population.size();
+        size_t pop_size = population.size();
         u32 min_distance = std::numeric_limits<u32>::max();
         
         //! you can parallelize this using
         //! an openmp min reduction!
-        for(u32 i= 0; i < pop_size; ++i) {
+        for(size_t i= 0; i < pop_size; ++i) {
             u32 distance = determine_distance(
                     graph,
                     population[i],
@@ -366,14 +366,14 @@ struct KeyTuple {
 
     ) {
 
-        u32 pop_size = population.size();
+        size_t pop_size = population.size();
 
         std::vector<u32> all_distances( pop_size * pop_size, std::numeric_limits<u32>::max());
 
         //! this can be trivially parallelized via
         //! #pragma omp parallel collapse
-        for(u32 i = 0; i < pop_size; ++i) {
-            for(u32 j = i + 1; j < pop_size; ++j) {
+        for(size_t i = 0; i < pop_size; ++i) {
+            for(size_t j = i + 1; j < pop_size; ++j) {
                 u32 dis = determine_distance(
                         graph,
                         population[i],

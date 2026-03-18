@@ -679,7 +679,11 @@ namespace GPU_HeiPa {
             Kokkos::fence();
         }
 
+        f64 determine_goodness_score( size_t id ) {
+            f64 BETA = 0.08 * graphs.back().n ;
 
+            return (curr_edge_cut[id] + BETA/min_distances[id]);
+        }
 
         void memetic_refinement(u32 level, KokkosMemoryStack &mem_stack) {
 
@@ -699,7 +703,7 @@ namespace GPU_HeiPa {
                     if (parent_ids.size() == 2 && parent_ids[0] == parent_ids[1]) {
                         int new_parent = parent_ids[0];
                         while (new_parent == parent_ids[0]) {
-                            new_parent = static_cast<int>(rand() % num_individuals);
+                            new_parent = static_cast<int>(rand() % static_cast<int>(num_individuals));
                         }
                         parent_ids[1] = new_parent;
                     }
@@ -753,7 +757,6 @@ namespace GPU_HeiPa {
 
         
 
-        //TODO: add distance stuff
         void UpdatePopulation(
             Partition &offspring, 
             KokkosMemoryStack &mem_stack,
@@ -777,18 +780,34 @@ namespace GPU_HeiPa {
             std::cout << "Offspring distance: " << offspring_distance << std::endl;
             
 
+            // weight_t worst_edgecut = curr_edge_cut[0];
+            weight_t best_edgecut = curr_edge_cut[0];
+            
             size_t worst_id = 0;
-            weight_t worst_edgecut = curr_edge_cut[0];
+            f64 worst_goodness_score = determine_goodness_score(0);
+
+            f64 curr_goodness_score;
             for (size_t i = 1; i < curr_edge_cut.size(); ++i) {
-                if (curr_edge_cut[i] > worst_edgecut) {
-                    worst_edgecut = curr_edge_cut[i];
+                // if (curr_edge_cut[i] > worst_edgecut) {
+                //     worst_edgecut = curr_edge_cut[i];
+                // }
+
+                if( curr_edge_cut[i] < best_edgecut)
+                    best_edgecut = curr_edge_cut[i];
+
+                curr_goodness_score = determine_goodness_score(i);
+                if( curr_goodness_score > worst_goodness_score) {
+                    worst_goodness_score = curr_goodness_score;
                     worst_id = i;
                 }
+
             }
 
 
-            // for now: replace worst individual
-            if( edge_cut_offspring[offspring_id] < worst_edgecut || ( offspring_distance > min_distance_population )) {
+            if( 
+                (edge_cut_offspring[offspring_id] < best_edgecut) || 
+                ( offspring_distance > min_distance_population )
+            ) {
                 
                 auto rN = std::make_pair<size_t, size_t>(0, graphs.back().n);
                 deep_copy(Kokkos::subview(partitions[ worst_id ].map, rN), Kokkos::subview(offspring.map, rN));
