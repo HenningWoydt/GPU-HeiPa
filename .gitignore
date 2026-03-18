@@ -16,3 +16,4 @@ res/
 out.txt
 
 *.nsys-rep
+test_*.cpp

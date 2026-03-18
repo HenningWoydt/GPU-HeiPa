@@ -91,6 +91,10 @@ namespace GPU_HeiPa {
         std::vector<weight_t> edge_cut_offspring = std::vector<weight_t>(num_crossovers, 0);
         std::vector<weight_t> max_block_weight_offspring = std::vector<weight_t>(num_crossovers, 0);
 
+        // distances:
+        // min_distances[ i ] := the smallest distance of individual i to another individual
+        std::vector<u32> min_distances = std::vector<u32>(num_individuals, 0);
+
         f64 down_up_load_ms = 0.0;
         f64 misc_ms = 0.0;
         f64 coarsening_ms = 0.0; // basst
@@ -757,6 +761,16 @@ namespace GPU_HeiPa {
         
         ) {
 
+            determine_min_distances(graphs.back(), partitions, min_distances, k, mem_stack);
+
+            
+            std::cout << "Min distances: ";
+            for (size_t i = 0; i < min_distances.size(); ++i) {
+                std::cout << min_distances[i];
+                if (i + 1 < min_distances.size()) std::cout << ", ";
+            }
+            std::cout << std::endl;
+            
 
             size_t worst_id = 0;
             weight_t worst_edgecut = curr_edge_cut[0];

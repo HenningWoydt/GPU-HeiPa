@@ -10,6 +10,7 @@
 #include <Kokkos_Random.hpp>
 
 #include "../utility/definitions.h"
+#include "../utility/hungarian_algorithm.h"
 #include "../datastructures/partition.h"
 
 
@@ -253,6 +254,128 @@ struct KeyTuple {
 
 
 
+   
+
+    /**
+     * Compute maximum weight bipartite matching on GPU-allocated matrix
+     * Transfers matrix to CPU and applies Hungarian algorithm
+     * 
+     * @param sim_matrix: GPU-allocated matrix (k x k)
+     * @param k: dimension of the square matrix
+     * @return: maximum weight of the optimal matching
+     */
+    inline weight_t max_matching(
+        const UnmanagedDeviceU32 &sim_matrix,
+        const u32 k
+    ) {
+        if (k == 0) return 0;
+
+        // Copy matrix from GPU to CPU
+        std::vector<u32> matrix_host(k * k);
+        auto sim_matrix_host = Kokkos::create_mirror_view(sim_matrix);
+        Kokkos::deep_copy(sim_matrix_host, sim_matrix);
+        
+        for (u32 i = 0; i < k * k; ++i) {
+            matrix_host[i] = sim_matrix_host(i);
+        }
+
+        // Apply Hungarian algorithm for maximum weight matching
+        weight_t result = HungarianAlgorithm::solve(matrix_host.data(), k);
+        
+        return result;
+    }
+
+
+    inline u32 determine_distance(
+        const Graph &graph,
+        const Partition &A,
+        const Partition &B,
+        const partition_t k,
+        KokkosMemoryStack &mem_stack
+    ) {
+        u32 distance;
+
+        // build matrix
+        auto sim_matrix = UnmanagedDeviceU32((u32 *) get_chunk_back(mem_stack, sizeof(u32) * k * k), k * k);
+
+        Kokkos::parallel_for(
+            "init sim_matrix", k * k,
+            KOKKOS_LAMBDA(u32 index) {
+                sim_matrix(index) = 0;
+            }
+        );
+        Kokkos::fence();
+
+        Kokkos::parallel_for(
+            "fill matrix", graph.n,
+            KOKKOS_LAMBDA(vertex_t u) {
+                u32 row = A.map(u);
+                u32 col = B.map(u);
+
+                Kokkos::atomic_fetch_add(&sim_matrix( row * k + col ), 1);
+                
+            }
+        );
+        Kokkos::fence();
+
+        // get maximum matching on matrix
+        u32 similarity = max_matching(sim_matrix, k);
+        distance = graph.n - similarity;
+
+        pop_back(mem_stack); //rm sim_matrix
+
+        return distance;
+    }
+
+     inline void determine_min_distances(
+        const Graph &graph,
+        const std::vector<Partition> &population,
+        std::vector<u32> &min_distances,
+        partition_t k,
+        KokkosMemoryStack &mem_stack
+
+    ) {
+
+        u32 pop_size = population.size();
+
+        std::vector<u32> all_distances( pop_size * pop_size, std::numeric_limits<u32>::max());
+
+        //! this can be trivially parallelized via
+        //! #pragma omp parallel collapse
+        for(u32 i = 0; i < pop_size; ++i) {
+            for(u32 j = i + 1; j < pop_size; ++j) {
+                u32 dis = determine_distance(
+                        graph,
+                        population[i],
+                        population[j],
+                        k,
+                        mem_stack
+                );
+
+                all_distances[ i * pop_size + j ] = dis;
+                all_distances[ j * pop_size + i ] = dis;
+                
+            }
+        }
+
+        // Print all distances
+        //  for (u32 i = 0; i < pop_size; ++i) {
+        //      for (u32 j = 0; j < pop_size; ++j) {
+        //          std::cout << "Distance[" << i << "][" << j << "] = " 
+        //                    << all_distances[i * pop_size + j] << std::endl;
+        //      }
+        //  }
+
+        for(u32 i = 0; i < pop_size; ++i) {
+            u32 min_val = std::numeric_limits<u32>::max();
+            for(u32 j = 0; j < pop_size; ++j) {
+                min_val = std::min(min_val, all_distances[i * pop_size + j]);
+            }
+            min_distances[i] = min_val;
+        }
+
+        return;
+    }
 }
 
 #endif
