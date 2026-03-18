@@ -761,15 +761,20 @@ namespace GPU_HeiPa {
         
         ) {
 
-            determine_min_distances(graphs.back(), partitions, min_distances, k, mem_stack);
+            determine_min_distances_population(graphs.back(), partitions, min_distances, k, mem_stack);
+            u32 min_distance_population = *std::min_element(min_distances.begin(), min_distances.end());
 
-            
+            u32 offspring_distance = determine_min_distance_offspring(graphs.back(), partitions, offspring, k, mem_stack);
+
             std::cout << "Min distances: ";
             for (size_t i = 0; i < min_distances.size(); ++i) {
                 std::cout << min_distances[i];
                 if (i + 1 < min_distances.size()) std::cout << ", ";
             }
             std::cout << std::endl;
+
+            std::cout << "min distance: " << min_distance_population << std::endl;
+            std::cout << "Offspring distance: " << offspring_distance << std::endl;
             
 
             size_t worst_id = 0;
@@ -783,7 +788,7 @@ namespace GPU_HeiPa {
 
 
             // for now: replace worst individual
-            if( edge_cut_offspring[offspring_id] < worst_edgecut ) {
+            if( edge_cut_offspring[offspring_id] < worst_edgecut || ( offspring_distance > min_distance_population )) {
                 
                 auto rN = std::make_pair<size_t, size_t>(0, graphs.back().n);
                 deep_copy(Kokkos::subview(partitions[ worst_id ].map, rN), Kokkos::subview(offspring.map, rN));

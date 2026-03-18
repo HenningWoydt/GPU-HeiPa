@@ -327,7 +327,37 @@ struct KeyTuple {
         return distance;
     }
 
-     inline void determine_min_distances(
+
+    inline u32 determine_min_distance_offspring(
+        const Graph &graph,
+        const std::vector<Partition> &population,
+        const Partition &offspring,
+        partition_t k,
+        KokkosMemoryStack &mem_stack
+    ) {
+        u32 pop_size = population.size();
+        u32 min_distance = std::numeric_limits<u32>::max();
+        
+        //! you can parallelize this using
+        //! an openmp min reduction!
+        for(u32 i= 0; i < pop_size; ++i) {
+            u32 distance = determine_distance(
+                    graph,
+                    population[i],
+                    offspring,
+                    k,
+                    mem_stack
+            );
+
+            if( distance < min_distance)
+                min_distance = distance;
+        }
+
+
+        return min_distance;
+    }
+
+     inline void determine_min_distances_population(
         const Graph &graph,
         const std::vector<Partition> &population,
         std::vector<u32> &min_distances,
