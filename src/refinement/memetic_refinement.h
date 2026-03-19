@@ -153,6 +153,86 @@ struct KeyTuple {
 
     }
 
+    inline void assign_leftovers_gain_and_weight(
+            const Graph &graph,
+            Partition &child,
+            partition_t k,
+            weight_t lmax,
+            KokkosMemoryStack  &mem_stack
+    ) {
+        // this dermines how much underloaded blocks are weighted
+        // ALPHA = 0 -> only gain, big ALPHA -> only underloaded blocks
+        f64 ALPHA = 2.8 ; 
+        
+        Kokkos::Random_XorShift64_Pool<> random_pool(12345);
+        
+        Kokkos::Cuda exec_space;
+        BlockConn bc = init_BlockConn(graph, child, mem_stack, exec_space);
+
+        //! determine max gain
+        DeviceScalarWeight max_gain = DeviceScalarWeight("highest gain value"); ;
+        Kokkos::parallel_reduce(
+            "determine max gain", bc.size,
+            KOKKOS_LAMBDA(u32 index, weight_t &update) {
+                weight_t val = bc.weights(index);
+                if ( (val > update) && (bc.ids(index) != 5*k) ) {
+                    update = val;
+                }
+            }, Kokkos::Max(max_gain)
+        );
+
+
+        Kokkos::parallel_for(
+            "distribute leftovers", graph.n,
+            KOKKOS_LAMBDA(vertex_t u) {
+
+                // calculate gain
+                if( child.map(u) == 5*k) {
+                    
+                    auto gen = random_pool.get_state();
+                    partition_t best_id = static_cast<partition_t>(gen.urand(0, k));
+                    random_pool.free_state(gen);
+                    
+                    f64 best_score = 0;
+
+                    u32 r_beg = bc.row(u);
+                    u32 r_len = bc.sizes(u);
+                    u32 r_end = r_beg + r_len;
+
+                    for (u32 i = r_beg; i < r_end; ++i) {
+                        partition_t id = bc.ids(i);
+                        if (id == 5*k)
+                            continue;
+                        
+                        weight_t gain = bc.weights(i);
+
+                        //! i think this is actually quite smart, because in the case that
+                        //! child.bweights(id) > lmax, then the right part will get negative
+                        //! -> i.e. overweight blocks are penalized
+                        f64 my_score = gain + (ALPHA * max_gain() * ( (lmax - child.bweights(id)) / lmax ));
+
+                        bool valid = (id != NULL_PART) & (id != HASH_RECLAIM); // single mask
+                        
+                        // Update best if it's a candidate and better
+                        bool better = valid & (my_score > best_score);
+                        best_score = better ? my_score : best_score;
+                        best_id = better ? id : best_id;
+                    }
+
+                    child.map(u) = best_id;
+                    Kokkos::atomic_fetch_add( &child.bweights(best_id), graph.weights(u) );
+                           
+                }
+
+            }
+        );
+
+        free_BlockConn(bc, mem_stack);
+
+        return;
+
+    }
+
     inline void assign_leftovers_favorUnderloadedBlocks(
             const Graph &graph,
             Partition &child,
@@ -355,10 +435,13 @@ struct KeyTuple {
             }
         );
 
+
+
         //! test different strategies:
         //assign_leftovers_favorUnderloadedBlocks(graph, child, k, lmax, mem_stack);
         // assign_leftovers_fullyRandom(graph, child, k);
-        assign_leftovers_gain(graph, child, k, lmax, mem_stack);
+        //assign_leftovers_gain(graph, child, k, lmax, mem_stack);
+        assign_leftovers_gain_and_weight(graph, child, k, lmax, mem_stack);
 
         pop_back(mem_stack); //rm buckets
         pop_back(mem_stack); //rm population
