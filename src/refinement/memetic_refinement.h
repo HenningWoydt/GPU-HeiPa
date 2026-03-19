@@ -56,6 +56,112 @@ struct KeyTuple {
 
     }
 
+
+
+
+    //! -------------------------------------------------------------------------------------------------
+    //! ----------------------- different ways to distribute leftover vertices: -------------------------
+    //! -------------------------------------------------------------------------------------------------
+
+
+    inline void assign_leftovers_fullyRandom(
+            const Graph &graph,
+            Partition &child,
+            partition_t k
+    ){
+        Kokkos::Random_XorShift64_Pool<> random_pool(12345);
+        
+        // assign remaining vertices
+        Kokkos::parallel_for(
+            "assign leftovers", graph.n,
+            KOKKOS_LAMBDA(vertex_t u) {
+                
+                if(child.map(u) == 5*k) {
+                    
+                    auto gen = random_pool.get_state();
+                    partition_t id = static_cast<partition_t>(gen.urand(0, k));
+                    random_pool.free_state(gen);
+                    
+                    child.map(u) = id;
+                    Kokkos::atomic_fetch_add( &child.bweights(id), graph.weights(u) );
+                    
+                }
+            }
+        );
+    
+    }
+
+    inline void assign_leftovers_favorUnderloadedBlocks(
+            const Graph &graph,
+            Partition &child,
+            partition_t k,
+            weight_t lmax,
+            KokkosMemoryStack  &mem_stack
+    ){
+
+        Kokkos::Random_XorShift64_Pool<> random_pool(12345);
+        UnmanagedDeviceF64 distribution = UnmanagedDeviceF64((f64 *) get_chunk_back(mem_stack, sizeof(f64) * k), k);
+
+
+        Kokkos::parallel_scan(
+            "create distribution", k,
+            KOKKOS_LAMBDA(partition_t id, f64 &update, bool final) {
+
+                weight_t sum = 0;
+                weight_t inverse_weight = ( lmax - child.bweights(id) );
+
+                for(partition_t i = 0; i < k; ++i) {
+                    sum += ( lmax - child.bweights(i) );
+                }
+
+                update += static_cast<double>(inverse_weight) / static_cast<double>(sum); 
+                if(final) {
+                    distribution(id) = update;
+                }
+                
+            }
+        );
+
+
+        // assign remaining vertices
+        Kokkos::parallel_for(
+            "assign leftovers", graph.n,
+            KOKKOS_LAMBDA(vertex_t u) {
+                
+                if(child.map(u) == 5*k) {
+                    
+                    auto gen = random_pool.get_state();
+                    f64 rand = gen.drand(0.0, 1.0);
+                    random_pool.free_state(gen);
+                    
+
+                    for(u32 i = 0; i < k; ++i) {
+                        if( ( rand < distribution(i) ) || ( i == (k-1) ) ) {
+                            child.map(u) = i;
+                            Kokkos::atomic_fetch_add( &child.bweights(i), graph.weights(u) );
+                            break;
+                        }
+                    }
+
+                }
+            }
+        );
+
+        pop_back(mem_stack); //rm distribution
+
+    }
+
+
+
+
+
+
+
+    //! -------------------------------------------------------------------------------------------------
+    //! --------------------------- crossover stuff: ----------------------------------------------------
+    //! -------------------------------------------------------------------------------------------------
+
+
     
     inline u32 next_power_of_two(
         u32 k
@@ -113,7 +219,6 @@ struct KeyTuple {
         Partition child;
         child = initialize_partition( graph.n , k, lmax, mem_stack);
 
-        Kokkos::Random_XorShift64_Pool<> random_pool(12345);
 
         //setup: get the vectors onto the GPU
         auto parent_ids_device = Kokkos::View<int*, Kokkos::MemoryTraits<Kokkos::Unmanaged>>(
@@ -137,9 +242,6 @@ struct KeyTuple {
             (KeyTuple *) get_chunk_back(mem_stack, sizeof(KeyTuple) * num_buckets), num_buckets 
         );
 
-        UnmanagedDeviceF64 distribution = UnmanagedDeviceF64((f64 *) get_chunk_back(mem_stack, sizeof(f64) * k), k);
-
-      
         
         Kokkos::parallel_for(
             "init buckets", num_buckets,
@@ -191,59 +293,10 @@ struct KeyTuple {
             }
         );
 
+        //! test different strategies:
+        // assign_leftovers_favorUnderloadedBlocks(graph, child, k, lmax, mem_stack);
+        assign_leftovers_fullyRandom(graph, child, k);
 
-
-        Kokkos::parallel_scan(
-            "create distribution", k,
-            KOKKOS_LAMBDA(partition_t id, f64 &update, bool final) {
-
-                weight_t sum = 0;
-                weight_t inverse_weight = ( lmax - child.bweights(id) );
-
-                for(partition_t i = 0; i < k; ++i) {
-                    sum += ( lmax - child.bweights(i) );
-                }
-
-                update += static_cast<double>(inverse_weight) / static_cast<double>(sum); 
-                if(final) {
-                    distribution(id) = update;
-                }
-                
-            }
-        );
-
-       // auto distribution_host = Kokkos::create_mirror_view(distribution);
-       // Kokkos::deep_copy(distribution_host, distribution);
-//
-       // for (partition_t i = 0; i < k; ++i) {
-       //     std::cout << "distribution[" << i << "] = " << distribution_host(i) << std::endl;
-       // }
-
-        // assign remaining vertices
-        Kokkos::parallel_for(
-            "assign leftovers", graph.n,
-            KOKKOS_LAMBDA(vertex_t u) {
-                
-                if(child.map(u) == 5*k) {
-                    
-                    auto gen = random_pool.get_state();
-                    f64 rand = gen.drand(0.0, 1.0);
-                    random_pool.free_state(gen);
-                    
-
-                    for(u32 i = 0; i < k; ++i) {
-                        if( ( rand < distribution(i) ) || ( i == (k-1) ) ) {
-                            child.map(u) = i;
-                            Kokkos::atomic_fetch_add( &child.bweights(i), graph.weights(u) );
-                            break;
-                        }
-                    }
-
-                }
-            }
-        );
-
-        pop_back(mem_stack); //rm distribution
         pop_back(mem_stack); //rm buckets
         pop_back(mem_stack); //rm population
         pop_back(mem_stack); //rm parent_ids
@@ -257,14 +310,10 @@ struct KeyTuple {
 
    
 
-    /**
-     * Compute maximum weight bipartite matching on GPU-allocated matrix
-     * Transfers matrix to CPU and applies Hungarian algorithm
-     * 
-     * @param sim_matrix: GPU-allocated matrix (k x k)
-     * @param k: dimension of the square matrix
-     * @return: maximum weight of the optimal matching
-     */
+    //! -------------------------------------------------------------------------------------------------
+    //! ----------------------- distance computation stuff: ---------------------------------------------
+    //! -------------------------------------------------------------------------------------------------
+
     inline u32 max_matching(
         const UnmanagedDeviceU32 &sim_matrix,
         const u32 k,
