@@ -13,6 +13,7 @@
 #include "../utility/hungarian_algorithm.h"
 #include "../datastructures/partition.h"
 
+#include "omp.h"
 
 namespace GPU_HeiPa {
 
@@ -266,14 +267,15 @@ struct KeyTuple {
      */
     inline u32 max_matching(
         const UnmanagedDeviceU32 &sim_matrix,
-        const u32 k
+        const u32 k,
+        Kokkos::Cuda &exec_space
     ) {
         if (k == 0) return 0;
 
         // Copy matrix from GPU to CPU
         std::vector<u32> matrix_host(k * k);
         auto sim_matrix_host = Kokkos::create_mirror_view(sim_matrix);
-        Kokkos::deep_copy(sim_matrix_host, sim_matrix);
+        Kokkos::deep_copy(exec_space, sim_matrix_host, sim_matrix);
         
         for (u32 i = 0; i < k * k; ++i) {
             matrix_host[i] = sim_matrix_host(i);
@@ -291,7 +293,8 @@ struct KeyTuple {
         const Partition &A,
         const Partition &B,
         const partition_t k,
-        KokkosMemoryStack &mem_stack
+        KokkosMemoryStack &mem_stack,
+        Kokkos::Cuda &exec_space
     ) {
         u32 distance;
 
@@ -299,15 +302,17 @@ struct KeyTuple {
         auto sim_matrix = UnmanagedDeviceU32((u32 *) get_chunk_back(mem_stack, sizeof(u32) * k * k), k * k);
 
         Kokkos::parallel_for(
-            "init sim_matrix", k * k,
+            "init sim_matrix", 
+            Kokkos::RangePolicy<Kokkos::Cuda>(exec_space, 0, k*k),
             KOKKOS_LAMBDA(u32 index) {
                 sim_matrix(index) = 0;
             }
         );
-        Kokkos::fence();
+        exec_space.fence();
 
         Kokkos::parallel_for(
-            "fill matrix", graph.n,
+            "fill matrix", 
+            Kokkos::RangePolicy<Kokkos::Cuda>(exec_space, 0, graph.n),
             KOKKOS_LAMBDA(vertex_t u) {
                 u32 row = A.map(u);
                 u32 col = B.map(u);
@@ -316,15 +321,10 @@ struct KeyTuple {
                 
             }
         );
-        Kokkos::fence();
+        exec_space.fence();
 
         // get maximum matching on matrix
-        u32 similarity = max_matching(sim_matrix, k);
-
-        // Print similarity matrix and similarity value
-        auto sim_matrix_host = Kokkos::create_mirror_view(sim_matrix);
-        Kokkos::deep_copy(sim_matrix_host, sim_matrix);
-
+        u32 similarity = max_matching(sim_matrix, k, exec_space);
         distance = graph.n - similarity;
 
         pop_back(mem_stack); //rm sim_matrix
@@ -338,24 +338,28 @@ struct KeyTuple {
         const std::vector<Partition> &population,
         const Partition &offspring,
         partition_t k,
-        KokkosMemoryStack &mem_stack
+        std::vector<KokkosMemoryStack> &mem_stacks,
+        std::vector<Kokkos::Cuda> &exec_spaces,
+        size_t num_cpu_threads
     ) {
         size_t pop_size = population.size();
         u32 min_distance = std::numeric_limits<u32>::max();
         
         //! you can parallelize this using
         //! an openmp min reduction!
-        for(size_t i= 0; i < pop_size; ++i) {
+        #pragma omp parallel for reduction(min:min_distance) num_threads(static_cast<int>(num_cpu_threads))
+        for(size_t i = 0; i < pop_size; ++i) {
+            size_t tid = static_cast<size_t>(omp_get_thread_num());
             u32 distance = determine_distance(
-                    graph,
-                    population[i],
-                    offspring,
-                    k,
-                    mem_stack
+                graph,
+                population[i],
+                offspring,
+                k,
+                mem_stacks[tid],
+                exec_spaces[tid]
             );
 
-            if( distance < min_distance)
-                min_distance = distance;
+            min_distance = std::min(min_distance, distance);
         }
 
 
@@ -367,7 +371,9 @@ struct KeyTuple {
         const std::vector<Partition> &population,
         std::vector<u32> &min_distances,
         partition_t k,
-        KokkosMemoryStack &mem_stack
+        std::vector<KokkosMemoryStack> &mem_stacks,
+        std::vector<Kokkos::Cuda> &exec_spaces,
+        size_t num_cpu_threads
 
     ) {
 
@@ -377,15 +383,18 @@ struct KeyTuple {
 
         //! this can be trivially parallelized via
         //! #pragma omp parallel collapse
+        #pragma omp parallel for collapse(2) num_threads(static_cast<int>(num_cpu_threads))
         for(size_t i = 0; i < pop_size; ++i) {
             for(size_t j = i + 1; j < pop_size; ++j) {
             
+                size_t tid = static_cast<size_t>(  omp_get_thread_num() );
                 u32 dis = determine_distance(
                         graph,
                         population[i],
                         population[j],
                         k,
-                        mem_stack
+                        mem_stacks[tid],
+                        exec_spaces[tid]
                 );
 
                 all_distances[ i * pop_size + j ] = dis;

@@ -68,7 +68,7 @@ namespace GPU_HeiPa {
         std::vector<Mapping> mappings;
 
         size_t num_cpu_threads = 4;
-        size_t num_individuals = 4;
+        size_t num_individuals = 20;
         u32 num_crossovers = 1;
         u32 num_parents = 2;
         u32 tournament_size = 2;
@@ -517,7 +517,7 @@ namespace GPU_HeiPa {
                 {
                     auto p = get_time_point();
                     
-                    memetic_refinement(level, mem_stacks[ partition_stack ]);
+                    memetic_refinement(level, mem_stacks);
                     
                     memetic_ms += get_milli_seconds(p, get_time_point());
 
@@ -686,7 +686,7 @@ namespace GPU_HeiPa {
         }
 
 
-        void memetic_refinement(u32 level, KokkosMemoryStack &mem_stack) {
+        void memetic_refinement(u32 level, std::vector<KokkosMemoryStack> &mem_stacks) {
 
 
             for(u32 i = 0; i < num_crossovers; ++i) {
@@ -714,7 +714,7 @@ namespace GPU_HeiPa {
                 {
 
                     ScopedTimer _t("memetic", "memetic_refinement", "create offspring");   
-                    offspring = backbone_based_crossover( graphs.back(), parent_ids, partitions, k, lmax, mem_stack );
+                    offspring = backbone_based_crossover( graphs.back(), parent_ids, partitions, k, lmax, mem_stacks[ partition_stack ] );
                     
                 }
                // auto bweights_host = Kokkos::create_mirror_view(offspring.bweights);
@@ -736,7 +736,7 @@ namespace GPU_HeiPa {
                 {
                     ScopedTimer _t("memetic", "memetic_refinement", "refine individual");  
                     auto pair = jet_refine( graphs.back(), offspring, k, lmax, use_ultra, level, 
-                    edge_cut_offspring[i], max_block_weight_offspring[i], mem_stack, exec_spaces[0] );
+                    edge_cut_offspring[i], max_block_weight_offspring[i], mem_stacks[ partition_stack ], exec_spaces[0] );
                     
                     edge_cut_offspring[i] = pair.first;
                     max_block_weight_offspring[i] = pair.second;
@@ -748,7 +748,7 @@ namespace GPU_HeiPa {
                 assert_state_after_partition(graphs.back(), offspring, config.k);
                 {
                     ScopedTimer _t("memetic", "memetic_refinement", "update population");   
-                    UpdatePopulation(offspring, mem_stack, i);
+                    UpdatePopulation(offspring, mem_stacks, i);
                 }
 
             }
@@ -760,15 +760,15 @@ namespace GPU_HeiPa {
 
         void UpdatePopulation(
             Partition &offspring, 
-            KokkosMemoryStack &mem_stack,
+            std::vector<KokkosMemoryStack> &mem_stacks,
             u32 offspring_id
         
         ) {
 
-            determine_min_distances_population(graphs.back(), partitions, min_distances, k, mem_stack);
+            determine_min_distances_population(graphs.back(), partitions, min_distances, k, mem_stacks, exec_spaces, num_cpu_threads);
             u32 min_distance_population = *std::min_element(min_distances.begin(), min_distances.end());
 
-            u32 offspring_distance = determine_min_distance_offspring(graphs.back(), partitions, offspring, k, mem_stack);
+            u32 offspring_distance = determine_min_distance_offspring(graphs.back(), partitions, offspring, k, mem_stacks, exec_spaces, num_cpu_threads);
 
             // std::cout << "Min distances: ";
             // for (size_t i = 0; i < min_distances.size(); ++i) {
@@ -819,7 +819,7 @@ namespace GPU_HeiPa {
 
             }
                         
-            free_partition(offspring, mem_stack);
+            free_partition(offspring, mem_stacks[ partition_stack ]);
 
             
             return;
