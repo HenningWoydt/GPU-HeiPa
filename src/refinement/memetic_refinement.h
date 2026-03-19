@@ -12,6 +12,7 @@
 #include "../utility/definitions.h"
 #include "../utility/hungarian_algorithm.h"
 #include "../datastructures/partition.h"
+#include "block_conn.h"
 
 #include "omp.h"
 
@@ -89,6 +90,67 @@ struct KeyTuple {
             }
         );
     
+    }
+
+
+    inline void assign_leftovers_gain(
+            const Graph &graph,
+            Partition &child,
+            partition_t k,
+            weight_t lmax,
+            KokkosMemoryStack  &mem_stack
+    ) {
+        
+        Kokkos::Random_XorShift64_Pool<> random_pool(12345);
+        
+        Kokkos::Cuda exec_space;
+        BlockConn bc = init_BlockConn(graph, child, mem_stack, exec_space);
+
+
+        Kokkos::parallel_for(
+            "distribute leftovers", graph.n,
+            KOKKOS_LAMBDA(vertex_t u) {
+
+                // calculate gain
+                if( child.map(u) == 5*k) {
+                    
+                    auto gen = random_pool.get_state();
+                    partition_t best_id = static_cast<partition_t>(gen.urand(0, k));
+                    random_pool.free_state(gen);
+                    
+                    weight_t best_conn = 0;
+
+                    u32 r_beg = bc.row(u);
+                    u32 r_len = bc.sizes(u);
+                    u32 r_end = r_beg + r_len;
+
+                    for (u32 i = r_beg; i < r_end; ++i) {
+                        partition_t id = bc.ids(i);
+                        if (id == 5*k)
+                            continue;
+                        
+                        weight_t w = bc.weights(i);
+
+                        bool valid = (id != NULL_PART) & (id != HASH_RECLAIM); // single mask
+                        
+                        // Update best if it's a candidate and better
+                        bool better = valid & (w > best_conn);
+                        best_conn = better ? w : best_conn;
+                        best_id = better ? id : best_id;
+                    }
+
+                    child.map(u) = best_id;
+                    Kokkos::atomic_fetch_add( &child.bweights(best_id), graph.weights(u) );
+                           
+                }
+
+            }
+        );
+
+        free_BlockConn(bc, mem_stack);
+
+        return;
+
     }
 
     inline void assign_leftovers_favorUnderloadedBlocks(
@@ -294,8 +356,9 @@ struct KeyTuple {
         );
 
         //! test different strategies:
-        // assign_leftovers_favorUnderloadedBlocks(graph, child, k, lmax, mem_stack);
-        assign_leftovers_fullyRandom(graph, child, k);
+        //assign_leftovers_favorUnderloadedBlocks(graph, child, k, lmax, mem_stack);
+        // assign_leftovers_fullyRandom(graph, child, k);
+        assign_leftovers_gain(graph, child, k, lmax, mem_stack);
 
         pop_back(mem_stack); //rm buckets
         pop_back(mem_stack); //rm population

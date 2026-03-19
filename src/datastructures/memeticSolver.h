@@ -68,7 +68,7 @@ namespace GPU_HeiPa {
         std::vector<Mapping> mappings;
 
         size_t num_cpu_threads = 4;
-        size_t num_individuals = 20;
+        size_t num_individuals = 4;
         u32 num_crossovers = 1;
         u32 num_parents = 2;
         u32 tournament_size = 2;
@@ -717,19 +717,18 @@ namespace GPU_HeiPa {
                     offspring = backbone_based_crossover( graphs.back(), parent_ids, partitions, k, lmax, mem_stacks[ partition_stack ] );
                     
                 }
-               // auto bweights_host = Kokkos::create_mirror_view(offspring.bweights);
-               // Kokkos::deep_copy(bweights_host, offspring.bweights);
-//
-               // std::cout << "Block weights of offspring " << i << ": ";
-               // for (partition_t j = 0; j < k; ++j) {
-               //     std::cout << bweights_host(j);
-               //     if (j + 1 < k) std::cout << ", ";
-               // }
-               // std::cout << std::endl;
+                auto bweights_host = Kokkos::create_mirror_view(offspring.bweights);
+                Kokkos::deep_copy(bweights_host, offspring.bweights);
+                std::cout << "Block weights of offspring " << i << ": ";
+                for (partition_t j = 0; j < k; ++j) {
+                    std::cout << bweights_host(j);
+                    if (j + 1 < k) std::cout << ", ";
+                }
+                std::cout << std::endl;
 
                 edge_cut_offspring[i] =  edge_cut(graphs.back(), offspring);
                 
-                // std::cout << "Edge cut of offspring " << i << ": " << edge_cut_offspring[i] << std::endl;
+                 std::cout << "Edge cut of offspring " << i << ": " << edge_cut_offspring[i] << std::endl;
                 
                 max_block_weight_offspring[i] = max_weight(offspring);
 
@@ -742,7 +741,7 @@ namespace GPU_HeiPa {
                     max_block_weight_offspring[i] = pair.second;
                 }
 
-                //std::cout << "Edge cut of offspring after refinement " << i << ": " << edge_cut_offspring[i] << std::endl;
+                 std::cout << "Edge cut of offspring after refinement " << i << ": " << edge_cut_offspring[i] << std::endl;
 
 
                 assert_state_after_partition(graphs.back(), offspring, config.k);
