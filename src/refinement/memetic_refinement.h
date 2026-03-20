@@ -19,10 +19,64 @@
 namespace GPU_HeiPa {
 
 
-struct KeyTuple {
-    u32 key_count;
-    u64 key;
-};
+
+    //! -------------------------------------------------------------------------------------------------
+    //! ----------------------- utility / helpers: ------------------------------------------------------
+    //! -------------------------------------------------------------------------------------------------
+
+
+    struct KeyTuple {
+        u32 key_count;
+        u64 key;
+    };
+    
+    inline u32 next_power_of_two(
+        u32 k
+    ) {
+        if (k <= 1) return 1;
+
+        k--;
+        k |= k >> 1;
+        k |= k >> 2;
+        k |= k >> 4;
+        k |= k >> 8;
+        k |= k >> 16;
+        return k + 1;
+    }
+
+    // basically returns log2(k)
+    // and k should always be power of 2
+    u32 bits_needed(u32 k) {
+        u32 b = 0;
+        k--;
+        while (k > 0) {
+            k >>= 1;
+            b++;
+        }
+        return b;
+    }
+    
+    KOKKOS_FUNCTION u64 determine_key(
+        vertex_t u,
+        const Kokkos::View<int*> &parent_ids,
+        const Kokkos::View<Partition*> &population,
+        u32 num_bits
+    ) {
+
+        u64 key = 0;
+        for (size_t i = 0; i < parent_ids.size(); ++i) {
+            u64 val = static_cast<u64>(population[parent_ids[i]].map(u));
+            key |= (val & 0xFF) << (num_bits * i); //! do i even need this &0xFF ?
+        }
+        return key;
+
+    }
+
+
+    //! -------------------------------------------------------------------------------------------------
+    //! ----------------------- selection: --------------------------------------------------------------
+    //! -------------------------------------------------------------------------------------------------
+
 
     inline int tournament_selection(
         const std::vector<weight_t> &fitness_values,
@@ -295,57 +349,11 @@ struct KeyTuple {
 
 
 
-
-
-
-
     //! -------------------------------------------------------------------------------------------------
-    //! --------------------------- crossover stuff: ----------------------------------------------------
+    //! --------------------------- crossover: ----------------------------------------------------------
     //! -------------------------------------------------------------------------------------------------
 
 
-    
-    inline u32 next_power_of_two(
-        u32 k
-    ) {
-        if (k <= 1) return 1;
-
-        k--;
-        k |= k >> 1;
-        k |= k >> 2;
-        k |= k >> 4;
-        k |= k >> 8;
-        k |= k >> 16;
-        return k + 1;
-    }
-
-    // basically returns log2(k)
-    // and k should always be power of 2
-    u32 bits_needed(u32 k) {
-        u32 b = 0;
-        k--;
-        while (k > 0) {
-            k >>= 1;
-            b++;
-        }
-        return b;
-    }
-    
-    KOKKOS_FUNCTION u64 determine_key(
-        vertex_t u,
-        const Kokkos::View<int*> &parent_ids,
-        const Kokkos::View<Partition*> &population,
-        u32 num_bits
-    ) {
-
-        u64 key = 0;
-        for (size_t i = 0; i < parent_ids.size(); ++i) {
-            u64 val = static_cast<u64>(population[parent_ids[i]].map(u));
-            key |= (val & 0xFF) << (num_bits * i); //! do i even need this &0xFF ?
-        }
-        return key;
-
-    }
 
 
     inline Partition backbone_based_crossover(
@@ -409,22 +417,36 @@ struct KeyTuple {
         });
 
 
+        //! hyperparameter
+        //? maybe put somewhere more obvious...
+        partition_t extent = 1;
+
         // assign vertices of the backbone to the offspring
         Kokkos::parallel_for(
             "create new offspring", graph.n,
             KOKKOS_LAMBDA(vertex_t u) {
+                
                 partition_t id;
                 bool in_backbone = false;
                 u64 key = determine_key(u, parent_ids_device, population_device, num_bits); 
                 
-                for(partition_t i = 0; i < k; ++i) {
-                    if( key == buckets(i).key ){
-                        id = i;
-                        in_backbone = true;
-                        Kokkos::atomic_fetch_add( &child.bweights(id), graph.weights(u) );
-                        break;
+                for(partition_t j = 0; (j <= extent) && (!in_backbone) ; ++j) {
+                    for(partition_t i = 0; i < k; ++i) {
+                        if( key == buckets(i + (j*k ) ).key ){
+
+                            if( j == 0)
+                                id = i;
+                            else
+                                id = k - i - 1; //! "reverse assignment" from full buckets to underloaded partitions
+                            
+                            Kokkos::atomic_fetch_add( &child.bweights(id), graph.weights(u) );
+                            in_backbone = true;
+                            break;
+                        }
                     }
+                    
                 }
+
 
                 if( !in_backbone ){
                     id = 5*k ; //! mark as not assigned 
@@ -438,10 +460,12 @@ struct KeyTuple {
 
 
         //! test different strategies:
-        //assign_leftovers_favorUnderloadedBlocks(graph, child, k, lmax, mem_stack);
-        // assign_leftovers_fullyRandom(graph, child, k);
-        //assign_leftovers_gain(graph, child, k, lmax, mem_stack);
-        assign_leftovers_gain_and_weight(graph, child, k, lmax, mem_stack);
+       
+       assign_leftovers_fullyRandom(graph, child, k);
+        
+        // assign_leftovers_favorUnderloadedBlocks(graph, child, k, lmax, mem_stack);
+        // assign_leftovers_gain(graph, child, k, lmax, mem_stack);
+        // assign_leftovers_gain_and_weight(graph, child, k, lmax, mem_stack);
 
         pop_back(mem_stack); //rm buckets
         pop_back(mem_stack); //rm population
