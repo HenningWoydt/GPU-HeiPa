@@ -216,7 +216,7 @@ namespace GPU_HeiPa {
     ) {
         // this dermines how much underloaded blocks are weighted
         // ALPHA = 0 -> only gain, big ALPHA -> only underloaded blocks
-        f64 ALPHA = 2.8 ; 
+        f64 ALPHA = 100 ; 
         
         Kokkos::Random_XorShift64_Pool<> random_pool(12345);
         
@@ -234,7 +234,6 @@ namespace GPU_HeiPa {
                 }
             }, Kokkos::Max(max_gain)
         );
-
 
         Kokkos::parallel_for(
             "distribute leftovers", graph.n,
@@ -263,7 +262,7 @@ namespace GPU_HeiPa {
                         //! i think this is actually quite smart, because in the case that
                         //! child.bweights(id) > lmax, then the right part will get negative
                         //! -> i.e. overweight blocks are penalized
-                        f64 my_score = gain + (ALPHA * max_gain() * ( (lmax - child.bweights(id)) / lmax ));
+                        f64 my_score = gain + (ALPHA * max_gain() * ( static_cast<double>(lmax - child.bweights(id)) / static_cast<double>(lmax) ));
 
                         bool valid = (id != NULL_PART) & (id != HASH_RECLAIM); // single mask
                         
@@ -419,7 +418,7 @@ namespace GPU_HeiPa {
 
         //! hyperparameter
         //? maybe put somewhere more obvious...
-        partition_t extent = 1;
+        partition_t extent = 2;
 
         // assign vertices of the backbone to the offspring
         Kokkos::parallel_for(
@@ -461,11 +460,11 @@ namespace GPU_HeiPa {
 
         //! test different strategies:
        
-       assign_leftovers_fullyRandom(graph, child, k);
+        //assign_leftovers_fullyRandom(graph, child, k);
         
-        // assign_leftovers_favorUnderloadedBlocks(graph, child, k, lmax, mem_stack);
+        //assign_leftovers_favorUnderloadedBlocks(graph, child, k, lmax, mem_stack);
         // assign_leftovers_gain(graph, child, k, lmax, mem_stack);
-        // assign_leftovers_gain_and_weight(graph, child, k, lmax, mem_stack);
+        assign_leftovers_gain_and_weight(graph, child, k, lmax, mem_stack);
 
         pop_back(mem_stack); //rm buckets
         pop_back(mem_stack); //rm population
