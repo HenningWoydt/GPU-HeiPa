@@ -789,10 +789,19 @@ namespace GPU_HeiPa {
         
         ) {
 
-            determine_min_distances_population(graphs.back(), partitions, min_distances, k, mem_stacks, exec_spaces, num_cpu_threads);
-            u32 min_distance_population = *std::min_element(min_distances.begin(), min_distances.end());
+            const size_t SAMPLE_SIZE = 5;               // Number of random candidates to compare against per individual
+           // const u32 BORDERLINE_EPSILON = 100;         // Margin: if difference <= epsilon, recompute with exact distance
 
-            u32 offspring_distance = determine_min_distance_offspring(graphs.back(), partitions, offspring, k, mem_stacks, exec_spaces, num_cpu_threads);
+            // EXACT mode: default, compare against full population
+            //determine_min_distances_population(graphs.back(), partitions, min_distances, k, mem_stacks, exec_spaces, num_cpu_threads);
+            //u32 min_distance_population = *std::min_element(min_distances.begin(), min_distances.end());
+//
+            //u32 offspring_distance = determine_min_distance_offspring(graphs.back(), partitions, offspring, k, mem_stacks, exec_spaces, num_cpu_threads);
+
+            // SAMPLED mode (toggle by swapping these lines with exact mode above, or use ifdef/ifdef toggles):
+            determine_min_distances_population_sampled(graphs.back(), partitions, min_distances, k, mem_stacks, exec_spaces, num_cpu_threads, SAMPLE_SIZE);
+            u32 min_distance_population = *std::min_element(min_distances.begin(), min_distances.end());
+            u32 offspring_distance = determine_min_distance_offspring_sampled(graphs.back(), partitions, offspring, k, mem_stacks, exec_spaces, num_cpu_threads, SAMPLE_SIZE);
 
             // std::cout << "Min distances: ";
             // for (size_t i = 0; i < min_distances.size(); ++i) {
