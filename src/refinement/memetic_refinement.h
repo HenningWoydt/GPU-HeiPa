@@ -213,11 +213,11 @@ namespace GPU_HeiPa {
             Partition &child,
             partition_t k,
             weight_t lmax,
-            KokkosMemoryStack  &mem_stack
+            KokkosMemoryStack  &mem_stack,
+            f64 alpha
     ) {
-        // this dermines how much underloaded blocks are weighted
-        // ALPHA = 0 -> only gain, big ALPHA -> only underloaded blocks
-        f64 ALPHA = 100 ; 
+        // this determines how much underloaded blocks are weighted
+        // alpha = 0 -> only gain, big alpha -> only underloaded blocks
         
         Kokkos::Random_XorShift64_Pool<> random_pool(12345);
         
@@ -263,7 +263,7 @@ namespace GPU_HeiPa {
                         //! i think this is actually quite smart, because in the case that
                         //! child.bweights(id) > lmax, then the right part will get negative
                         //! -> i.e. overweight blocks are penalized
-                        f64 my_score = gain + (ALPHA * max_gain() * ( static_cast<double>(lmax - child.bweights(id)) / static_cast<double>(lmax) ));
+                        f64 my_score = gain + (alpha * max_gain() * ( static_cast<double>(lmax - child.bweights(id)) / static_cast<double>(lmax) ));
 
                         bool valid = (id != NULL_PART) & (id != HASH_RECLAIM); // single mask
                         
@@ -362,7 +362,10 @@ namespace GPU_HeiPa {
         const std::vector<Partition> &population, 
         partition_t k,
         weight_t lmax,
-        KokkosMemoryStack &mem_stack 
+        KokkosMemoryStack &mem_stack,
+        const std::string &leftover_strategy,
+        f64 alpha,
+        partition_t extent
     
     ) {
 
@@ -417,9 +420,10 @@ namespace GPU_HeiPa {
         });
 
 
-        //! hyperparameter
-        //? maybe put somewhere more obvious...
-        partition_t extent = 2;
+        partition_t local_extent = std::min(extent, k);
+        if (local_extent < 1) {
+            local_extent = 1;
+        }
 
         // assign vertices of the backbone to the offspring
         Kokkos::parallel_for(
@@ -430,7 +434,7 @@ namespace GPU_HeiPa {
                 bool in_backbone = false;
                 u64 key = determine_key(u, parent_ids_device, population_device, num_bits); 
                 
-                for(partition_t j = 0; (j <= extent) && (!in_backbone) ; ++j) {
+                for(partition_t j = 0; (j <= local_extent) && (!in_backbone) ; ++j) {
                     for(partition_t i = 0; i < k; ++i) {
                         if( key == buckets(i + (j*k ) ).key ){
 
@@ -459,13 +463,15 @@ namespace GPU_HeiPa {
 
 
 
-        //! test different strategies:
-       
-        //assign_leftovers_fullyRandom(graph, child, k);
-        
-        //assign_leftovers_favorUnderloadedBlocks(graph, child, k, lmax, mem_stack);
-        // assign_leftovers_gain(graph, child, k, lmax, mem_stack);
-        assign_leftovers_gain_and_weight(graph, child, k, lmax, mem_stack);
+        if (leftover_strategy == "random") {
+            assign_leftovers_fullyRandom(graph, child, k);
+        } else if (leftover_strategy == "balanced") {
+            assign_leftovers_favorUnderloadedBlocks(graph, child, k, lmax, mem_stack);
+        } else if (leftover_strategy == "gain") {
+            assign_leftovers_gain(graph, child, k, lmax, mem_stack);
+        } else {
+            assign_leftovers_gain_and_weight(graph, child, k, lmax, mem_stack, alpha);
+        }
 
         pop_back(mem_stack); //rm buckets
         pop_back(mem_stack); //rm population

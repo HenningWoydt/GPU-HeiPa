@@ -29,7 +29,7 @@
 #include <Kokkos_Core.hpp>
 
 #include "../src/datastructures/memeticSolver.h"
-#include "../src/utility/configuration.h"
+#include "../src/utility/memetic_configuration.h"
 
 using namespace GPU_HeiPa;
 
@@ -44,7 +44,7 @@ int main(int argc, char *argv[]) {
         Kokkos::initialize();
     }
 
-    Configuration config;
+    MemeticConfiguration config;
     if (argc == 1) {
         config.print_help_message();
         return 0;
@@ -82,14 +82,14 @@ int main(int argc, char *argv[]) {
                 std::strcpy(argv_temp[i], args[i].c_str());
             }
 
-            config = Configuration(argc_temp, argv_temp);
+            config = MemeticConfiguration(argc_temp, argv_temp);
 
             for (int i = 0; i < argc_temp; ++i) { delete[] argv_temp[i]; }
             delete[] argv_temp;
         }
     } else {
         ScopedTimer _t("io", "main", "parse_args");
-        config = Configuration(argc, argv);
+        config = MemeticConfiguration(argc, argv);
     }
     
     config.verbose_level = 2;

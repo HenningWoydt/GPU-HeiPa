@@ -45,7 +45,7 @@
 #include "../refinement/memetic_refinement.h"
 #include "../initial_partitioning/metis_partitioning.h"
 #include "../utility/definitions.h"
-#include "../utility/configuration.h"
+#include "../utility/memetic_configuration.h"
 #include "../utility/profiler.h"
 #include "../utility/asserts.h"
 #include "../utility/edge_cut.h"
@@ -56,7 +56,7 @@
 namespace GPU_HeiPa {
     class memeticSolver {
     public:
-        Configuration config;
+        MemeticConfiguration config;
 
         vertex_t n = 0;
         vertex_t m = 0;
@@ -70,8 +70,10 @@ namespace GPU_HeiPa {
         std::vector<Graph> graphs;
         std::vector<Mapping> mappings;
 
+        // configurable via MemeticConfiguration
         size_t num_cpu_threads = 4;
         size_t num_individuals = 20;
+        
         u32 num_crossovers = 1;
         u32 num_parents = 2;
         u32 tournament_size = 2;
@@ -173,7 +175,25 @@ namespace GPU_HeiPa {
             }
         }
 
-        explicit memeticSolver(Configuration t_config) : config(std::move(t_config)) {
+        explicit memeticSolver(MemeticConfiguration t_config) : config(std::move(t_config)) {
+            num_cpu_threads = config.num_cpu_threads;
+            num_individuals = config.num_individuals;
+            num_crossovers = config.num_crossovers;
+            num_parents = config.num_parents;
+            tournament_size = config.tournament_size;
+
+            orga_stack = num_cpu_threads;
+            partition_stack = num_cpu_threads + 1;
+
+            partitions = std::vector<Partition>(num_individuals);
+            cuda_streams = std::vector<cudaStream_t>(num_cpu_threads);
+            curr_edge_cut = std::vector<weight_t>(num_individuals, 0);
+            curr_max_block_weight = std::vector<weight_t>(num_individuals, 0);
+            initial_edge_cut = std::vector<weight_t>(num_individuals, 0);
+            initial_max_block_weight = std::vector<weight_t>(num_individuals, 0);
+            edge_cut_offspring = std::vector<weight_t>(num_crossovers, 0);
+            max_block_weight_offspring = std::vector<weight_t>(num_crossovers, 0);
+            min_distances = std::vector<u32>(num_individuals, 0);
         }
 
         //! do this later
@@ -378,6 +398,10 @@ namespace GPU_HeiPa {
                 std::cout << "k                 : " << k << std::endl;
                 std::cout << "imbalance         : " << config.imbalance << std::endl;
                 std::cout << "Lmax              : " << lmax << std::endl;
+                std::cout << "distance mode     : " << config.distance << std::endl;
+                std::cout << "leftover strategy : " << config.leftover_strategy << std::endl;
+                std::cout << "alpha             : " << config.alpha << std::endl;
+                std::cout << "extent            : " << config.extent << std::endl;
             }
             if (config.verbose_level >= 2) {
                 std::cout << "------- Stat -------" << std::endl;
@@ -721,7 +745,17 @@ namespace GPU_HeiPa {
                 {
 
                     ScopedTimer _t("memetic", "memetic_refinement", "create offspring");   
-                    offspring = backbone_based_crossover( graphs.back(), parent_ids, partitions, k, lmax, mem_stacks[ partition_stack ] );
+                    offspring = backbone_based_crossover(
+                        graphs.back(),
+                        parent_ids,
+                        partitions,
+                        k,
+                        lmax,
+                        mem_stacks[ partition_stack ],
+                        config.leftover_strategy,
+                        config.alpha,
+                        config.extent
+                    );
                     
                 }
 
@@ -788,20 +822,70 @@ namespace GPU_HeiPa {
             u32 offspring_id
         
         ) {
+            enum class DistanceMode {
+                Exact,
+                Sampled
+            };
 
             const size_t SAMPLE_SIZE = 5;               // Number of random candidates to compare against per individual
            // const u32 BORDERLINE_EPSILON = 100;         // Margin: if difference <= epsilon, recompute with exact distance
 
-            // EXACT mode: default, compare against full population
-            //determine_min_distances_population(graphs.back(), partitions, min_distances, k, mem_stacks, exec_spaces, num_cpu_threads);
-            //u32 min_distance_population = *std::min_element(min_distances.begin(), min_distances.end());
-//
-            //u32 offspring_distance = determine_min_distance_offspring(graphs.back(), partitions, offspring, k, mem_stacks, exec_spaces, num_cpu_threads);
+            DistanceMode distance_mode = DistanceMode::Exact;
+            if (config.distance == "sampled") {
+                distance_mode = DistanceMode::Sampled;
+            }
 
-            // SAMPLED mode (toggle by swapping these lines with exact mode above, or use ifdef/ifdef toggles):
-            determine_min_distances_population_sampled(graphs.back(), partitions, min_distances, k, mem_stacks, exec_spaces, num_cpu_threads, SAMPLE_SIZE);
-            u32 min_distance_population = *std::min_element(min_distances.begin(), min_distances.end());
-            u32 offspring_distance = determine_min_distance_offspring_sampled(graphs.back(), partitions, offspring, k, mem_stacks, exec_spaces, num_cpu_threads, SAMPLE_SIZE);
+            u32 min_distance_population = 0;
+            u32 offspring_distance = 0;
+
+            switch (distance_mode) {
+                case DistanceMode::Sampled:
+                    determine_min_distances_population_sampled(
+                        graphs.back(),
+                        partitions,
+                        min_distances,
+                        k,
+                        mem_stacks,
+                        exec_spaces,
+                        num_cpu_threads,
+                        SAMPLE_SIZE
+                    );
+                    min_distance_population = *std::min_element(min_distances.begin(), min_distances.end());
+                    offspring_distance = determine_min_distance_offspring_sampled(
+                        graphs.back(),
+                        partitions,
+                        offspring,
+                        k,
+                        mem_stacks,
+                        exec_spaces,
+                        num_cpu_threads,
+                        SAMPLE_SIZE
+                    );
+                    break;
+
+                case DistanceMode::Exact:
+                default:
+                    determine_min_distances_population(
+                        graphs.back(),
+                        partitions,
+                        min_distances,
+                        k,
+                        mem_stacks,
+                        exec_spaces,
+                        num_cpu_threads
+                    );
+                    min_distance_population = *std::min_element(min_distances.begin(), min_distances.end());
+                    offspring_distance = determine_min_distance_offspring(
+                        graphs.back(),
+                        partitions,
+                        offspring,
+                        k,
+                        mem_stacks,
+                        exec_spaces,
+                        num_cpu_threads
+                    );
+                    break;
+            }
 
             // std::cout << "Min distances: ";
             // for (size_t i = 0; i < min_distances.size(); ++i) {
