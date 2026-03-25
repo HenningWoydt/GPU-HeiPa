@@ -1268,6 +1268,8 @@ namespace GPU_HeiPa::ModifiedMetis {
         int bestobj = 0, curobj = 0;
         float bestbal = 0.0, curbal = 0.0;
 
+        if (g.n == 0){ return; }
+
         std::vector<int> pwgts(2);
         BisectInfo info(g.n);
         std::vector<int> match(g.n);
