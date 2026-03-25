@@ -242,7 +242,7 @@ namespace GPU_HeiPa {
 
             KokkosMemoryStack mem_stack = initialize_kokkos_memory_stack(
                 30 * (size_t) host_g.n * sizeof(vertex_t) + // 20% buffer for vertices
-                10 * (size_t) host_g.m * sizeof(vertex_t), // Graph + coarsening overhead
+                20 * (size_t) host_g.m * sizeof(vertex_t), // Graph + coarsening overhead
                 "Stack"
             );
 
@@ -347,6 +347,8 @@ namespace GPU_HeiPa {
 
                 coarsening(level, mem_stack);
                 contraction(level, mem_stack);
+
+                std::cout << graphs.back().n << " " << graphs.back().m << std::endl;
 
                 level += 1;
             }
