@@ -64,6 +64,7 @@ namespace GPU_HeiPa {
             {"--verbose-level", "", "Whether to print.", "2", "", false},
             {"--num-cpu-threads", "", "Number of CPU threads for memetic algorithm.", "4", "", false},
             {"--num-individuals", "", "Population size for memetic algorithm.", "20", "", false},
+            {"--population-management", "", "Population management mode: shrinking or steadystate.", "shrinking", "", false},
             {"--num-crossovers", "", "Number of crossovers per generation.", "1", "", false},
             {"--num-parents", "", "Number of parents for crossover.", "2", "", false},
             {"--tournament-size", "", "Tournament size for selection.", "2", "", false},
@@ -91,6 +92,7 @@ namespace GPU_HeiPa {
 
         size_t num_cpu_threads = 4;
         size_t num_individuals = 20;
+        std::string population_management = "shrinking";
         u32 num_crossovers = 1;
         u32 num_parents = 2;
         u32 tournament_size = 2;
@@ -148,6 +150,9 @@ namespace GPU_HeiPa {
             }
             if (is_set("--num-individuals")) {
                 num_individuals = std::stoul(get("--num-individuals"));
+            }
+            if (is_set("--population-management")) {
+                population_management = get("--population-management");
             }
             if (is_set("--num-crossovers")) {
                 num_crossovers = (u32) std::stoul(get("--num-crossovers"));
@@ -211,6 +216,23 @@ namespace GPU_HeiPa {
             for (char &c: leftover_strategy) {
                 c = (char) std::tolower((unsigned char) c);
             }
+
+            for (char &c: population_management) {
+                c = (char) std::tolower((unsigned char) c);
+            }
+            if (
+                population_management == "steady" ||
+                population_management == "steady_state" ||
+                population_management == "steady-state"
+            ) {
+                population_management = "steadystate";
+            }
+            if (population_management != "shrinking" && population_management != "steadystate") {
+                std::cerr << "Warning: population management mode \"" << population_management
+                          << "\" is invalid. Falling back to \"shrinking\"." << std::endl;
+                population_management = "shrinking";
+            }
+
             if (leftover_strategy == "gain and weight" || leftover_strategy == "gainandweight") {
                 leftover_strategy = "mixed";
             } else if (
@@ -298,6 +320,7 @@ namespace GPU_HeiPa {
             s += tabs + to_JSON_MACRO(device_space);
             s += tabs + to_JSON_MACRO(num_cpu_threads);
             s += tabs + to_JSON_MACRO(num_individuals);
+            s += tabs + to_JSON_MACRO(population_management);
             s += tabs + to_JSON_MACRO(num_crossovers);
             s += tabs + to_JSON_MACRO(num_parents);
             s += tabs + to_JSON_MACRO(tournament_size);

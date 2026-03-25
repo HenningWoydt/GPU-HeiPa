@@ -54,6 +54,12 @@
 #include "omp.h"
 
 namespace GPU_HeiPa {
+
+    enum class PopulationManagement {
+        steadystate,
+        shrinking // #partitions == (level + 1)
+        };
+
     class memeticSolver {
     public:
         MemeticConfiguration config;
@@ -78,11 +84,16 @@ namespace GPU_HeiPa {
         u32 num_parents = 2;
         u32 tournament_size = 2;
 
+        PopulationManagement pop_management = PopulationManagement::shrinking;
+
         size_t orga_stack = num_cpu_threads;
         size_t partition_stack = num_cpu_threads + 1;
         
 
         std::vector<Partition> partitions = std::vector<Partition>(num_individuals);
+
+        std::vector<size_t> active = std::vector<size_t>(num_individuals);
+        
         
         std::vector<cudaStream_t> cuda_streams = std::vector<cudaStream_t>(num_cpu_threads);
         std::vector<Kokkos::Cuda> exec_spaces; 
@@ -182,6 +193,12 @@ namespace GPU_HeiPa {
             num_parents = config.num_parents;
             tournament_size = config.tournament_size;
 
+            if (config.population_management == "steadystate") {
+                pop_management = PopulationManagement::steadystate;
+            } else {
+                pop_management = PopulationManagement::shrinking;
+            }
+
             orga_stack = num_cpu_threads;
             partition_stack = num_cpu_threads + 1;
 
@@ -194,6 +211,10 @@ namespace GPU_HeiPa {
             edge_cut_offspring = std::vector<weight_t>(num_crossovers, 0);
             max_block_weight_offspring = std::vector<weight_t>(num_crossovers, 0);
             min_distances = std::vector<u32>(num_individuals, 0);
+
+            active = std::vector<size_t>(num_individuals);
+            for(size_t i = 0; i < num_individuals; ++i)
+                active.at(i) = i;
         }
 
         //! do this later
@@ -328,14 +349,33 @@ namespace GPU_HeiPa {
             auto p = get_time_point();
             
             // pick best partition out of all of them
-            size_t min_id = 0;
-            weight_t min_edgecut = curr_edge_cut[0];
-            for(size_t i = 0; i < num_individuals; ++i) {
-                
-                std::cout << "fitness individual " << i << " = " << curr_edge_cut[i] << std::endl ;
-                if ( curr_edge_cut[i] < min_edgecut) {
-                    min_id = i;
-                    min_edgecut = curr_edge_cut[i];
+            size_t min_id;
+            weight_t min_edgecut;
+            if(pop_management == PopulationManagement::steadystate) {
+
+                min_id = 0;
+                min_edgecut = curr_edge_cut[0];
+                for(size_t i = 0; i < num_individuals; ++i) {
+                    
+                    std::cout << "fitness individual " << i << " = " << curr_edge_cut[i] << std::endl ;
+                    if ( curr_edge_cut[i] < min_edgecut) {
+                        min_id = i;
+                        min_edgecut = curr_edge_cut[i];
+                    }
+                }
+
+            }else if(pop_management == PopulationManagement::shrinking) {
+
+                min_id = active[0];
+                min_edgecut = curr_edge_cut[min_id];
+                std::cout << "fitness active individual " << min_id << " = " << min_edgecut << std::endl ;
+
+                for(size_t i = 1; i < active.size(); ++i) {
+                    std::cout << "fitness active individual " << active[i] << " = " << curr_edge_cut[active[i]] << std::endl ;
+                    if ( curr_edge_cut[ active[i] ] < min_edgecut) {
+                        min_id = active[i];
+                        min_edgecut = curr_edge_cut[ active[i] ];
+                    }
                 }
             }
             
@@ -399,6 +439,7 @@ namespace GPU_HeiPa {
                 std::cout << "imbalance         : " << config.imbalance << std::endl;
                 std::cout << "Lmax              : " << lmax << std::endl;
                 std::cout << "distance mode     : " << config.distance << std::endl;
+                std::cout << "population mgmt   : " << config.population_management << std::endl;
                 std::cout << "leftover strategy : " << config.leftover_strategy << std::endl;
                 std::cout << "alpha             : " << config.alpha << std::endl;
                 std::cout << "extent            : " << config.extent << std::endl;
@@ -498,12 +539,19 @@ namespace GPU_HeiPa {
                     // scope for uncontraction
                     auto p = get_time_point();
                     
-                    
                     #pragma omp parallel for num_threads(num_cpu_threads)
-                    for(size_t i = 0; i < num_individuals ; ++i) {
+                    for(size_t i = 0; i < active.size() ; ++i) {
+                        size_t id = active[i];
                         size_t tid = static_cast<size_t>(  omp_get_thread_num() );
-                        uncontraction( level, i, tid ); 
+                        uncontraction( level, id, tid ); 
                     }
+                    
+                    
+                    // #pragma omp parallel for num_threads(num_cpu_threads)
+                    // for(size_t i = 0; i < num_individuals ; ++i) {
+                    //     size_t tid = static_cast<size_t>(  omp_get_thread_num() );
+                    //     uncontraction( level, i, tid ); 
+                    // }
                     
                     free_after_uncontraction(mem_stacks[ orga_stack ]); 
                     
@@ -520,11 +568,22 @@ namespace GPU_HeiPa {
                     //scope for refinement
                     auto p = get_time_point();
 
+
+
                     #pragma omp parallel for num_threads(num_cpu_threads)
-                    for(size_t i = 0; i < num_individuals ; ++i) {
+                    for(size_t i = 0; i < active.size() ; ++i) {
+                        
+                        size_t id = active[i];
                         size_t tid = static_cast<size_t>(  omp_get_thread_num() );
-                        refinement(level, mem_stacks[tid], i, tid ); 
+                        refinement(level, mem_stacks[tid], id, tid ); 
+                    
                     }
+
+                    // #pragma omp parallel for num_threads(num_cpu_threads)
+                    // for(size_t i = 0; i < num_individuals ; ++i) {
+                    //     size_t tid = static_cast<size_t>(  omp_get_thread_num() );
+                    //     refinement(level, mem_stacks[tid], i, tid ); 
+                    // }
 
                     refinement_ms += get_milli_seconds(p, get_time_point());
 #if ENABLE_PROFILER
@@ -543,8 +602,8 @@ namespace GPU_HeiPa {
 
                 {
                     auto p = get_time_point();
-                    
-                    memetic_refinement(level, mem_stacks);
+                    if(active.size() >= tournament_size)
+                        memetic_refinement(level, mem_stacks);
                     
                     memetic_ms += get_milli_seconds(p, get_time_point());
 
@@ -728,16 +787,20 @@ namespace GPU_HeiPa {
 
                     
                     for(u32 j= 0; j < num_parents; ++j) {
-                        parent_ids.push_back( tournament_selection( curr_edge_cut , tournament_size) );
+                        parent_ids.push_back( tournament_selection( curr_edge_cut , tournament_size , active) );
                     }
                     
                     // Ensure parent_ids[0] != parent_ids[1]
                     if (parent_ids.size() == 2 && parent_ids[0] == parent_ids[1]) {
-                        int new_parent = parent_ids[0];
-                        while (new_parent == parent_ids[0]) {
-                            new_parent = static_cast<int>(rand() % static_cast<int>(num_individuals));
+                        if (active.size() >= 2) {
+                            size_t idx;
+                            size_t new_parent = static_cast<size_t>(parent_ids[0]);
+                            while (new_parent == static_cast<size_t>(parent_ids[0])) {
+                                idx = static_cast<size_t>(rand()) % active.size();
+                                new_parent = active.at(idx);
+                            }
+                            parent_ids[1] = static_cast<int>(new_parent);
                         }
-                        parent_ids[1] = new_parent;
                     }
                 }
 
@@ -805,15 +868,53 @@ namespace GPU_HeiPa {
 
                 assert_state_after_partition(graphs.back(), offspring, config.k);
                 {
+                    //! soll ich das hier aus der loop rausziehen?
+                    //! -> erst alle individuen erstellen, dann in einem schritt updaten?
+                    //! -> sonst kann es sein dass neue individuen bereits mit neuen individuen erstellt werden... 
                     ScopedTimer _t("memetic", "memetic_refinement", "update population");   
                     UpdatePopulation(offspring, mem_stacks, i);
                 }
 
             }
 
+            control_size(level);
+
             return;
         }
 
+        // deactivate some bad individuals
+        void control_size(u32 level) {
+
+            size_t desired_count = num_individuals;
+            if( pop_management == PopulationManagement::steadystate)
+                desired_count = num_individuals;
+            else if(pop_management == PopulationManagement::shrinking)
+                desired_count = level + 1;
+
+            while(active.size() > desired_count) {
+
+                size_t worst_id = active[0];
+                f64 worst_goodness_score = determine_goodness_score( active[0] );
+
+                f64 curr_goodness_score;
+                for (size_t i = 1; i < active.size(); ++i) {
+                    size_t id = active[i];
+
+                    curr_goodness_score = determine_goodness_score(id);
+                    if( curr_goodness_score > worst_goodness_score) {
+                        worst_goodness_score = curr_goodness_score;
+                        worst_id = id;
+                    }
+                    
+                    
+                }
+
+                active.erase(std::remove(active.begin(), active.end(), worst_id), active.end());
+                
+            }
+
+            return;
+        }
         
 
         void UpdatePopulation(
@@ -831,7 +932,7 @@ namespace GPU_HeiPa {
            // const u32 BORDERLINE_EPSILON = 100;         // Margin: if difference <= epsilon, recompute with exact distance
 
             DistanceMode distance_mode = DistanceMode::Exact;
-            if (config.distance == "sampled") {
+            if (config.distance == "sampled" && !(pop_management == PopulationManagement::shrinking)) {
                 distance_mode = DistanceMode::Sampled;
             }
 
@@ -850,7 +951,6 @@ namespace GPU_HeiPa {
                         num_cpu_threads,
                         SAMPLE_SIZE
                     );
-                    min_distance_population = *std::min_element(min_distances.begin(), min_distances.end());
                     offspring_distance = determine_min_distance_offspring_sampled(
                         graphs.back(),
                         partitions,
@@ -868,16 +968,17 @@ namespace GPU_HeiPa {
                     determine_min_distances_population(
                         graphs.back(),
                         partitions,
+                        active,
                         min_distances,
                         k,
                         mem_stacks,
                         exec_spaces,
                         num_cpu_threads
                     );
-                    min_distance_population = *std::min_element(min_distances.begin(), min_distances.end());
                     offspring_distance = determine_min_distance_offspring(
                         graphs.back(),
                         partitions,
+                        active,
                         offspring,
                         k,
                         mem_stacks,
@@ -887,41 +988,44 @@ namespace GPU_HeiPa {
                     break;
             }
 
-            // std::cout << "Min distances: ";
-            // for (size_t i = 0; i < min_distances.size(); ++i) {
-            //     std::cout << min_distances[i];
-            //     if (i + 1 < min_distances.size()) std::cout << ", ";
-            // }
-            // std::cout << std::endl;
-// 
-            // std::cout << "min distance: " << min_distance_population << std::endl;
-            // std::cout << "Offspring distance: " << offspring_distance << std::endl;
-            
+            min_distance_population = std::numeric_limits<u32>::max();
+            for (size_t id : active) {
+                min_distance_population = std::min(min_distance_population, min_distances[id]);
+            }
+
 
             // weight_t worst_edgecut = curr_edge_cut[0];
-            weight_t best_edgecut = curr_edge_cut[0];
+
+
             
-            size_t worst_id = 0;
-            f64 worst_goodness_score = determine_goodness_score(0);
+            weight_t best_edgecut = curr_edge_cut[ active[0] ];
+            
+            size_t worst_id = active[0];
+            f64 worst_goodness_score = determine_goodness_score( worst_id );
 
+            
             f64 curr_goodness_score;
-            for (size_t i = 1; i < curr_edge_cut.size(); ++i) {
-                // if (curr_edge_cut[i] > worst_edgecut) {
-                //     worst_edgecut = curr_edge_cut[i];
-                // }
+            for (size_t i = 1; i < active.size(); ++i) {
+                size_t id = active[i];
 
-                if( curr_edge_cut[i] < best_edgecut)
-                    best_edgecut = curr_edge_cut[i];
+                if( curr_edge_cut[id] < best_edgecut)
+                    best_edgecut = curr_edge_cut[id];
 
-                curr_goodness_score = determine_goodness_score(i);
+                curr_goodness_score = determine_goodness_score(id);
                 if( curr_goodness_score > worst_goodness_score) {
                     worst_goodness_score = curr_goodness_score;
-                    worst_id = i;
+                    worst_id = id;
                 }
 
             }
 
 
+            /*
+            ?
+            ?   Macht das hier noch so wirklich sinn wenn ich am ende nur so 2-3 individuals habe?
+            ?   Vielleicht werden dann unnötig gute individuen rausgeworfen...
+            ?
+            */
             if( 
                 (edge_cut_offspring[offspring_id] < best_edgecut) || 
                 ( offspring_distance > min_distance_population )
@@ -933,6 +1037,7 @@ namespace GPU_HeiPa {
             
                 curr_edge_cut[ worst_id  ] = edge_cut_offspring[offspring_id];
                 curr_max_block_weight[ worst_id ] = max_block_weight_offspring[offspring_id];
+                min_distances[ worst_id ] = offspring_distance;
 
             }
                         

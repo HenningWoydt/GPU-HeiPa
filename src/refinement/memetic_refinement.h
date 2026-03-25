@@ -81,11 +81,12 @@ namespace GPU_HeiPa {
 
     inline int tournament_selection(
         const std::vector<weight_t> &fitness_values,
-        const u32 tournament_size
+        const u32 tournament_size,
+        const std::vector<size_t> &active
     ) {
         
         // get num_parents random numbers between [0, num_individuals)
-        size_t num_individuals = fitness_values.size();
+        size_t num_individuals = active.size();
         std::vector<size_t> indices;
         std::unordered_set<size_t> unique_indices;
         std::random_device rd;
@@ -94,8 +95,9 @@ namespace GPU_HeiPa {
 
         while (unique_indices.size() < tournament_size) {
             size_t idx = dis(gen);
-            if (unique_indices.insert(idx).second) {
-                indices.push_back(idx);
+            size_t parent_id = active[idx];
+            if (unique_indices.insert(parent_id).second) {
+                indices.push_back(parent_id);
             }
         }
 
@@ -561,23 +563,26 @@ namespace GPU_HeiPa {
     inline u32 determine_min_distance_offspring(
         const Graph &graph,
         const std::vector<Partition> &population,
+        const std::vector<size_t> &active,
         const Partition &offspring,
         partition_t k,
         std::vector<KokkosMemoryStack> &mem_stacks,
         std::vector<Kokkos::Cuda> &exec_spaces,
         size_t num_cpu_threads
     ) {
-        size_t pop_size = population.size();
+
+        // size_t pop_size = population.size();
         u32 min_distance = std::numeric_limits<u32>::max();
         
         //! you can parallelize this using
         //! an openmp min reduction!
         #pragma omp parallel for reduction(min:min_distance) num_threads(static_cast<int>(num_cpu_threads))
-        for(size_t i = 0; i < pop_size; ++i) {
+        for(size_t i = 0; i < active.size(); ++i) {
+            size_t id = active[i];
             size_t tid = static_cast<size_t>(omp_get_thread_num());
             u32 distance = determine_distance(
                 graph,
-                population[i],
+                population[id],
                 offspring,
                 k,
                 mem_stacks[tid],
@@ -594,6 +599,7 @@ namespace GPU_HeiPa {
      inline void determine_min_distances_population(
         const Graph &graph,
         const std::vector<Partition> &population,
+        const std::vector<size_t> &active,
         std::vector<u32> &min_distances,
         partition_t k,
         std::vector<KokkosMemoryStack> &mem_stacks,
@@ -602,28 +608,28 @@ namespace GPU_HeiPa {
 
     ) {
 
-        size_t pop_size = population.size();
+        //size_t pop_size = population.size();
 
-        std::vector<u32> all_distances( pop_size * pop_size, std::numeric_limits<u32>::max());
+        std::vector<u32> all_distances( active.size() * active.size(), std::numeric_limits<u32>::max());
 
         //! this can be trivially parallelized via
         //! #pragma omp parallel collapse
         #pragma omp parallel for collapse(2) num_threads(static_cast<int>(num_cpu_threads))
-        for(size_t i = 0; i < pop_size; ++i) {
-            for(size_t j = i + 1; j < pop_size; ++j) {
+        for(size_t i = 0; i < active.size(); ++i) {
+            for(size_t j = i + 1; j < active.size(); ++j) {
             
                 size_t tid = static_cast<size_t>(  omp_get_thread_num() );
                 u32 dis = determine_distance(
                         graph,
-                        population[i],
-                        population[j],
+                        population[ active[i] ],
+                        population[ active[j] ],
                         k,
                         mem_stacks[tid],
                         exec_spaces[tid]
                 );
 
-                all_distances[ i * pop_size + j ] = dis;
-                all_distances[ j * pop_size + i ] = dis;
+                all_distances[ i * active.size() + j ] = dis;
+                all_distances[ j * active.size() + i ] = dis;
                 
             }
         }
@@ -636,12 +642,12 @@ namespace GPU_HeiPa {
         //      }
         //  }
 
-        for(u32 i = 0; i < pop_size; ++i) {
+        for(u32 i = 0; i < active.size(); ++i) {
             u32 min_val = std::numeric_limits<u32>::max();
-            for(u32 j = 0; j < pop_size; ++j) {
-                min_val = std::min(min_val, all_distances[i * pop_size + j]);
+            for(u32 j = 0; j < active.size(); ++j) {
+                min_val = std::min(min_val, all_distances[i * active.size() + j]);
             }
-            min_distances[i] = min_val;
+            min_distances[ active[i] ] = min_val;
         }
 
         return;
