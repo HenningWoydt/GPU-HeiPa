@@ -255,6 +255,7 @@ namespace GPU_HeiPa {
         pop_back(mem_stack);
     }
 
+    /*
     inline void leaf_matching(TwoHopMatcher &thm,
                               const Graph &g,
                               UnmanagedDeviceVertex &matching,
@@ -327,6 +328,202 @@ namespace GPU_HeiPa {
 
         pop_back(mem_stack);
         pop_back(mem_stack);
+    }
+    */
+
+    inline void leaf_matching(TwoHopMatcher &thm,
+                              const Graph &g,
+                              UnmanagedDeviceVertex &matching,
+                              const Partition & /*partition*/,
+                              KokkosMemoryStack &mem_stack) {
+        const vertex_t n_unmapped_upper = thm.n - thm.n_matched;
+
+        // unmatched degree-1 vertices
+        UnmanagedDeviceVertex unmapped_v(
+            (vertex_t *) get_chunk_back(mem_stack, sizeof(vertex_t) * n_unmapped_upper),
+            n_unmapped_upper
+        );
+
+        vertex_t n_mappable = 0;
+
+        // -------------------------------------------------------------------------
+        // 1) collect unmatched degree-1 vertices
+        // -------------------------------------------------------------------------
+        {
+            ScopedTimer _t("coarsening", "thm_leaf_matching_bucketed", "determine_unmapped");
+
+            Kokkos::parallel_scan(
+                "fill_unmapped_deg1",
+                g.n,
+                KOKKOS_LAMBDA(const vertex_t u, vertex_t &offset, const bool final) {
+                    const bool is_unmatched_deg1 =
+                            (matching(u) == u) &&
+                            (g.neighborhood(u + 1) - g.neighborhood(u) == 1);
+
+                    if (is_unmatched_deg1) {
+                        if (final) {
+                            unmapped_v(offset) = u;
+                        }
+                        offset += 1;
+                    }
+                },
+                n_mappable
+            );
+            KOKKOS_PROFILE_FENCE();
+        }
+
+        if (n_mappable == 0) {
+            pop_back(mem_stack); // unmapped_v
+            return;
+        }
+
+        // centers(i) = unique neighbor of unmapped_v(i)
+        UnmanagedDeviceVertex centers(
+            (vertex_t *) get_chunk_back(mem_stack, sizeof(vertex_t) * n_mappable),
+            n_mappable
+        );
+
+        // counts(v) = number of leaf vertices attached to center v
+        UnmanagedDeviceVertex counts(
+            (vertex_t *) get_chunk_back(mem_stack, sizeof(vertex_t) * thm.n),
+            thm.n
+        );
+
+        // offsets(v) .. offsets(v+1)-1 is bucket for center v
+        UnmanagedDeviceVertex offsets(
+            (vertex_t *) get_chunk_back(mem_stack, sizeof(vertex_t) * (thm.n + 1)),
+            thm.n + 1
+        );
+
+        // cursors(v) = current fill position in bucket v
+        UnmanagedDeviceVertex cursors(
+            (vertex_t *) get_chunk_back(mem_stack, sizeof(vertex_t) * thm.n),
+            thm.n
+        );
+
+        // leaves grouped contiguously by center
+        UnmanagedDeviceVertex bucketed_leaves(
+            (vertex_t *) get_chunk_back(mem_stack, sizeof(vertex_t) * n_mappable),
+            n_mappable
+        );
+
+        // center id for each bucketed position
+        UnmanagedDeviceVertex centers_by_bucket(
+            (vertex_t *) get_chunk_back(mem_stack, sizeof(vertex_t) * n_mappable),
+            n_mappable
+        );
+
+        Kokkos::deep_copy(counts, vertex_t(0));
+        Kokkos::deep_copy(cursors, vertex_t(0));
+
+        // -------------------------------------------------------------------------
+        // 2) compute center of each leaf and count leaves per center
+        // -------------------------------------------------------------------------
+        {
+            ScopedTimer _t("coarsening", "thm_leaf_matching_bucketed", "count_per_center");
+
+            Kokkos::parallel_for(
+                "count_per_center",
+                n_mappable,
+                KOKKOS_LAMBDA(const vertex_t i) {
+                    const vertex_t u = unmapped_v(i);
+                    const vertex_t v = g.edges_v(g.neighborhood(u)); // unique neighbor for deg-1 vertex
+                    centers(i) = v;
+                    Kokkos::atomic_inc(&counts(v));
+                }
+            );
+            KOKKOS_PROFILE_FENCE();
+        }
+
+        // -------------------------------------------------------------------------
+        // 3) exclusive scan counts -> offsets
+        // -------------------------------------------------------------------------
+        {
+            ScopedTimer _t("coarsening", "thm_leaf_matching_bucketed", "exclusive_scan_offsets");
+
+            Kokkos::parallel_scan(
+                "exclusive_scan_offsets",
+                thm.n + 1,
+                KOKKOS_LAMBDA(const vertex_t i, vertex_t &update, const bool final) {
+                    const vertex_t val = (i < thm.n ? counts(i) : 0);
+                    if (final) {
+                        offsets(i) = update;
+                    }
+                    update += val;
+                }
+            );
+            KOKKOS_PROFILE_FENCE();
+        }
+
+        // -------------------------------------------------------------------------
+        // 4) scatter leaves into contiguous buckets by center
+        // -------------------------------------------------------------------------
+        {
+            ScopedTimer _t("coarsening", "thm_leaf_matching_bucketed", "bucket_leaves");
+
+            Kokkos::parallel_for(
+                "bucket_leaves",
+                n_mappable,
+                KOKKOS_LAMBDA(const vertex_t i) {
+                    const vertex_t u = unmapped_v(i);
+                    const vertex_t v = centers(i);
+
+                    const vertex_t pos = Kokkos::atomic_fetch_add(&cursors(v), vertex_t(1));
+                    const vertex_t dst = offsets(v) + pos;
+
+                    bucketed_leaves(dst) = u;
+                    centers_by_bucket(dst) = v;
+                }
+            );
+            KOKKOS_PROFILE_FENCE();
+        }
+
+        // -------------------------------------------------------------------------
+        // 5) pair adjacent leaves within each center bucket
+        //
+        // For bucket [beg, end), create:
+        //   (beg+0, beg+1), (beg+2, beg+3), ...
+        // We parallelize over all bucketed positions and let only even local
+        // positions start a pair.
+        // -------------------------------------------------------------------------
+        {
+            ScopedTimer _t("coarsening", "thm_leaf_matching_bucketed", "pair_within_buckets");
+
+            vertex_t made_pairs = 0;
+
+            Kokkos::parallel_reduce(
+                "pair_within_buckets",
+                n_mappable,
+                KOKKOS_LAMBDA(const vertex_t i, vertex_t &local_pairs) {
+                    const vertex_t v = centers_by_bucket(i);
+                    const vertex_t local_idx = i - offsets(v);
+
+                    if ((local_idx & 1) != 0) return; // only even positions start a pair
+                    if (i + 1 >= n_mappable) return; // safety at end of array
+                    if (centers_by_bucket(i + 1) != v) return; // do not cross bucket boundary
+
+                    const vertex_t u0 = bucketed_leaves(i);
+                    const vertex_t u1 = bucketed_leaves(i + 1);
+
+                    matching(u0) = u1;
+                    matching(u1) = u0;
+                    local_pairs += 1;
+                },
+                made_pairs
+            );
+
+            thm.n_matched += 2 * made_pairs;
+            KOKKOS_PROFILE_FENCE();
+        }
+
+        // pop in reverse allocation order
+        pop_back(mem_stack); // centers_by_bucket
+        pop_back(mem_stack); // bucketed_leaves
+        pop_back(mem_stack); // cursors
+        pop_back(mem_stack); // offsets
+        pop_back(mem_stack); // counts
+        pop_back(mem_stack); // centers
+        pop_back(mem_stack); // unmapped_v
     }
 
     inline void twin_matching(TwoHopMatcher &thm,
@@ -508,28 +705,28 @@ namespace GPU_HeiPa {
         heavy_edge_matching(thm, g, matching, partition, mem_stack);
 
         std::cout << "Heavy-Edge: " << thm.n_matched << " "
-          << std::fixed << thm.threshold * (f64) g.n << " " << (thm.n_matched) / ((f64) g.n) << std::endl;
+                << std::fixed << thm.threshold * (f64) g.n << " " << (thm.n_matched) / ((f64) g.n) << std::endl;
 
         if ((f64) thm.n_matched < thm.threshold * (f64) g.n) {
             leaf_matching(thm, g, matching, partition, mem_stack);
         }
 
         std::cout << "Leaf     : " << thm.n_matched << " "
-          << std::fixed << thm.threshold * (f64) g.n << " " << (thm.n_matched) / ((f64) g.n) << std::endl;
+                << std::fixed << thm.threshold * (f64) g.n << " " << (thm.n_matched) / ((f64) g.n) << std::endl;
 
         if ((f64) thm.n_matched < thm.threshold * (f64) g.n) {
             twin_matching(thm, g, matching, partition, mem_stack);
         }
 
         std::cout << "Twin     : " << thm.n_matched << " "
-          << std::fixed << thm.threshold * (f64) g.n << " " << (thm.n_matched) / ((f64) g.n) << std::endl;
+                << std::fixed << thm.threshold * (f64) g.n << " " << (thm.n_matched) / ((f64) g.n) << std::endl;
 
         if ((f64) thm.n_matched < thm.threshold * (f64) g.n) {
             relative_matching(thm, g, matching, partition);
         }
 
         std::cout << "Rela     : " << thm.n_matched << " "
-          << std::fixed << thm.threshold * (f64) g.n << " " << (thm.n_matched) / ((f64) g.n) << std::endl;
+                << std::fixed << thm.threshold * (f64) g.n << " " << (thm.n_matched) / ((f64) g.n) << std::endl;
 
         Mapping mapping = determine_mapping(matching, g.n, mem_stack);
 
