@@ -417,68 +417,73 @@ namespace GPU_HeiPa {
                                   const Graph &g,
                                   UnmanagedDeviceVertex &matching,
                                   const Partition &partition) {
-        {
-            ScopedTimer _t("coarsening", "thm_relative_matching", "pick_neighbor");
-            Kokkos::parallel_for("pick_neighbor", g.n, KOKKOS_LAMBDA(const vertex_t u) {
-                if (matching(u) != u) {
-                    // ignore already matched
-                    thm.preferred_neighbor(u) = u;
-                    return;
-                }
+        u32 made_pairs = 1;
+        while (made_pairs > 0) {
+            //
+            {
+                ScopedTimer _t("coarsening", "thm_relative_matching", "pick_neighbor");
+                Kokkos::parallel_for("pick_neighbor", g.n, KOKKOS_LAMBDA(const vertex_t u) {
+                    if (matching(u) != u) {
+                        // ignore already matched
+                        thm.preferred_neighbor(u) = u;
+                        return;
+                    }
 
-                vertex_t best_v = u;
-                f32 best_rating = 0;
+                    vertex_t best_v = u;
+                    f32 best_rating = 0;
 
-                for (u32 i = g.neighborhood(u); i < g.neighborhood(u + 1); ++i) {
-                    vertex_t mid_v = g.edges_v(i);
-                    weight_t mid_e_w = g.edges_w(i);
-                    vertex_t mid_deg = g.neighborhood(mid_v + 1) - g.neighborhood(mid_v);
-                    if (mid_deg > 10) { continue; } // avoid matchmaker with high degree
-                    if (matching(mid_v) == mid_v) { continue; } // avoid unmatched matchmaker
+                    for (u32 i = g.neighborhood(u); i < g.neighborhood(u + 1); ++i) {
+                        vertex_t mid_v = g.edges_v(i);
+                        weight_t mid_e_w = g.edges_w(i);
+                        vertex_t mid_deg = g.neighborhood(mid_v + 1) - g.neighborhood(mid_v);
+                        if (mid_deg > 30) { continue; } // avoid matchmaker with high degree
+                        // if (matching(mid_v) == mid_v) { continue; } // avoid unmatched matchmaker
 
-                    for (u32 j = g.neighborhood(mid_v); j < g.neighborhood(mid_v + 1); ++j) {
-                        vertex_t v = g.edges_v(j);
-                        weight_t v_e_w = g.edges_w(j);
+                        for (u32 j = g.neighborhood(mid_v); j < g.neighborhood(mid_v + 1); ++j) {
+                            vertex_t v = g.edges_v(j);
+                            weight_t v_e_w = g.edges_w(j);
 
-                        if (u == v) { continue; }
-                        if (matching(v) != v) { continue; } // ignore already matched
+                            if (u == v) { continue; }
+                            if (matching(v) != v) { continue; } // ignore already matched
 
-                        f32 rating = (f32) ((mid_e_w + v_e_w) * (mid_e_w + v_e_w)) / (f32) (g.weights(u) * g.weights(v));
-                        rating += edge_noise(u, v, 0);
+                            f32 rating = (f32) ((mid_e_w + v_e_w) * (mid_e_w + v_e_w)) / (f32) (g.weights(u) * g.weights(v));
+                            rating += edge_noise(u, v, 0);
 
-                        if (rating > best_rating || (rating == best_rating && v < best_v)) {
-                            best_v = v;
-                            best_rating = rating;
+                            if (rating > best_rating || (rating == best_rating && v < best_v)) {
+                                best_v = v;
+                                best_rating = rating;
+                            }
                         }
                     }
-                }
 
-                thm.preferred_neighbor(u) = best_v;
-            });
-            KOKKOS_PROFILE_FENCE();
-        }
-        //
-        u32 made_pairs = 0;
-        //
-        {
-            ScopedTimer _t("coarsening", "thm_relative_matching", "apply_matching");
-            Kokkos::parallel_reduce("apply_matching", g.n, KOKKOS_LAMBDA(const vertex_t u, u32 &local) {
-                if (u == thm.preferred_neighbor(u)) { return; }
+                    thm.preferred_neighbor(u) = best_v;
+                });
+                KOKKOS_PROFILE_FENCE();
+            }
 
-                vertex_t v = thm.preferred_neighbor(u);
-                vertex_t preferred_v = thm.preferred_neighbor(v);
+            //
+            made_pairs = 0;
+            //
+            {
+                ScopedTimer _t("coarsening", "thm_relative_matching", "apply_matching");
+                Kokkos::parallel_reduce("apply_matching", g.n, KOKKOS_LAMBDA(const vertex_t u, u32 &local) {
+                    if (u == thm.preferred_neighbor(u)) { return; }
 
-                if (matching(u) != u || matching(v) != v) { return; }
+                    vertex_t v = thm.preferred_neighbor(u);
+                    vertex_t preferred_v = thm.preferred_neighbor(v);
 
-                if (u == preferred_v && u < v) {
-                    matching(u) = v;
-                    matching(v) = u;
-                    local += 1;
-                }
-            }, made_pairs);
+                    if (matching(u) != u || matching(v) != v) { return; }
 
-            thm.n_matched += 2 * made_pairs; // host scalar
-            KOKKOS_PROFILE_FENCE();
+                    if (u == preferred_v && u < v) {
+                        matching(u) = v;
+                        matching(v) = u;
+                        local += 1;
+                    }
+                }, made_pairs);
+
+                thm.n_matched += 2 * made_pairs; // host scalar
+                KOKKOS_PROFILE_FENCE();
+            }
         }
     }
 
@@ -502,17 +507,29 @@ namespace GPU_HeiPa {
 
         heavy_edge_matching(thm, g, matching, partition, mem_stack);
 
+        std::cout << "Heavy-Edge: " << thm.n_matched << " "
+          << std::fixed << thm.threshold * (f64) g.n << " " << (thm.n_matched) / ((f64) g.n) << std::endl;
+
         if ((f64) thm.n_matched < thm.threshold * (f64) g.n) {
             leaf_matching(thm, g, matching, partition, mem_stack);
         }
+
+        std::cout << "Leaf     : " << thm.n_matched << " "
+          << std::fixed << thm.threshold * (f64) g.n << " " << (thm.n_matched) / ((f64) g.n) << std::endl;
 
         if ((f64) thm.n_matched < thm.threshold * (f64) g.n) {
             twin_matching(thm, g, matching, partition, mem_stack);
         }
 
+        std::cout << "Twin     : " << thm.n_matched << " "
+          << std::fixed << thm.threshold * (f64) g.n << " " << (thm.n_matched) / ((f64) g.n) << std::endl;
+
         if ((f64) thm.n_matched < thm.threshold * (f64) g.n) {
             relative_matching(thm, g, matching, partition);
         }
+
+        std::cout << "Rela     : " << thm.n_matched << " "
+          << std::fixed << thm.threshold * (f64) g.n << " " << (thm.n_matched) / ((f64) g.n) << std::endl;
 
         Mapping mapping = determine_mapping(matching, g.n, mem_stack);
 
