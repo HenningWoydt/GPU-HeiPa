@@ -36,6 +36,16 @@
 #include "../utility/profiler.h"
 
 namespace GPU_HeiPa {
+    KOKKOS_INLINE_FUNCTION
+    u32 mix32(u32 x) {
+        x ^= x >> 16;
+        x *= 0x7feb352dU;
+        x ^= x >> 15;
+        x *= 0x846ca68bU;
+        x ^= x >> 16;
+        return x;
+    }
+
     struct Graph {
         vertex_t n = 0;
         vertex_t m = 0;
@@ -210,8 +220,9 @@ namespace GPU_HeiPa {
                 u32 end = hash_offsets(u_new + 1);
                 u32 len = end - beg;
 
+                u32 h = mix32(v_new);
                 for (u32 j = 0; j < len; ++j) {
-                    u32 idx = beg + ((v_new + j) % len);
+                    u32 idx = beg + ((h + j) % len);
                     vertex_t found_v = hash_keys(idx);
 
                     if (found_v == v_new) {
