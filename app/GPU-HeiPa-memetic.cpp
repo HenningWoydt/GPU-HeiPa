@@ -29,6 +29,7 @@
 #include <Kokkos_Core.hpp>
 
 #include "../src/datastructures/memeticSolver.h"
+#include "../src/datastructures/memeticSolverShrinking.h"
 #include "../src/utility/memetic_configuration.h"
 
 using namespace GPU_HeiPa;
@@ -109,7 +110,15 @@ int main(int argc, char *argv[]) {
 
 
         auto sp_solver = get_time_point();
-        HostPartition host_partition = memeticSolver(config).solve(host_g);
+        HostPartition host_partition;
+        std::cout << config.population_management << std::endl;
+        if (config.population_management == "shrinking") {
+            host_partition = memeticSolverShrinking(config).solve(host_g);
+        }else{
+            host_partition = memeticSolver(config).solve(host_g);
+        }
+
+        
         Kokkos::fence();
 
         if (verbose_level >= 1) {

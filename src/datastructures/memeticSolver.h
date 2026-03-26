@@ -49,16 +49,14 @@
 #include "../utility/profiler.h"
 #include "../utility/asserts.h"
 #include "../utility/edge_cut.h"
+#include "../utility/memetic_helper.h"
 
 #include <cuda_runtime.h>
 #include "omp.h"
 
 namespace GPU_HeiPa {
 
-    enum class PopulationManagement {
-        steadystate,
-        shrinking // #partitions == (level + 1)
-        };
+
 
     class memeticSolver {
     public:
@@ -1034,12 +1032,12 @@ namespace GPU_HeiPa {
                 ( offspring_distance > min_distance_population )
             ) {
                 
-                std::cout << "inserted offspring, because it was ";
-                if( edge_cut_offspring[offspring_id] < best_edgecut)  {
-                    std::cout << " better " << std::endl;
-                } else {
-                    std::cout << " very different " << std::endl;
-                }
+                // std::cout << "inserted offspring, because it was ";
+                // if( edge_cut_offspring[offspring_id] < best_edgecut)  {
+                //     std::cout << " better " << std::endl;
+                // } else {
+                //     std::cout << " very different " << std::endl;
+                // }
 
                 auto rN = std::make_pair<size_t, size_t>(0, graphs.back().n);
                 deep_copy(Kokkos::subview(partitions[ worst_id ].map, rN), Kokkos::subview(offspring.map, rN));
@@ -1050,7 +1048,7 @@ namespace GPU_HeiPa {
                 min_distances[ worst_id ] = offspring_distance;
 
             } else{
-                std::cout << " didnt insert offspring " << std::endl;
+               // std::cout << " didnt insert offspring " << std::endl;
             }
                         
             free_partition(offspring, mem_stacks[ partition_stack ]);

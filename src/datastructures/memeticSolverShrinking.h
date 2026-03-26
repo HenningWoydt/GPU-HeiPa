@@ -49,16 +49,12 @@
 #include "../utility/profiler.h"
 #include "../utility/asserts.h"
 #include "../utility/edge_cut.h"
+#include "../utility/memetic_helper.h"
 
 #include <cuda_runtime.h>
 #include "omp.h"
 
 namespace GPU_HeiPa {
-
-    enum class PopulationManagement {
-        steadystate,
-        shrinking // #partitions == (level + 1)
-        };
 
     class memeticSolverShrinking {
     public:
@@ -935,7 +931,7 @@ namespace GPU_HeiPa {
 
             
             // fine tune
-            size_t desired_count = (level + 1) * 2;
+            size_t desired_count = (level + 1) * 1;
 
             while(count_active > desired_count) {
 

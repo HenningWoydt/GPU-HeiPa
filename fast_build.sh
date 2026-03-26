@@ -34,5 +34,5 @@
           -DENABLE_PROFILER=0 \
           -DASSERT_ENABLED=0
  #cmake --build . --parallel "$JOBS" --target GPU-HeiPa
- #cmake --build . --parallel "$JOBS" --target GPU-HeiPa-memetic
- cmake --build . --parallel "$JOBS" --target shrinking
+ cmake --build . --parallel "$JOBS" --target GPU-HeiPa-memetic
+ #cmake --build . --parallel "$JOBS" --target shrinking
