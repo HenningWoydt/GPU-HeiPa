@@ -124,13 +124,15 @@ namespace GPU_HeiPa {
     inline void assign_leftovers_fullyRandom(
             const Graph &graph,
             Partition &child,
-            partition_t k
+            partition_t k,
+            Kokkos::Cuda &exec_space
     ){
         Kokkos::Random_XorShift64_Pool<> random_pool(12345);
         
         // assign remaining vertices
         Kokkos::parallel_for(
-            "assign leftovers", graph.n,
+            "assign leftovers", 
+            Kokkos::RangePolicy<Kokkos::Cuda>(exec_space, 0, graph.n),
             KOKKOS_LAMBDA(vertex_t u) {
                 
                 if(child.map(u) == 5*k) {
@@ -154,17 +156,19 @@ namespace GPU_HeiPa {
             Partition &child,
             partition_t k,
             weight_t lmax,
-            KokkosMemoryStack  &mem_stack
+            KokkosMemoryStack  &mem_stack,
+            Kokkos::Cuda &exec_space
     ) {
         
         Kokkos::Random_XorShift64_Pool<> random_pool(12345);
         
-        Kokkos::Cuda exec_space;
+        
         BlockConn bc = init_BlockConn(graph, child, mem_stack, exec_space);
 
 
         Kokkos::parallel_for(
-            "distribute leftovers", graph.n,
+            "distribute leftovers", 
+            Kokkos::RangePolicy<Kokkos::Cuda>(exec_space, 0, graph.n),
             KOKKOS_LAMBDA(vertex_t u) {
 
                 // calculate gain
@@ -215,20 +219,22 @@ namespace GPU_HeiPa {
             partition_t k,
             weight_t lmax,
             KokkosMemoryStack  &mem_stack,
-            f64 alpha
+            f64 alpha,
+            Kokkos::Cuda &exec_space
     ) {
         // this determines how much underloaded blocks are weighted
         // alpha = 0 -> only gain, big alpha -> only underloaded blocks
         
         Kokkos::Random_XorShift64_Pool<> random_pool(12345);
         
-        Kokkos::Cuda exec_space;
+        
         BlockConn bc = init_BlockConn(graph, child, mem_stack, exec_space);
 
         //! determine max gain
         DeviceScalarWeight max_gain = DeviceScalarWeight("highest gain value"); ;
         Kokkos::parallel_reduce(
-            "determine max gain", bc.size,
+            "determine max gain", 
+            Kokkos::RangePolicy<Kokkos::Cuda>(exec_space, 0, bc.size),
             KOKKOS_LAMBDA(u32 index, weight_t &update) {
                 weight_t val = bc.weights(index);
                 if ( (val > update) && (bc.ids(index) != 5*k) ) {
@@ -238,7 +244,8 @@ namespace GPU_HeiPa {
         );
 
         Kokkos::parallel_for(
-            "distribute leftovers", graph.n,
+            "distribute leftovers", 
+            Kokkos::RangePolicy<Kokkos::Cuda>(exec_space, 0, graph.n),
             KOKKOS_LAMBDA(vertex_t u) {
 
                 // calculate gain
@@ -293,7 +300,8 @@ namespace GPU_HeiPa {
             Partition &child,
             partition_t k,
             weight_t lmax,
-            KokkosMemoryStack  &mem_stack
+            KokkosMemoryStack  &mem_stack,
+            Kokkos::Cuda &exec_space
     ){
 
         Kokkos::Random_XorShift64_Pool<> random_pool(12345);
@@ -301,7 +309,8 @@ namespace GPU_HeiPa {
 
 
         Kokkos::parallel_scan(
-            "create distribution", k,
+            "create distribution", 
+            Kokkos::RangePolicy<Kokkos::Cuda>(exec_space, 0, k),
             KOKKOS_LAMBDA(partition_t id, f64 &update, bool final) {
 
                 weight_t sum = 0;
@@ -322,7 +331,8 @@ namespace GPU_HeiPa {
 
         // assign remaining vertices
         Kokkos::parallel_for(
-            "assign leftovers", graph.n,
+            "assign leftovers", 
+            Kokkos::RangePolicy<Kokkos::Cuda>(exec_space, 0, graph.n),
             KOKKOS_LAMBDA(vertex_t u) {
                 
                 if(child.map(u) == 5*k) {
@@ -367,7 +377,8 @@ namespace GPU_HeiPa {
         KokkosMemoryStack &mem_stack,
         const std::string &leftover_strategy,
         f64 alpha,
-        partition_t extent
+        partition_t extent,
+        Kokkos::Cuda &exec_space
     
     ) {
 
@@ -381,8 +392,10 @@ namespace GPU_HeiPa {
             population.size()
         );
 
-        Kokkos::deep_copy(parent_ids_device, Kokkos::View<const int*>(parent_ids.data(), parent_ids.size()));
-        Kokkos::deep_copy(population_device, Kokkos::View<const Partition*>(population.data(), population.size()));
+        Kokkos::deep_copy(exec_space ,parent_ids_device, Kokkos::View<const int*>(parent_ids.data(), parent_ids.size()));
+        Kokkos::deep_copy(exec_space ,population_device, Kokkos::View<const Partition*>(population.data(), population.size()));
+
+        exec_space.fence();
 
         partition_t k_prime = next_power_of_two(k);
         u32 num_bits = bits_needed(k_prime);
@@ -395,7 +408,8 @@ namespace GPU_HeiPa {
 
         
         Kokkos::parallel_for(
-            "init buckets", num_buckets,
+            "init buckets", 
+            Kokkos::RangePolicy<Kokkos::Cuda>(exec_space, 0, num_buckets),
             KOKKOS_LAMBDA(u64 index) {
                 buckets(index).key_count = 0;
                 buckets(index).key = index;
@@ -403,7 +417,8 @@ namespace GPU_HeiPa {
         );
 
         Kokkos::parallel_for(
-            "fill buckets", graph.n,
+            "fill buckets", 
+            Kokkos::RangePolicy<Kokkos::Cuda>(exec_space, 0, graph.n),
             KOKKOS_LAMBDA(vertex_t u) {
                 u64 key = determine_key(u, parent_ids_device, population_device, num_bits); 
                 Kokkos::atomic_fetch_add(&buckets( key ).key_count, 1);
@@ -413,7 +428,7 @@ namespace GPU_HeiPa {
         // sort descending based on key_count
         // after sorting, the k most frequent keys will be at the top
         // and you can query them via .key
-        Kokkos::sort(buckets, KOKKOS_LAMBDA(const KeyTuple& a, const KeyTuple& b) {
+        Kokkos::sort(exec_space, buckets, KOKKOS_LAMBDA(const KeyTuple& a, const KeyTuple& b) {
             return a.key_count > b.key_count;
         });
 
@@ -425,7 +440,8 @@ namespace GPU_HeiPa {
 
         // assign vertices of the backbone to the offspring
         Kokkos::parallel_for(
-            "create new offspring", graph.n,
+            "create new offspring", 
+            Kokkos::RangePolicy<Kokkos::Cuda>(exec_space, 0, graph.n),
             KOKKOS_LAMBDA(vertex_t u) {
                 
                 partition_t id;
@@ -462,13 +478,13 @@ namespace GPU_HeiPa {
 
 
         if (leftover_strategy == "random") {
-            assign_leftovers_fullyRandom(graph, child, k);
+            assign_leftovers_fullyRandom(graph, child, k, exec_space);
         } else if (leftover_strategy == "balanced") {
-            assign_leftovers_favorUnderloadedBlocks(graph, child, k, lmax, mem_stack);
+            assign_leftovers_favorUnderloadedBlocks(graph, child, k, lmax, mem_stack, exec_space);
         } else if (leftover_strategy == "gain") {
-            assign_leftovers_gain(graph, child, k, lmax, mem_stack);
+            assign_leftovers_gain(graph, child, k, lmax, mem_stack, exec_space);
         } else {
-            assign_leftovers_gain_and_weight(graph, child, k, lmax, mem_stack, alpha);
+            assign_leftovers_gain_and_weight(graph, child, k, lmax, mem_stack, alpha, exec_space);
         }
 
         pop_back(mem_stack); //rm buckets
@@ -557,7 +573,7 @@ namespace GPU_HeiPa {
     inline u32 determine_min_distance_offspring(
         const Graph &graph,
         const std::vector<Partition> &population,
-        const std::vector<size_t> &active,
+        size_t parents_curr,
         const Partition &offspring,
         partition_t k,
         std::vector<KokkosMemoryStack> &mem_stacks,
@@ -568,15 +584,13 @@ namespace GPU_HeiPa {
         // size_t pop_size = population.size();
         u32 min_distance = std::numeric_limits<u32>::max();
         
-        //! you can parallelize this using
-        //! an openmp min reduction!
+
         #pragma omp parallel for reduction(min:min_distance) num_threads(static_cast<int>(num_cpu_threads))
-        for(size_t i = 0; i < active.size(); ++i) {
-            size_t id = active[i];
+        for(size_t i = 0; i < parents_curr; ++i) {
             size_t tid = static_cast<size_t>(omp_get_thread_num());
             u32 distance = determine_distance(
                 graph,
-                population[id],
+                population[i],
                 offspring,
                 k,
                 mem_stacks[tid],
@@ -593,7 +607,7 @@ namespace GPU_HeiPa {
      inline void determine_min_distances_population(
         const Graph &graph,
         const std::vector<Partition> &population,
-        const std::vector<size_t> &active,
+        size_t parents_curr, // amount of non-offspring individuals in the population
         std::vector<u32> &min_distances,
         partition_t k,
         std::vector<KokkosMemoryStack> &mem_stacks,
@@ -604,44 +618,36 @@ namespace GPU_HeiPa {
 
         //size_t pop_size = population.size();
 
-        std::vector<u32> all_distances( active.size() * active.size(), std::numeric_limits<u32>::max());
+        std::vector<u32> all_distances( parents_curr * parents_curr, std::numeric_limits<u32>::max());
 
         //! this can be trivially parallelized via
         //! #pragma omp parallel collapse
         #pragma omp parallel for collapse(2) num_threads(static_cast<int>(num_cpu_threads))
-        for(size_t i = 0; i < active.size(); ++i) {
-            for(size_t j = i + 1; j < active.size(); ++j) {
+        for(size_t i = 0; i < parents_curr; ++i) {
+            for(size_t j = i + 1; j < parents_curr; ++j) {
             
                 size_t tid = static_cast<size_t>(  omp_get_thread_num() );
                 u32 dis = determine_distance(
                         graph,
-                        population[ active[i] ],
-                        population[ active[j] ],
+                        population[ i ],
+                        population[ j ],
                         k,
                         mem_stacks[tid],
                         exec_spaces[tid]
                 );
 
-                all_distances[ i * active.size() + j ] = dis;
-                all_distances[ j * active.size() + i ] = dis;
+                all_distances[ i * parents_curr + j ] = dis;
+                all_distances[ j * parents_curr + i ] = dis;
                 
             }
         }
 
-        // Print all distances
-        //  for (u32 i = 0; i < pop_size; ++i) {
-        //      for (u32 j = 0; j < pop_size; ++j) {
-        //          std::cout << "Distance[" << i << "][" << j << "] = " 
-        //                    << all_distances[i * pop_size + j] << std::endl;
-        //      }
-        //  }
-
-        for(u32 i = 0; i < active.size(); ++i) {
+        for(u32 i = 0; i < parents_curr; ++i) {
             u32 min_val = std::numeric_limits<u32>::max();
-            for(u32 j = 0; j < active.size(); ++j) {
-                min_val = std::min(min_val, all_distances[i * active.size() + j]);
+            for(u32 j = 0; j < parents_curr; ++j) {
+                min_val = std::min(min_val, all_distances[i * parents_curr + j]);
             }
-            min_distances[ active[i] ] = min_val;
+            min_distances[ i ] = min_val;
         }
 
         return;
@@ -655,13 +661,14 @@ namespace GPU_HeiPa {
         const Graph &graph,
         const std::vector<Partition> &population,
         const Partition &offspring,
+        size_t parents_curr,
         partition_t k,
         std::vector<KokkosMemoryStack> &mem_stacks,
         std::vector<Kokkos::Cuda> &exec_spaces,
         size_t num_cpu_threads,
         size_t sample_size
     ) {
-        size_t pop_size = population.size();
+        size_t pop_size = parents_curr;
         u32 min_distance = std::numeric_limits<u32>::max();
         
         // Create indices for sampling
@@ -675,9 +682,11 @@ namespace GPU_HeiPa {
         std::mt19937 g(rd());
         std::shuffle(candidate_indices.begin(), candidate_indices.end(), g);
         
+        const size_t num_to_check = std::min(sample_size, candidate_indices.size());
+
         // Evaluate offspring against sampled candidates
         #pragma omp parallel for reduction(min:min_distance) num_threads(static_cast<int>(num_cpu_threads))
-        for (size_t s = 0; s < sample_size; ++s) {
+        for (size_t s = 0; s < num_to_check; ++s) {
             size_t individual = candidate_indices[s];
             size_t tid = static_cast<size_t>(omp_get_thread_num());
             u32 distance = determine_distance(
@@ -698,6 +707,7 @@ namespace GPU_HeiPa {
     inline void determine_min_distances_population_sampled(
         const Graph &graph,
         const std::vector<Partition> &population,
+        size_t parents_curr,
         std::vector<u32> &min_distances,
         partition_t k,
         std::vector<KokkosMemoryStack> &mem_stacks,
@@ -705,7 +715,7 @@ namespace GPU_HeiPa {
         size_t num_cpu_threads,
         size_t sample_size
     ) {
-        size_t pop_size = population.size();
+        size_t pop_size = parents_curr;
         
         // For each individual, compute distance to a sampled subset of other individuals
         #pragma omp parallel for num_threads(static_cast<int>(num_cpu_threads))
@@ -713,9 +723,10 @@ namespace GPU_HeiPa {
             // Build candidate set: all individuals except i
             std::vector<size_t> candidates;
             for (size_t j = 0; j < pop_size; ++j) {
-                if (i != j) {
+                
+                if(i != j)
                     candidates.push_back(j);
-                }
+                
             }
             
             // Shuffle and sample

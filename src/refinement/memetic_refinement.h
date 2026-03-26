@@ -681,9 +681,11 @@ namespace GPU_HeiPa {
         std::mt19937 g(rd());
         std::shuffle(candidate_indices.begin(), candidate_indices.end(), g);
         
+        const size_t num_to_check = std::min(sample_size, candidate_indices.size());
+
         // Evaluate offspring against sampled candidates
         #pragma omp parallel for reduction(min:min_distance) num_threads(static_cast<int>(num_cpu_threads))
-        for (size_t s = 0; s < sample_size; ++s) {
+        for (size_t s = 0; s < num_to_check; ++s) {
             size_t individual = candidate_indices[s];
             size_t tid = static_cast<size_t>(omp_get_thread_num());
             u32 distance = determine_distance(

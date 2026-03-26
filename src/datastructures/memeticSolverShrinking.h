@@ -42,7 +42,7 @@
 #include "partition.h"
 #include "../coarsening/two_hop_matching.h"
 #include "../refinement/jet_label_propagation.h"
-#include "../refinement/memetic_refinement.h"
+#include "../refinement/memetic_refinementShrinking.h"
 #include "../initial_partitioning/metis_partitioning.h"
 #include "../utility/definitions.h"
 #include "../utility/memetic_configuration.h"
@@ -98,6 +98,7 @@ namespace GPU_HeiPa {
         size_t parents_curr = num_individuals;
         size_t count_active;
 
+        vertex_t curr_partition_size;
 
         std::vector<cudaStream_t> cuda_streams = std::vector<cudaStream_t>(num_cpu_threads);
         std::vector<Kokkos::Cuda> exec_spaces; 
@@ -592,12 +593,6 @@ namespace GPU_HeiPa {
                     // scope for uncontraction
                     auto p = get_time_point();
 
-                    //TODO: 1. count how many new partitiosn there will be ( #active flags)
-                    //TODO: 2. create new partitions vector (pushback[] = init_partition)
-                    //TODO: 3. "copy and uncoarsen": use the uncoarsen method to fill new partitions
-                    //TODO:    with values, based on old partitions
-                    //TODO: 4. deallocate / destroy old partitions
-
                     std::vector<weight_t> cut_tmp;
                     std::vector<weight_t> weight_tmp; 
 
@@ -618,8 +613,10 @@ namespace GPU_HeiPa {
                     curr_max_block_weight.clear();
                     curr_max_block_weight.resize(count_active + num_crossovers);
 
+                    curr_partition_size = mappings.back().old_n;
+
                     for(size_t i = 0; i < count_active ; ++i) {
-                        solutions[ level % 2].push_back( initialize_partition( mappings.back().old_n , k, lmax, mem_stacks[ stack_ids[level % 2]]) );
+                        solutions[ level % 2].push_back( initialize_partition( curr_partition_size  , k, lmax, mem_stacks[ stack_ids[level % 2]]) );
                     }
 
 
@@ -649,6 +646,7 @@ namespace GPU_HeiPa {
                     for(size_t i = 0; i < count_active; ++i) {
                         active_b.push_back(true);
                     }
+
 
 
 
@@ -689,11 +687,11 @@ namespace GPU_HeiPa {
                 }
 
                 {
-                    // auto p = get_time_point();
-                    // if(active.size() >= tournament_size)
-                    //     memetic_refinement(level, mem_stacks);
-                    // 
-                    // memetic_ms += get_milli_seconds(p, get_time_point());
+                    auto p = get_time_point();
+                    if(parents_curr >= tournament_size)
+                         memetic_refinement(level, mem_stacks);
+                     
+                    memetic_ms += get_milli_seconds(p, get_time_point());
 
 #if ENABLE_PROFILER
                     // level_infos[level].t_memetic = get_milli_seconds(p, get_time_point());
@@ -844,46 +842,45 @@ namespace GPU_HeiPa {
         }
 
         f64 determine_goodness_score( size_t id ) {
-            //TODO: reactivate
-            // f64 BETA = 0.08 * graphs.back().n ;
-            // return (curr_edge_cut[id] + BETA/min_distances[id]);
-            return static_cast<f64>(curr_edge_cut[id]);
+            
+            f64 BETA = 0.08 * graphs.back().n ;
+            return (curr_edge_cut[id] + BETA/min_distances[id]);
+            //return static_cast<f64>(curr_edge_cut[id]);
         }
 
-        /*
+        /**/
         
 
         void memetic_refinement(u32 level, std::vector<KokkosMemoryStack> &mem_stacks) {
 
             for(u32 i = 0; i < num_crossovers; ++i) {
-                solutions[level % 2].push_back( initialize_partition( mappings.back().old_n , k, lmax, mem_stacks[ stack_ids[level % 2]]) );
+                solutions[level % 2].push_back( initialize_partition( curr_partition_size , k, lmax, mem_stacks[ stack_ids[level % 2]]) );
                 active_b.push_back(true);
             }
 
 
-            // TODO: #pragma omp parallel for num_threads(num_threads)
+            #pragma omp parallel for num_threads(num_cpu_threads)
             for(u32 i = 0; i < num_crossovers; ++i) {
+
+                size_t tid = static_cast<size_t>(  omp_get_thread_num() );
 
                 std::vector<int> parent_ids;
 
-                    //! curr edge cut is auch noch problematisch...
                     for(u32 j= 0; j < num_parents; ++j) {
                         parent_ids.push_back( tournament_selection( curr_edge_cut , tournament_size, parents_curr) );
                     }
                     
                     // Ensure parent_ids[0] != parent_ids[1]
-                    //! des is auch noch weird
-                    // if (parent_ids.size() == 2 && parent_ids[0] == parent_ids[1]) {
-                    //     if (active.size() >= 2) {
-                    //         size_t idx;
-                    //         size_t new_parent = static_cast<size_t>(parent_ids[0]);
-                    //         while (new_parent == static_cast<size_t>(parent_ids[0])) {
-                    //             idx = static_cast<size_t>(rand()) % active.size();
-                    //             new_parent = active.at(idx);
-                    //         }
-                    //         parent_ids[1] = static_cast<int>(new_parent);
-                    //     }
-                    // }
+                    
+                    if (parent_ids.size() == 2 && parent_ids[0] == parent_ids[1]) {
+                        if (parents_curr >= 2) {
+                            size_t new_parent = static_cast<size_t>(parent_ids[0]);
+                            while (new_parent == static_cast<size_t>(parent_ids[0])) {
+                                new_parent = static_cast<size_t>(rand()) % parents_curr;
+                            }
+                            parent_ids[1] = static_cast<int>(new_parent);
+                        }
+                    }
                 
 
                 
@@ -895,22 +892,23 @@ namespace GPU_HeiPa {
                         solutions[level % 2],
                         k,
                         lmax,
-                        mem_stacks[ 0  ],
+                        mem_stacks[ tid ],
                         config.leftover_strategy,
                         config.alpha,
-                        config.extent
+                        config.extent,
+                        exec_spaces[tid]
                     );
                     
                 
 
 
-                curr_edge_cut[parents_curr + i] =  edge_cut(graphs.back(), solutions[level % 2][ parents_curr + i ]);
+                curr_edge_cut[parents_curr + i] =  edge_cut(graphs.back(), solutions[level % 2][ parents_curr + i ], exec_spaces[tid]);
                 
-                curr_max_block_weight[parents_curr + i] = max_weight( solutions[level % 2][ parents_curr + i ] );
+                curr_max_block_weight[parents_curr + i] = max_weight( solutions[level % 2][ parents_curr + i ], exec_spaces[tid] );
 
 
                 auto pair = jet_refine( graphs.back(), solutions[level % 2][ parents_curr + i ], k, lmax, use_ultra, level, 
-                curr_edge_cut[parents_curr + i], curr_max_block_weight[parents_curr + i], mem_stacks[ 0  ], exec_spaces[0  ] );
+                curr_edge_cut[parents_curr + i], curr_max_block_weight[parents_curr + i], mem_stacks[ tid ], exec_spaces[ tid ] );
                 curr_edge_cut[parents_curr + i] = pair.first;
                 curr_max_block_weight[parents_curr + i] = pair.second;
                 
@@ -924,20 +922,20 @@ namespace GPU_HeiPa {
             {
 
                 ScopedTimer _t("memetic", "memetic_refinement", "update population");   
-                UpdatePopulation( mem_stacks );
+                UpdatePopulation( level, mem_stacks );
                 
                 
             }
             
             return;
         }
-*/
+
         // deactivate some bad individuals
         void control_size(u32 level) {
 
             
             // fine tune
-            size_t desired_count = (level + 1) * 1;
+            size_t desired_count = (level + 1) * 2;
 
             while(count_active > desired_count) {
 
@@ -969,13 +967,13 @@ namespace GPU_HeiPa {
         
 
         void UpdatePopulation(
+            u32 level,
             std::vector<KokkosMemoryStack> &mem_stacks
         
         ) {
             /*
-            
-            TODO: add later on when the rest already works
-            TODO: -> focus on main idea first
+
+            */
 
             enum class DistanceMode {
                 Exact,
@@ -985,18 +983,19 @@ namespace GPU_HeiPa {
             const size_t SAMPLE_SIZE = 5;               
            
             DistanceMode distance_mode = DistanceMode::Exact;
-            if (config.distance == "sampled") {
+            if (config.distance == "sampled" && parents_curr > 1) {
                 distance_mode = DistanceMode::Sampled;
             }
 
             u32 min_distance_population = 0;
-            u32 offspring_distance = 0;
+  
 
             switch (distance_mode) {
                 case DistanceMode::Sampled:
                     determine_min_distances_population_sampled(
                         graphs.back(),
-                        partitions,
+                        solutions[level % 2],
+                        parents_curr,
                         min_distances,
                         k,
                         mem_stacks,
@@ -1010,8 +1009,8 @@ namespace GPU_HeiPa {
                 default:
                     determine_min_distances_population(
                         graphs.back(),
-                        partitions,
-                        active,
+                        solutions[level % 2],
+                        parents_curr,
                         min_distances,
                         k,
                         mem_stacks,
@@ -1022,46 +1021,51 @@ namespace GPU_HeiPa {
             }
 
 
-             switch (distance_mode) {
-                case DistanceMode::Sampled:
-                    offspring_distance = determine_min_distance_offspring_sampled(
-                        graphs.back(),
-                        partitions,
-                        offspring,
-                        k,
-                        mem_stacks,
-                        exec_spaces,
-                        num_cpu_threads,
-                        SAMPLE_SIZE
-                    );
-                    break;
-
-                case DistanceMode::Exact:
-                default:
-                    offspring_distance = determine_min_distance_offspring(
-                        graphs.back(),
-                        partitions,
-                        active,
-                        offspring,
-                        k,
-                        mem_stacks,
-                        exec_spaces,
-                        num_cpu_threads
-                    );
-                    break;
-            }
-
 
             min_distance_population = std::numeric_limits<u32>::max();
-            for (size_t id : active) {
-                min_distance_population = std::min(min_distance_population, min_distances[id]);
+            
+            for(size_t i= 0; i < parents_curr; ++i ) {
+                min_distance_population = std::min(min_distance_population, min_distances[i]);
             }
 
-            */
+
 
             for(u32 offspring_id = 0; offspring_id < num_crossovers ; ++offspring_id) {
                 
                 
+                u32 offspring_distance = 0;
+                switch (distance_mode) {
+                    case DistanceMode::Sampled:
+                        offspring_distance = determine_min_distance_offspring_sampled(
+                            graphs.back(),
+                            solutions[level % 2],
+                            solutions[level % 2][parents_curr + offspring_id],
+                            parents_curr,
+                            k,
+                            mem_stacks,
+                            exec_spaces,
+                            num_cpu_threads,
+                            SAMPLE_SIZE
+                        );
+                        break;
+
+                    case DistanceMode::Exact:
+                    default:
+                        offspring_distance = determine_min_distance_offspring(
+                            graphs.back(),
+                            solutions[level % 2],
+                            parents_curr,
+                            solutions[level % 2][parents_curr + offspring_id],
+                            k,
+                            mem_stacks,
+                            exec_spaces,
+                            num_cpu_threads
+                        );
+                        break;
+                }
+
+
+
                 weight_t best_edgecut = std::numeric_limits<weight_t>::max();
                 
                 size_t worst_id = 0;
@@ -1089,11 +1093,13 @@ namespace GPU_HeiPa {
                 
                 if( 
                     (curr_edge_cut[parents_curr + offspring_id] < best_edgecut)
-                    // ||  ( offspring_distance > min_distance_population )
+                     || ( ( offspring_distance > min_distance_population ) && (level >= 5 ) )
                 ) {
 
                     active_b[worst_id] = false;
                     active_b[parents_curr + offspring_id] = true;
+                }else{
+                    active_b[parents_curr + offspring_id] = false;
                 }
             
             }
