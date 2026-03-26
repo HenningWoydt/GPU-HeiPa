@@ -42,7 +42,7 @@
 #include "partition.h"
 #include "../coarsening/two_hop_matching.h"
 #include "../refinement/jet_label_propagation.h"
-#include "../refinement/memetic_refinementShrinking.h"
+#include "../refinement/memetic_refinement.h"
 #include "../initial_partitioning/metis_partitioning.h"
 #include "../utility/definitions.h"
 #include "../utility/memetic_configuration.h"
@@ -92,16 +92,13 @@ namespace GPU_HeiPa {
         
         Partition dummy;
 
-        std::vector<std::vector<Partition>> solutions = std::vector<std::vector<Partition>>();
+        std::vector<std::vector<Partition>> solutions = std::vector<std::vector<Partition>>(2);
         std::vector<bool> active_b = std::vector<bool>();
         std::vector<size_t> stack_ids = std::vector<size_t>(2);
         size_t parents_curr = num_individuals;
         size_t count_active;
 
 
-        std::vector<size_t> active = std::vector<size_t>(num_individuals);
-        
-        
         std::vector<cudaStream_t> cuda_streams = std::vector<cudaStream_t>(num_cpu_threads);
         std::vector<Kokkos::Cuda> exec_spaces; 
 
@@ -217,9 +214,6 @@ namespace GPU_HeiPa {
             min_distances = std::vector<u32>(num_individuals + num_crossovers, 0);
 
 
-            active = std::vector<size_t>(num_individuals);
-            for(size_t i = 0; i < num_individuals; ++i)
-                active.at(i) = i;
         }
 
         //! do this later
@@ -345,13 +339,13 @@ namespace GPU_HeiPa {
             mem_stacks[ partition_stack_a ] = initialize_kokkos_memory_stack(
                     ( 5 ) * (size_t) host_g.n * sizeof(vertex_t) +
                     10 *(size_t) host_g.m * sizeof(vertex_t),
-                    "Stack for partitions" 
+                    "Stack for partitions A" 
                 );
 
             mem_stacks[ partition_stack_b ] = initialize_kokkos_memory_stack(
                     ( 5 ) * (size_t) host_g.n * sizeof(vertex_t) +
                     10 *(size_t) host_g.m * sizeof(vertex_t),
-                    "Stack for partitions" 
+                    "Stack for partitions B" 
                 );
             
             
@@ -361,32 +355,17 @@ namespace GPU_HeiPa {
             
             // pick best partition out of all of them
             size_t min_id;
-            weight_t min_edgecut;
-            if(pop_management == PopulationManagement::steadystate) {
+            weight_t min_edgecut = std::numeric_limits<weight_t>::max();
+            
+            for(size_t i = 0; i < active_b.size(); ++i) {
 
-                min_id = 0;
-                min_edgecut = curr_edge_cut[0];
-                for(size_t i = 0; i < num_individuals; ++i) {
-                    
-                    std::cout << "fitness individual " << i << " = " << curr_edge_cut[i] << std::endl ;
-                    if ( curr_edge_cut[i] < min_edgecut) {
-                        min_id = i;
-                        min_edgecut = curr_edge_cut[i];
-                    }
-                }
+                if(!active_b[i])
+                    continue;
 
-            }else if(pop_management == PopulationManagement::shrinking) {
-
-                min_id = active[0];
-                min_edgecut = curr_edge_cut[min_id];
-                std::cout << "fitness active individual " << min_id << " = " << min_edgecut << std::endl ;
-
-                for(size_t i = 1; i < active.size(); ++i) {
-                    std::cout << "fitness active individual " << active[i] << " = " << curr_edge_cut[active[i]] << std::endl ;
-                    if ( curr_edge_cut[ active[i] ] < min_edgecut) {
-                        min_id = active[i];
-                        min_edgecut = curr_edge_cut[ active[i] ];
-                    }
+                std::cout << "fitness active individual " << i << " = " << curr_edge_cut[i] << std::endl ;
+                if ( curr_edge_cut[ i ] < min_edgecut) {
+                    min_id = i;
+                    min_edgecut = curr_edge_cut[ i ];
                 }
             }
             
@@ -418,7 +397,7 @@ namespace GPU_HeiPa {
             {
                 ScopedTimer _t("misc", "Solver", "free_memory");
 
-                for (size_t i = count_active; i-- > 0; ) {
+                for (size_t i = active_b.size() ; i-- > 0; ) {
                     free_partition(solutions[0][i], mem_stacks[ stack_ids[0] ]);
                 }
 
@@ -426,7 +405,7 @@ namespace GPU_HeiPa {
                 free_graph(graphs.back(), mem_stacks[ orga_stack ]);
                 graphs.pop_back();
 
-                for(size_t i= 0; i < num_cpu_threads + 2 ; ++i ) {
+                for(size_t i= 0; i < num_cpu_threads + 3 ; ++i ) {
    
                     assert_is_empty(mem_stacks[i]);
                     destroy(mem_stacks[i]);
@@ -517,12 +496,20 @@ namespace GPU_HeiPa {
             Partition &partition_new,
             int tid
         ) {
+            auto& current_mapping = mappings.back();
 
             Kokkos::parallel_for("carryover",
-                Kokkos::RangePolicy<Kokkos::Cuda>(exec_spaces[tid], 0, mappings.back().old_n ),
+                Kokkos::RangePolicy<Kokkos::Cuda>(exec_spaces[tid], 0, current_mapping.old_n ),
                 KOKKOS_LAMBDA(const vertex_t u) {
-                    vertex_t new_v = mappings.back().mapping(u);
+                    vertex_t new_v = current_mapping.mapping(u);
                     partition_new.map(u) = partition_old.map(new_v);
+                }
+            );
+
+            Kokkos::parallel_for("carrover weights",
+                Kokkos::RangePolicy<Kokkos::Cuda>(exec_spaces[tid], 0, k),
+                KOKKOS_LAMBDA(const partition_t id) {
+                    partition_new.bweights(id) = partition_old.bweights(id);
                 }
             );
 
@@ -562,10 +549,11 @@ namespace GPU_HeiPa {
             level_infos[level].n = graphs.back().n;
             level_infos[level].m = graphs.back().m;
 #endif
+
+            
         // extra scope for value p -> will appear multiple times
         { 
             auto p = get_time_point();
-
 
 
             for(size_t i = 0; i < num_individuals; ++i) {
@@ -573,13 +561,13 @@ namespace GPU_HeiPa {
                 active_b.push_back(true);
             }
 
-
             #pragma omp parallel for num_threads(num_cpu_threads)
             for(size_t i = 0; i < num_individuals ; ++i) {
                 size_t tid = static_cast<size_t>(  omp_get_thread_num() );
                 initial_partitioning( i, tid, level );
                 
             }
+
             ScopedTimer _t("initial_partitioning", "Partition", "first_stats");
 
             initial_partitioning_ms += get_milli_seconds(p, get_time_point());
@@ -610,25 +598,30 @@ namespace GPU_HeiPa {
                     //TODO:    with values, based on old partitions
                     //TODO: 4. deallocate / destroy old partitions
 
+                    std::vector<weight_t> cut_tmp;
+                    std::vector<weight_t> weight_tmp; 
+
                     count_active = 0;
                     std::vector<size_t> active_indices;
                     for(size_t i = 0; i < active_b.size() ; ++i) {
                         if(active_b[i]) {
                             count_active++;
                             active_indices.push_back(i);
+                            cut_tmp.push_back( curr_edge_cut[i]);
+                            weight_tmp.push_back(curr_max_block_weight[i]);  
                         }
                     }
                     parents_curr = count_active;
+                    curr_edge_cut.clear();
+                    curr_edge_cut.resize(count_active + num_crossovers); //! already reserve space for childs
+
+                    curr_max_block_weight.clear();
+                    curr_max_block_weight.resize(count_active + num_crossovers);
 
                     for(size_t i = 0; i < count_active ; ++i) {
                         solutions[ level % 2].push_back( initialize_partition( mappings.back().old_n , k, lmax, mem_stacks[ stack_ids[level % 2]]) );
                     }
 
-                    //TODO: I also need to change curr_edge_cut
-                    //TODO: - i need to resize it to parents_curr + num_crossovers
-                    //TODO: - i need to carry over the old values
-                    //TODO: Best Idea is to make a temporary vector and swap the values afterwards
-                    //TODO: other Idea: introduce two vectors and swap between them, just like solutions or the mem_stacks
 
                     #pragma omp parallel for num_threads(num_cpu_threads)
                     for(size_t i = 0; i < count_active ; ++i) {
@@ -639,14 +632,25 @@ namespace GPU_HeiPa {
                           solutions[level % 2][i],
                           tid  
                           );
+                        curr_edge_cut[i] = cut_tmp[i];
+                        curr_max_block_weight[i] = weight_tmp[i];
                     }
 
-                    //TODO: here is also the place to reset active_b:
-                    //TODO: - resize to parents_curr
-                    //TODO: - fill with all values = true 
+                    for(size_t i = 0; i < solutions[(level + 1) % 2].size() ; ++i) {
+                        free_partition( solutions[(level + 1) % 2][i] , mem_stacks[ stack_ids[(level + 1) % 2]] );
+                    }
+                    solutions[(level + 1) % 2].clear();
+                    solutions[(level + 1) % 2].resize(0);
 
-                    //TODO: free the old partitions from the stack
-                    //TODO: pop everything from the old solutions vector (level + 1) % 2
+                    active_b.clear();
+                    active_b.resize(0);
+
+                    // init for new population
+                    for(size_t i = 0; i < count_active; ++i) {
+                        active_b.push_back(true);
+                    }
+
+
 
                     free_after_uncontraction(mem_stacks[ orga_stack ]); 
                     
@@ -665,9 +669,8 @@ namespace GPU_HeiPa {
 
                     #pragma omp parallel for num_threads(num_cpu_threads)
                     for(size_t i = 0; i < count_active; ++i) {
-                        size_t id = active[i];
                         size_t tid = static_cast<size_t>(  omp_get_thread_num() );
-                        refinement( level, mem_stacks[tid], id, tid);
+                        refinement( level, mem_stacks[tid], i, tid);
                     }
 
                     refinement_ms += get_milli_seconds(p, get_time_point());
@@ -686,17 +689,18 @@ namespace GPU_HeiPa {
                 }
 
                 {
-                    auto p = get_time_point();
-                    if(active.size() >= tournament_size)
-                        memetic_refinement(level, mem_stacks);
-                    
-                    memetic_ms += get_milli_seconds(p, get_time_point());
+                    // auto p = get_time_point();
+                    // if(active.size() >= tournament_size)
+                    //     memetic_refinement(level, mem_stacks);
+                    // 
+                    // memetic_ms += get_milli_seconds(p, get_time_point());
 
 #if ENABLE_PROFILER
-                    level_infos[level].t_memetic = get_milli_seconds(p, get_time_point());
+                    // level_infos[level].t_memetic = get_milli_seconds(p, get_time_point());
 #endif
                 }
 
+                control_size(level);
 
 
 #if ENABLE_PROFILER
@@ -846,6 +850,8 @@ namespace GPU_HeiPa {
             return static_cast<f64>(curr_edge_cut[id]);
         }
 
+        /*
+        
 
         void memetic_refinement(u32 level, std::vector<KokkosMemoryStack> &mem_stacks) {
 
@@ -889,7 +895,7 @@ namespace GPU_HeiPa {
                         solutions[level % 2],
                         k,
                         lmax,
-                        mem_stacks[ 0 /* tid */ ],
+                        mem_stacks[ 0  ],
                         config.leftover_strategy,
                         config.alpha,
                         config.extent
@@ -904,7 +910,7 @@ namespace GPU_HeiPa {
 
 
                 auto pair = jet_refine( graphs.back(), solutions[level % 2][ parents_curr + i ], k, lmax, use_ultra, level, 
-                curr_edge_cut[parents_curr + i], curr_max_block_weight[parents_curr + i], mem_stacks[ 0 /* tid */ ], exec_spaces[0 /* tid */ ] );
+                curr_edge_cut[parents_curr + i], curr_max_block_weight[parents_curr + i], mem_stacks[ 0  ], exec_spaces[0  ] );
                 curr_edge_cut[parents_curr + i] = pair.first;
                 curr_max_block_weight[parents_curr + i] = pair.second;
                 
@@ -920,18 +926,18 @@ namespace GPU_HeiPa {
                 ScopedTimer _t("memetic", "memetic_refinement", "update population");   
                 UpdatePopulation( mem_stacks );
                 
-                control_size(level);
+                
             }
             
             return;
         }
-
+*/
         // deactivate some bad individuals
         void control_size(u32 level) {
 
             
             // fine tune
-            size_t desired_count = level + 1;
+            size_t desired_count = (level + 1) * 1;
 
             while(count_active > desired_count) {
 
@@ -1055,7 +1061,8 @@ namespace GPU_HeiPa {
 
             for(u32 offspring_id = 0; offspring_id < num_crossovers ; ++offspring_id) {
                 
-                weight_t best_edgecut = std::numeric_limits<u32>::max();
+                
+                weight_t best_edgecut = std::numeric_limits<weight_t>::max();
                 
                 size_t worst_id = 0;
                 f64 worst_goodness_score = 0.0;
