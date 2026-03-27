@@ -81,6 +81,7 @@ namespace GPU_HeiPa {
         u32 tournament_size = 2;
 
         PopulationManagement pop_management = PopulationManagement::shrinking;
+        size_t reduction_factor = 1;
 
         size_t orga_stack = num_cpu_threads;
         size_t partition_stack_a = num_cpu_threads + 1;
@@ -188,6 +189,7 @@ namespace GPU_HeiPa {
             num_crossovers = config.num_crossovers;
             num_parents = config.num_parents;
             tournament_size = config.tournament_size;
+            reduction_factor = config.reduction_factor;
 
             if (config.population_management == "steadystate") {
                 pop_management = PopulationManagement::steadystate;
@@ -327,21 +329,21 @@ namespace GPU_HeiPa {
 
             //! use this for the coarsening and mapping and stuff
             mem_stacks[ orga_stack ] = initialize_kokkos_memory_stack(
-                    30 * (size_t) host_g.n * sizeof(vertex_t) +
+                    25 * (size_t) host_g.n * sizeof(vertex_t) +
                     10 *(size_t) host_g.m * sizeof(vertex_t),
                     "Stack for mappings and graphs"
                 );
             
             //! use this to hold all partitions!
             mem_stacks[ partition_stack_a ] = initialize_kokkos_memory_stack(
-                    ( 5 ) * (size_t) host_g.n * sizeof(vertex_t) +
-                    10 *(size_t) host_g.m * sizeof(vertex_t),
+                    ( 3 ) * (size_t) host_g.n * sizeof(vertex_t) +
+                    7 *(size_t) host_g.m * sizeof(vertex_t),
                     "Stack for partitions A" 
                 );
 
             mem_stacks[ partition_stack_b ] = initialize_kokkos_memory_stack(
-                    ( 5 ) * (size_t) host_g.n * sizeof(vertex_t) +
-                    10 *(size_t) host_g.m * sizeof(vertex_t),
+                    ( 3 ) * (size_t) host_g.n * sizeof(vertex_t) +
+                    7 *(size_t) host_g.m * sizeof(vertex_t),
                     "Stack for partitions B" 
                 );
             
@@ -684,13 +686,13 @@ namespace GPU_HeiPa {
 
                 {
                     auto p = get_time_point();
-                    if(parents_curr >= tournament_size)
+                    if((parents_curr >= tournament_size) && (level >= 4))
                          memetic_refinement(level, mem_stacks);
                      
                     memetic_ms += get_milli_seconds(p, get_time_point());
 
 #if ENABLE_PROFILER
-                    // level_infos[level].t_memetic = get_milli_seconds(p, get_time_point());
+                    level_infos[level].t_memetic = get_milli_seconds(p, get_time_point());
 #endif
                 }
 
@@ -837,14 +839,17 @@ namespace GPU_HeiPa {
             Kokkos::fence();
         }
 
-        f64 determine_goodness_score( size_t id ) {
+        f64 determine_goodness_score( size_t id, u32 level ) {
             
-            f64 BETA = 0.08 * graphs.back().n ;
-            return (curr_edge_cut[id] + BETA/min_distances[id]);
-            //return static_cast<f64>(curr_edge_cut[id]);
-        }
+            if( level >= 4) {
 
-        /**/
+                f64 BETA = 0.08 * graphs.back().n ;
+                return (curr_edge_cut[id] + BETA/min_distances[id]);
+            }else{
+
+                return static_cast<f64>(curr_edge_cut[id]);
+            }
+        }
         
 
         void memetic_refinement(u32 level, std::vector<KokkosMemoryStack> &mem_stacks) {
@@ -931,7 +936,7 @@ namespace GPU_HeiPa {
 
             
             // fine tune
-            size_t desired_count = (level + 1) * 1;
+            size_t desired_count = (level + 1) * reduction_factor;
 
             while(count_active > desired_count) {
 
@@ -944,7 +949,7 @@ namespace GPU_HeiPa {
                     if(!active_b[i])
                         continue;
     
-                    curr_goodness_score = determine_goodness_score(i);
+                    curr_goodness_score = determine_goodness_score(i, level);
                     if( curr_goodness_score > worst_goodness_score) {
                         worst_goodness_score = curr_goodness_score;
                         worst_id = i;
@@ -1077,7 +1082,7 @@ namespace GPU_HeiPa {
                     if( curr_edge_cut[i] < best_edgecut)
                         best_edgecut = curr_edge_cut[i];
                     
-                    curr_goodness_score = determine_goodness_score(i);
+                    curr_goodness_score = determine_goodness_score(i, level);
                     if( curr_goodness_score > worst_goodness_score) {
                         worst_goodness_score = curr_goodness_score;
                         worst_id = i;

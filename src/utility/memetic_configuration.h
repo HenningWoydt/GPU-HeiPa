@@ -65,6 +65,7 @@ namespace GPU_HeiPa {
             {"--num-cpu-threads", "", "Number of CPU threads for memetic algorithm.", "4", "", false},
             {"--num-individuals", "", "Population size for memetic algorithm.", "20", "", false},
             {"--population-management", "", "Population management mode: shrinking or steadystate.", "shrinking", "", false},
+            {"--reduction-factor", "", "Population shrinking factor used by shrinking population management.", "1", "", false},
             {"--num-crossovers", "", "Number of crossovers per generation.", "1", "", false},
             {"--num-parents", "", "Number of parents for crossover.", "2", "", false},
             {"--tournament-size", "", "Tournament size for selection.", "2", "", false},
@@ -93,6 +94,7 @@ namespace GPU_HeiPa {
         size_t num_cpu_threads = 4;
         size_t num_individuals = 20;
         std::string population_management = "shrinking";
+        size_t reduction_factor = 1;
         u32 num_crossovers = 1;
         u32 num_parents = 2;
         u32 tournament_size = 2;
@@ -153,6 +155,9 @@ namespace GPU_HeiPa {
             }
             if (is_set("--population-management")) {
                 population_management = get("--population-management");
+            }
+            if (is_set("--reduction-factor")) {
+                reduction_factor = std::stoul(get("--reduction-factor"));
             }
             if (is_set("--num-crossovers")) {
                 num_crossovers = (u32) std::stoul(get("--num-crossovers"));
@@ -266,6 +271,10 @@ namespace GPU_HeiPa {
                 std::cerr << "Warning: num_individuals is 0, setting to 1." << std::endl;
                 num_individuals = 1;
             }
+            if (reduction_factor == 0) {
+                std::cerr << "Warning: reduction_factor is 0, setting to 1." << std::endl;
+                reduction_factor = 1;
+            }
             if (num_crossovers == 0) {
                 std::cerr << "Warning: num_crossovers is 0, setting to 1." << std::endl;
                 num_crossovers = 1;
@@ -321,6 +330,7 @@ namespace GPU_HeiPa {
             s += tabs + to_JSON_MACRO(num_cpu_threads);
             s += tabs + to_JSON_MACRO(num_individuals);
             s += tabs + to_JSON_MACRO(population_management);
+            s += tabs + to_JSON_MACRO(reduction_factor);
             s += tabs + to_JSON_MACRO(num_crossovers);
             s += tabs + to_JSON_MACRO(num_parents);
             s += tabs + to_JSON_MACRO(tournament_size);
