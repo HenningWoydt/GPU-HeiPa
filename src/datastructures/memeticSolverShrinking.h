@@ -844,7 +844,7 @@ namespace GPU_HeiPa {
 
         f64 determine_goodness_score( size_t id, u32 level ) {
             
-            if( level >= 4) {
+            if( level >= 4 && (perform_memetic_refinement)) {
 
                 f64 BETA = 0.08 * graphs.back().n ;
                 return (curr_edge_cut[id] + BETA/min_distances[id]);
