@@ -318,37 +318,95 @@ namespace GPU_HeiPa {
         HostPartition solve(HostGraph &host_g) {
             auto sp = get_time_point();
 
+            size_t intended_num_cpu_threads = num_cpu_threads;
             std::vector<KokkosMemoryStack> mem_stacks(num_cpu_threads + 3 );
 
-            //! maybe adjust sizes here
-            for (size_t i = 0; i < num_cpu_threads; ++i) {
-                mem_stacks[i] = initialize_kokkos_memory_stack(
-                    10 * (size_t) host_g.n * sizeof(vertex_t) +
-                    10 *(size_t) host_g.m * sizeof(vertex_t),
-                    "Stack_" + std::to_string(i)
-                );
+            int device;
+            if (cudaGetDevice(&device) != cudaSuccess) {
+                std::cerr << "Error: Failed to get current CUDA device" << std::endl;
+                HostPartition foo;
+                return foo;
             }
+
+            cudaDeviceProp prop;
+            if (cudaGetDeviceProperties(&prop, device) != cudaSuccess) {
+                std::cerr << "Error: Failed to get CUDA device properties" << std::endl;
+                HostPartition foo;
+                return foo;
+            }
+
+            size_t free_memory, total_memory;
+            if (cudaMemGetInfo(&free_memory, &total_memory) != cudaSuccess) {
+                std::cerr << "Error: Failed to query CUDA device memory" << std::endl;
+                HostPartition foo;
+                return foo;
+            }
+
+
+
+
+            size_t bytes_needed = 0;
+
+            size_t bytes_for_orga_stack = 25 * (size_t) host_g.n * sizeof(vertex_t) +
+                    10 *(size_t) host_g.m * sizeof(vertex_t);
+
+            size_t bytes_for_a_partition_stack = ( 3 ) * (size_t) host_g.n * sizeof(vertex_t) +
+                    7 *(size_t) host_g.m * sizeof(vertex_t);
+
+            size_t bytes_for_a_cpu_thread_stack = 10 * (size_t) host_g.n * sizeof(vertex_t) +
+                    10 *(size_t) host_g.m * sizeof(vertex_t);
+
+
 
             //! use this for the coarsening and mapping and stuff
             mem_stacks[ orga_stack ] = initialize_kokkos_memory_stack(
-                    25 * (size_t) host_g.n * sizeof(vertex_t) +
-                    10 *(size_t) host_g.m * sizeof(vertex_t),
+                    bytes_for_orga_stack,
                     "Stack for mappings and graphs"
                 );
+            bytes_needed += bytes_for_orga_stack;
             
+
             //! use this to hold all partitions!
             mem_stacks[ partition_stack_a ] = initialize_kokkos_memory_stack(
-                    ( 3 ) * (size_t) host_g.n * sizeof(vertex_t) +
-                    7 *(size_t) host_g.m * sizeof(vertex_t),
+                    bytes_for_a_partition_stack,
                     "Stack for partitions A" 
                 );
+            bytes_needed += bytes_for_a_partition_stack;
 
             mem_stacks[ partition_stack_b ] = initialize_kokkos_memory_stack(
-                    ( 3 ) * (size_t) host_g.n * sizeof(vertex_t) +
-                    7 *(size_t) host_g.m * sizeof(vertex_t),
+                    bytes_for_a_partition_stack,
                     "Stack for partitions B" 
                 );
+            bytes_needed += bytes_for_a_partition_stack;
             
+
+            for (size_t i = 0; i < num_cpu_threads; ++i) {
+
+                if( (bytes_needed + bytes_for_a_cpu_thread_stack) >= free_memory) {
+                    num_cpu_threads = i;
+
+                    if( i == 0) {
+                        std::cout << " ----------  ABORTING  ---------- "  << std::endl;
+                        std::cout << " ---  not enough memory to run  --- " << std::endl;
+                        std::cout << " - tried to allocate: " << (bytes_needed + bytes_for_a_cpu_thread_stack) / (1024.0 * 1024.0 * 1024.0) << " GB in total - " << std::endl;
+                        std::cout << " ----------  ABORTING  ---------- "  << std::endl;
+                        HostPartition foo;
+                        return foo;
+                    }
+
+                    std::cout << "Memory only allows for " << i << " cpu threads " << std::endl;
+                    break;
+                }
+
+                mem_stacks[i] = initialize_kokkos_memory_stack(
+                    bytes_for_a_cpu_thread_stack,
+                    "Stack_" + std::to_string(i)
+                );
+                bytes_needed += bytes_for_a_cpu_thread_stack;
+            }
+
+            std::cout << "allocated " << bytes_needed / (1024.0 * 1024.0 * 1024.0) << " GB in total " << std::endl;
+
             
             internal_solve(host_g, mem_stacks);
 
@@ -406,8 +464,8 @@ namespace GPU_HeiPa {
                 free_graph(graphs.back(), mem_stacks[ orga_stack ]);
                 graphs.pop_back();
 
-                for(size_t i= 0; i < num_cpu_threads + 3 ; ++i ) {
-   
+                for(size_t i= 0; i < intended_num_cpu_threads + 3 ; ++i ) {
+                    
                     assert_is_empty(mem_stacks[i]);
                     destroy(mem_stacks[i]);
 
