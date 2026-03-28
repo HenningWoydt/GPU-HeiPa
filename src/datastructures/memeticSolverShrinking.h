@@ -347,14 +347,14 @@ namespace GPU_HeiPa {
 
             size_t bytes_needed = 0;
 
-            size_t bytes_for_orga_stack = 25 * (size_t) host_g.n * sizeof(vertex_t) +
+            size_t bytes_for_orga_stack = 10 * (size_t) host_g.n * sizeof(vertex_t) +
                     10 *(size_t) host_g.m * sizeof(vertex_t);
 
-            size_t bytes_for_a_partition_stack = ( 3 ) * (size_t) host_g.n * sizeof(vertex_t) +
-                    7 *(size_t) host_g.m * sizeof(vertex_t);
+            size_t bytes_for_a_partition_stack = ( 3 ) * (reduction_factor / 2) * (size_t) host_g.n * sizeof(vertex_t) +
+                    8 *(size_t) host_g.m * sizeof(vertex_t);
 
-            size_t bytes_for_a_cpu_thread_stack = 10 * (size_t) host_g.n * sizeof(vertex_t) +
-                    10 *(size_t) host_g.m * sizeof(vertex_t);
+            size_t bytes_for_a_cpu_thread_stack = 8 * (size_t) host_g.n * sizeof(vertex_t) +
+                    8 *(size_t) host_g.m * sizeof(vertex_t);
 
 
 
