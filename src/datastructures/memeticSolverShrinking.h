@@ -68,6 +68,7 @@ namespace GPU_HeiPa {
 
         //! only for experiments
         weight_t average_weight = 0;
+        bool perform_memetic_refinement = true;
 
         std::vector<Graph> graphs;
         std::vector<Mapping> mappings;
@@ -190,6 +191,7 @@ namespace GPU_HeiPa {
             num_parents = config.num_parents;
             tournament_size = config.tournament_size;
             reduction_factor = config.reduction_factor;
+            perform_memetic_refinement = config.perform_memetic_refinement;
 
             if (config.population_management == "steadystate") {
                 pop_management = PopulationManagement::steadystate;
@@ -430,6 +432,7 @@ namespace GPU_HeiPa {
                 std::cout << "Lmax              : " << lmax << std::endl;
                 std::cout << "distance mode     : " << config.distance << std::endl;
                 std::cout << "population mgmt   : " << config.population_management << std::endl;
+                std::cout << "memetic refine    : " << perform_memetic_refinement << std::endl;
                 std::cout << "leftover strategy : " << config.leftover_strategy << std::endl;
                 std::cout << "alpha             : " << config.alpha << std::endl;
                 std::cout << "extent            : " << config.extent << std::endl;
@@ -686,7 +689,7 @@ namespace GPU_HeiPa {
 
                 {
                     auto p = get_time_point();
-                    if((parents_curr >= tournament_size) && (level >= 4))
+                    if((parents_curr >= tournament_size) && (level >= 4) && perform_memetic_refinement)
                          memetic_refinement(level, mem_stacks);
                      
                     memetic_ms += get_milli_seconds(p, get_time_point());

@@ -69,6 +69,7 @@ namespace GPU_HeiPa {
             {"--num-crossovers", "", "Number of crossovers per generation.", "1", "", false},
             {"--num-parents", "", "Number of parents for crossover.", "2", "", false},
             {"--tournament-size", "", "Tournament size for selection.", "2", "", false},
+            {"--perform-memetic-refinement", "", "Enable memetic refinement (true/false).", "true", "", false},
         };
 
     public:
@@ -98,6 +99,7 @@ namespace GPU_HeiPa {
         u32 num_crossovers = 1;
         u32 num_parents = 2;
         u32 tournament_size = 2;
+        bool perform_memetic_refinement = true;
 
         MemeticConfiguration() = default;
 
@@ -167,6 +169,23 @@ namespace GPU_HeiPa {
             }
             if (is_set("--tournament-size")) {
                 tournament_size = (u32) std::stoul(get("--tournament-size"));
+            }
+
+            {
+                std::string refinement = get("--perform-memetic-refinement");
+                for (char &c: refinement) {
+                    c = (char) std::tolower((unsigned char) c);
+                }
+
+                if (refinement == "1" || refinement == "true" || refinement == "yes" || refinement == "on") {
+                    perform_memetic_refinement = true;
+                } else if (refinement == "0" || refinement == "false" || refinement == "no" || refinement == "off") {
+                    perform_memetic_refinement = false;
+                } else {
+                    std::cerr << "Warning: perform memetic refinement value \"" << refinement
+                              << "\" is invalid. Falling back to \"true\"." << std::endl;
+                    perform_memetic_refinement = true;
+                }
             }
 
             validate_memetic_parameters();
@@ -334,6 +353,7 @@ namespace GPU_HeiPa {
             s += tabs + to_JSON_MACRO(num_crossovers);
             s += tabs + to_JSON_MACRO(num_parents);
             s += tabs + to_JSON_MACRO(tournament_size);
+            s += tabs + to_JSON_MACRO(perform_memetic_refinement);
 
             s.pop_back();
             s.pop_back();
