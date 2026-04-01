@@ -95,9 +95,9 @@ namespace GPU_HeiPa {
             f64 t_refinement;
         };
 
-#if ENABLE_PROFILER
+        #if ENABLE_PROFILER
         std::vector<level_info> level_infos;
-#endif
+        #endif
 
         inline void print_level_row(const level_info &L) {
             std::cout
@@ -176,32 +176,32 @@ namespace GPU_HeiPa {
 
             u32 level = 0;
             while (graphs.back().n > max_n) {
-#if ENABLE_PROFILER
+                #if ENABLE_PROFILER
                 ScopedTimer t_profiler{"hm", "solver", "profiling"};
                 level_infos.emplace_back();
                 level_infos[level].level = level;
                 level_infos[level].n = graphs.back().n;
                 level_infos[level].m = graphs.back().m;
                 t_profiler.stop();
-#endif
+                #endif
                 coarsening(level, dev_mem_stack);
                 contraction(level, dev_mem_stack);
 
                 level += 1;
             }
 
-#if ENABLE_PROFILER
+            #if ENABLE_PROFILER
             ScopedTimer t_profiler{"hm", "solver", "profiling"};
             level_infos.emplace_back();
             level_infos[level].level = level;
             level_infos[level].n = graphs.back().n;
             level_infos[level].m = graphs.back().m;
             t_profiler.stop();
-#endif
+            #endif
 
             initial_partitioning(dev_mem_stack);
 
-#if ENABLE_PROFILER
+            #if ENABLE_PROFILER
             ScopedTimer t_profiler2{"hm", "solver", "profiling"};
             level_infos[level].max_b_weight = max_weight(partition);
             level_infos[level].imb = (f64) level_infos[level].max_b_weight / ((f64) dev_g.g_weight / (f64) config.k);
@@ -210,7 +210,7 @@ namespace GPU_HeiPa {
             level_infos[level].oload_partitions = n_oload_blocks(partition);
             level_infos[level].sum_oload_weights = sum_oload_weight(partition);
             t_profiler2.stop();
-#endif
+            #endif
 
             while (!mappings.empty()) {
                 level -= 1;
@@ -218,7 +218,7 @@ namespace GPU_HeiPa {
                 uncontraction(level, dev_mem_stack);
                 refinement(level, dev_mem_stack);
 
-#if ENABLE_PROFILER
+                #if ENABLE_PROFILER
                 ScopedTimer t_profiler3{"hm", "solver", "profiling"};
                 level_infos[level].max_b_weight = max_weight(partition);
                 level_infos[level].imb = (f64) level_infos[level].max_b_weight / ((f64) dev_g.g_weight / (f64) config.k);
@@ -227,7 +227,7 @@ namespace GPU_HeiPa {
                 level_infos[level].oload_partitions = n_oload_blocks(partition);
                 level_infos[level].sum_oload_weights = sum_oload_weight(partition);
                 t_profiler3.stop();
-#endif
+                #endif
             }
 
             ScopedTimer t{"hm", "solver", "copy_res"};
@@ -240,11 +240,7 @@ namespace GPU_HeiPa {
         HostPartition solve(HostGraph &host_g) {
             auto sp = get_time_point();
 
-            KokkosMemoryStack mem_stack = initialize_kokkos_memory_stack(
-                30 * (size_t) host_g.n * sizeof(vertex_t) + // 20% buffer for vertices
-                20 * (size_t) host_g.m * sizeof(vertex_t), // Graph + coarsening overhead
-                "Stack"
-            );
+            KokkosMemoryStack mem_stack = initialize_kokkos_memory_stack(config.n_bytes_requested, "Stack");
 
             internal_solve(host_g, mem_stack);
 
@@ -294,6 +290,7 @@ namespace GPU_HeiPa {
 
             if (config.verbose_level >= 1) {
                 std::cout << "------- Info -------" << std::endl;
+                std::cout << "Graph             : " << config.graph_in << std::endl;
                 std::cout << "Total solve time  : " << duration << std::endl;
                 std::cout << "#Vertices         : " << n << std::endl;
                 std::cout << "#Edges            : " << m << std::endl;
@@ -321,9 +318,9 @@ namespace GPU_HeiPa {
                 std::cout << "ALL               : " << coarsening_ms + contraction_ms + initial_partitioning_ms + uncontraction_ms + refinement_ms + down_up_load_ms + misc_ms << std::endl;
             }
             if (config.verbose_level >= 2) {
-#if ENABLE_PROFILER
+                #if ENABLE_PROFILER
                 print_all_levels(level_infos);
-#endif
+                #endif
             }
 
             return host_partition;
@@ -338,12 +335,12 @@ namespace GPU_HeiPa {
 
             u32 level = 0;
             while (graphs.back().n > max_n) {
-#if ENABLE_PROFILER
+                #if ENABLE_PROFILER
                 level_infos.emplace_back();
                 level_infos[level].level = level;
                 level_infos[level].n = graphs.back().n;
                 level_infos[level].m = graphs.back().m;
-#endif
+                #endif
 
                 coarsening(level, mem_stack);
                 contraction(level, mem_stack);
@@ -353,23 +350,23 @@ namespace GPU_HeiPa {
                 level += 1;
             }
 
-#if ENABLE_PROFILER
+            #if ENABLE_PROFILER
             level_infos.emplace_back();
             level_infos[level].level = level;
             level_infos[level].n = graphs.back().n;
             level_infos[level].m = graphs.back().m;
-#endif
+            #endif
 
             initial_partitioning(mem_stack);
 
-#if ENABLE_PROFILER
+            #if ENABLE_PROFILER
             level_infos[level].max_b_weight = max_weight(partition);
             level_infos[level].imb = (f64) level_infos[level].max_b_weight / ((f64) host_g.g_weight / (f64) config.k);
             level_infos[level].edge_cut = edge_cut(graphs.back(), partition);
             level_infos[level].empty_partitions = n_empty_blocks(partition);
             level_infos[level].oload_partitions = n_oload_blocks(partition);
             level_infos[level].sum_oload_weights = sum_oload_weight(partition);
-#endif
+            #endif
 
             while (!mappings.empty()) {
                 level -= 1;
@@ -377,14 +374,14 @@ namespace GPU_HeiPa {
                 uncontraction(level, mem_stack);
                 refinement(level, mem_stack);
 
-#if ENABLE_PROFILER
+                #if ENABLE_PROFILER
                 level_infos[level].max_b_weight = max_weight(partition);
                 level_infos[level].imb = (f64) level_infos[level].max_b_weight / ((f64) host_g.g_weight / (f64) config.k);
                 level_infos[level].edge_cut = edge_cut(graphs.back(), partition);
                 level_infos[level].empty_partitions = n_empty_blocks(partition);
                 level_infos[level].oload_partitions = n_oload_blocks(partition);
                 level_infos[level].sum_oload_weights = sum_oload_weight(partition);
-#endif
+                #endif
             }
         }
 
@@ -417,9 +414,9 @@ namespace GPU_HeiPa {
             Kokkos::fence();
             coarsening_ms += get_milli_seconds(p, get_time_point());
 
-#if ENABLE_PROFILER
+            #if ENABLE_PROFILER
             level_infos[level].t_coarsening = get_milli_seconds(p, get_time_point());
-#endif
+            #endif
 
             assert_state_pre_partition(graphs.back());
         }
@@ -433,9 +430,9 @@ namespace GPU_HeiPa {
             Kokkos::fence();
             contraction_ms += get_milli_seconds(p, get_time_point());
 
-#if ENABLE_PROFILER
+            #if ENABLE_PROFILER
             level_infos[level].t_contraction = get_milli_seconds(p, get_time_point());
-#endif
+            #endif
 
             assert_state_pre_partition(graphs.back());
         }
@@ -476,9 +473,9 @@ namespace GPU_HeiPa {
             ASSERT(curr_edge_cut == edge_cut(graphs.back(), partition));
             ASSERT(curr_max_block_weight == max_weight(partition));
 
-#if ENABLE_PROFILER
+            #if ENABLE_PROFILER
             level_infos[level].t_refinement = get_milli_seconds(p, get_time_point());
-#endif
+            #endif
 
             assert_state_after_partition(graphs.back(), partition, config.k);
         }
@@ -497,9 +494,9 @@ namespace GPU_HeiPa {
             Kokkos::fence();
             uncontraction_ms += get_milli_seconds(p, get_time_point());
 
-#if ENABLE_PROFILER
+            #if ENABLE_PROFILER
             level_infos[level].t_uncontraction = get_milli_seconds(p, get_time_point());
-#endif
+            #endif
 
             assert_state_after_partition(graphs.back(), partition, config.k);
         }

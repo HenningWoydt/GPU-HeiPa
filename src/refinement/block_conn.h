@@ -102,40 +102,73 @@ namespace GPU_HeiPa {
 
         // first fill of the structure
         {
-            ScopedTimer _t("refinement", "BlockConnectivity_fs", "fill");
+            if (g.uniform_edge_weights) {
+                ScopedTimer _t("refinement", "BlockConnectivity_fs", "fill_uniform");
 
-            Kokkos::parallel_for("fill", g.m, KOKKOS_LAMBDA(const u32 i) {
-                vertex_t u = g.edges_u(i);
-                vertex_t v = g.edges_v(i);
-                weight_t w = g.edges_w(i);
+                // vertex-parallel: no atomics needed, each vertex owns its row
+                Kokkos::parallel_for("fill_uniform", g.n, KOKKOS_LAMBDA(const vertex_t u) {
+                    u32 r_beg = bc.row(u);
+                    u32 r_end = bc.row(u + 1);
+                    u32 r_len = r_end - r_beg;
+                    if (r_len == 0) return;
 
-                u32 r_beg = bc.row(u);
-                u32 r_end = bc.row(u + 1);
-                u32 r_len = r_end - r_beg;
+                    u32 cnt = 0;
+                    for (u32 i = g.neighborhood(u); i < g.neighborhood(u + 1); ++i) {
+                        partition_t v_id = partition.map(g.edges_v(i));
 
-                partition_t v_id = partition.map(v);
-
-                for (u32 j = 0; j < r_len; j++) {
-                    u32 idx = r_beg + j; // ((v_id + j) % r_len);
-                    partition_t val = bc.ids(idx);
-                    if (val == v_id) {
-                        Kokkos::atomic_add(&bc.weights(idx), w);
-                        return;
-                    }
-                    if (val == NULL_PART) {
-                        val = Kokkos::atomic_compare_exchange(&bc.ids(idx), NULL_PART, v_id);
-                        if (val == NULL_PART) {
-                            Kokkos::atomic_add(&bc.weights(idx), w);
-                            Kokkos::atomic_inc(&bc.sizes(u));
-                            return;
+                        for (u32 j = 0; j < r_len; j++) {
+                            u32 idx = r_beg + j;
+                            partition_t val = bc.ids(idx);
+                            if (val == v_id) {
+                                bc.weights(idx) += 1;
+                                break;
+                            }
+                            if (val == NULL_PART) {
+                                bc.ids(idx) = v_id;
+                                bc.weights(idx) = 1;
+                                cnt++;
+                                break;
+                            }
                         }
+                    }
+                    bc.sizes(u) = cnt;
+                });
+            } else {
+                ScopedTimer _t("refinement", "BlockConnectivity_fs", "fill");
+
+                Kokkos::parallel_for("fill", g.m, KOKKOS_LAMBDA(const u32 i) {
+                    vertex_t u = g.edges_u(i);
+                    vertex_t v = g.edges_v(i);
+                    weight_t w = g.edges_w(i);
+
+                    u32 r_beg = bc.row(u);
+                    u32 r_end = bc.row(u + 1);
+                    u32 r_len = r_end - r_beg;
+
+                    partition_t v_id = partition.map(v);
+
+                    for (u32 j = 0; j < r_len; j++) {
+                        u32 idx = r_beg + j;
+                        partition_t val = bc.ids(idx);
                         if (val == v_id) {
                             Kokkos::atomic_add(&bc.weights(idx), w);
                             return;
                         }
+                        if (val == NULL_PART) {
+                            val = Kokkos::atomic_compare_exchange(&bc.ids(idx), NULL_PART, v_id);
+                            if (val == NULL_PART) {
+                                Kokkos::atomic_add(&bc.weights(idx), w);
+                                Kokkos::atomic_inc(&bc.sizes(u));
+                                return;
+                            }
+                            if (val == v_id) {
+                                Kokkos::atomic_add(&bc.weights(idx), w);
+                                return;
+                            }
+                        }
                     }
-                }
-            });
+                });
+            }
             KOKKOS_PROFILE_FENCE();
         }
 

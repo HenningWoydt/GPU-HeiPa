@@ -39,6 +39,8 @@ namespace GPU_HeiPa {
         vertex_t n = 0;
         vertex_t m = 0;
         weight_t g_weight = 0;
+        bool uniform_edge_weights = false;
+        bool uniform_vertex_weights = false;
 
         HostU8 memory;
         u64 n_bytes = 0;
@@ -152,6 +154,8 @@ namespace GPU_HeiPa {
 
         has_v_weights = fmt[1] == '1';
         has_e_weights = fmt[2] == '1';
+        g.uniform_edge_weights = !has_e_weights;
+        g.uniform_vertex_weights = !has_v_weights;
 
         // then keep your existing pointer prefetch:
         vertex_t *edges_v_ptr = g.edges_v.data();

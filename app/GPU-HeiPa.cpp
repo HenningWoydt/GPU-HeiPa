@@ -47,14 +47,18 @@ int main(int argc, char *argv[]) {
     Configuration config;
     if (argc == 1) {
         config.print_help_message();
-        return 0;
+        // return 0;
         {
             ScopedTimer _t("io", "main", "parse_args");
             std::vector<std::pair<std::string, std::string> > input = {
                 // {"--graph", "../../ProMapRepo/data/mapping/rgg23.graph"}, // 100.054 in 334ms
                 // {"--graph", "../../ProMapRepo/data/mapping/cfd2.mtx.graph"}, // 92.920 in 40ms
-                {"--graph", "../../ProMapRepo/data/mapping/shipsec5.mtx.graph"},
-                {"--k", "32"},
+                // {"--graph", "../../ProMapRepo/data/mapping/shipsec5.mtx.graph"},
+                // {"--graph", "../../GPU-HeiPa-Experiments/data/SuiteSparse/Hook_1498.graph"},
+                // {"--graph", "../../GPU-HeiPa-Experiments/data/SuiteSparse/mawi_201512020000.graph"},
+                // {"--graph", "../../GPU-HeiPa-Experiments/data/SuiteSparse/mycielskian18.graph"},
+                {"--graph", "../../GPU-HeiPa-Experiments/data/SuiteSparse/HV15R.graph"},
+                {"--k", "2"},
                 {"--imbalance", "0.03"},
                 {"--config", "default"},
                 {"--verbose-level", "1"}
