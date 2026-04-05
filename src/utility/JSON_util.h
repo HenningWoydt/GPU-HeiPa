@@ -32,7 +32,7 @@
 #include "definitions.h"
 
 namespace GPU_HeiPa {
-#define to_JSON_MACRO(x) (std::string("\"") + (#x) + "\" : " + to_JSON_value(x) + ",\n")
+    #define to_JSON_MACRO(x) (std::string("\"") + (#x) + "\" : " + to_JSON_value(x) + ",\n")
 
     inline std::string escape_json_string(const std::string &in) {
         std::string out;

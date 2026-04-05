@@ -217,6 +217,7 @@ if [ "$DOWNLOAD_KOKKOS" = "ON" ]; then
     echo "Kokkos-Kernels 5.0.0 build failed!" >&2
     exit 1
   fi
+
   cd "${ROOT}"
 else
   echo "Skipping Kokkos download and build (using existing installation)."

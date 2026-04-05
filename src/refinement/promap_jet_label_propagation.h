@@ -202,7 +202,7 @@ namespace GPU_HeiPa {
         return delta;
     }
 
-    template<typename d_oracle_t>
+    template<bool uniform_v_weights, bool uniform_e_weights, typename d_oracle_t>
     inline UnmanagedDeviceVertex ProMap_jet_lp(ProMapLabelPropagation &lp,
                                                const Graph &g,
                                                const BlockConn &bc,
@@ -288,7 +288,7 @@ namespace GPU_HeiPa {
                 weight_t change = 0;
                 for (u32 j = g.neighborhood(u); j < g.neighborhood(u + 1); ++j) {
                     vertex_t v = g.edges_v(j);
-                    weight_t w = g.edges_w(j);
+                    weight_t w = (uniform_e_weights ? 1 : g.edges_w(j));
 
                     weight_t v_gain = lp.gain1(v);
 
@@ -327,7 +327,7 @@ namespace GPU_HeiPa {
         return Kokkos::subview(lp.vtx2, std::make_pair((vertex_t) 0, num_pos));
     }
 
-    template<typename d_oracle_t>
+    template<bool uniform_v_weights, typename d_oracle_t>
     inline UnmanagedDeviceVertex ProMap_rebalance_strong(ProMapLabelPropagation &lp,
                                                          const Graph &g,
                                                          const BlockConn &bc,
@@ -375,7 +375,7 @@ namespace GPU_HeiPa {
 
                 lp.vtx2(u) = NO_BLOCK_ID;
 
-                if (u_id_w > lp.lmax && g.weights(u) <= 2 * lp.max_vwgt() && g.weights(u) < 2 * (u_id_w - opt_weight)) {
+                if (u_id_w > lp.lmax && (uniform_v_weights ? 1 : g.weights(u)) <= 2 * lp.max_vwgt() && (uniform_v_weights ? 1 : g.weights(u)) < 2 * (u_id_w - opt_weight)) {
                     weight_t own_conn = 0;
                     weight_t count = 0;
                     weight_t sum_conn = 0;
@@ -398,13 +398,13 @@ namespace GPU_HeiPa {
 
                     if (count == 0) count = 1;
                     weight_t gain = (sum_conn / count) - own_conn;
-                    vertex_t gain_type = ProMap_gain_bucket(gain, Kokkos::min(g.weights(u), u_id_w - lp.lmax));
+                    vertex_t gain_type = ProMap_gain_bucket(gain, Kokkos::min((uniform_v_weights ? 1 : g.weights(u)), u_id_w - lp.lmax));
 
                     //add to count of appropriate bucket
                     if (gain_type < MAX_BUCKETS) {
                         vertex_t g_id = (MAX_BUCKETS * u_id + gain_type) * sections + (u % sections) + 1;
                         lp.vtx2(u) = g_id;
-                        lp.temp_gain(u) = Kokkos::atomic_fetch_add(&lp.gain1(g_id), g.weights(u));
+                        lp.temp_gain(u) = Kokkos::atomic_fetch_add(&lp.gain1(g_id), (uniform_v_weights ? 1 : g.weights(u)));
 
                         u32 idx = Kokkos::atomic_fetch_inc(&lp.idx());
                         lp.vtx3(idx) = u;
@@ -458,8 +458,8 @@ namespace GPU_HeiPa {
                 weight_t limit = lp.partition.bweights(u_id) - lp.lmax;
 
                 if (score < limit) {
-                    if (score + g.weights(u) >= limit) {
-                        lp.evict_adjust(u_id) = score + g.weights(u);
+                    if (score + (uniform_v_weights ? 1 : g.weights(u)) >= limit) {
+                        lp.evict_adjust(u_id) = score + (uniform_v_weights ? 1 : g.weights(u));
                     }
 
                     u32 idx = Kokkos::atomic_fetch_inc(&lp.idx());
@@ -528,13 +528,13 @@ namespace GPU_HeiPa {
                         id++;
                     }
                     id--;
-                    if (id < (s32) lp.k && g.weights(u) / 2 <= lp.evict_start(id + 1) - lp.temp_gain(u)) {
+                    if (id < (s32) lp.k && (uniform_v_weights ? 1 : g.weights(u)) / 2 <= lp.evict_start(id + 1) - lp.temp_gain(u)) {
                         // at least half of vtx weight lies in chunk p
                         lp.dest_part(u) = (partition_t) id;
                         return;
                     }
                     if (id < (s32) lp.k) {
-                        lp.temp_gain(u) = Kokkos::atomic_fetch_add(&lp.max_vwgt(), g.weights(u));
+                        lp.temp_gain(u) = Kokkos::atomic_fetch_add(&lp.max_vwgt(), (uniform_v_weights ? 1 : g.weights(u)));
                     }
                 }
                 lp.dest_part(u) = lp.partition.map(u);
@@ -546,7 +546,7 @@ namespace GPU_HeiPa {
         return Kokkos::subview(lp.vtx1, std::make_pair((u32) 0, num_moves));
     }
 
-    template<typename d_oracle_t>
+    template<bool uniform_v_weights, typename d_oracle_t>
     inline UnmanagedDeviceVertex ProMap_rebalance_weak(ProMapLabelPropagation &lp,
                                                        Graph &g,
                                                        const BlockConn &bc,
@@ -606,7 +606,7 @@ namespace GPU_HeiPa {
                 partition_t best_id = u_id;
 
                 weight_t gain = 0;
-                if (lp.partition.bweights(u_id) > lp.lmax && g.weights(u) < 1.5 * (lp.partition.bweights(u_id) - opt_weight)) {
+                if (lp.partition.bweights(u_id) > lp.lmax && (uniform_v_weights ? 1 : g.weights(u)) < 1.5 * (lp.partition.bweights(u_id) - opt_weight)) {
                     weight_t best_id_w = 0;
                     weight_t own_conn = 0;
 
@@ -638,9 +638,9 @@ namespace GPU_HeiPa {
                 lp.dest_part(u) = best_id;
 
                 if (u_id != best_id) {
-                    vertex_t gain_type = ProMap_gain_bucket(gain, g.weights(u));
+                    vertex_t gain_type = ProMap_gain_bucket(gain, (uniform_v_weights ? 1 : g.weights(u)));
                     vertex_t g_id = (MAX_BUCKETS * u_id + gain_type) * sections + (u % sections);
-                    lp.temp_gain(u) = Kokkos::atomic_fetch_add(&lp.gain1(g_id), g.weights(u));
+                    lp.temp_gain(u) = Kokkos::atomic_fetch_add(&lp.gain1(g_id), (uniform_v_weights ? 1 : g.weights(u)));
                     lp.vtx2(u) = g_id;
 
                     u32 idx = Kokkos::atomic_fetch_inc(&lp.idx());
@@ -710,7 +710,7 @@ namespace GPU_HeiPa {
         return Kokkos::subview(lp.vtx1, std::make_pair((vertex_t) 0, num_moves));
     }
 
-    template<typename d_oracle_t>
+    template<bool uniform_v_weights, typename d_oracle_t>
     inline UnmanagedDeviceVertex ProMap_rebalance_strong_new(ProMapLabelPropagation &lp,
                                                              const Graph &g,
                                                              const BlockConn &bc,
@@ -758,7 +758,7 @@ namespace GPU_HeiPa {
 
                 lp.vtx2(u) = NO_BLOCK_ID;
 
-                if (u_id_w > lp.lmax && g.weights(u) <= 2 * lp.max_vwgt() && g.weights(u) < 2 * (u_id_w - opt_weight)) {
+                if (u_id_w > lp.lmax && (uniform_v_weights ? 1 : g.weights(u)) <= 2 * lp.max_vwgt() && (uniform_v_weights ? 1 : g.weights(u)) < 2 * (u_id_w - opt_weight)) {
                     weight_t own_conn = 0;
                     weight_t count = 0;
                     weight_t sum_conn = 0;
@@ -781,13 +781,13 @@ namespace GPU_HeiPa {
 
                     if (count == 0) count = 1;
                     weight_t gain = (sum_conn / count) - own_conn;
-                    vertex_t gain_type = ProMap_gain_bucket(gain, Kokkos::min(g.weights(u), u_id_w - lp.lmax));
+                    vertex_t gain_type = ProMap_gain_bucket(gain, Kokkos::min((uniform_v_weights ? 1 : g.weights(u)), u_id_w - lp.lmax));
 
                     //add to count of appropriate bucket
                     if (gain_type < MAX_BUCKETS) {
                         vertex_t g_id = (MAX_BUCKETS * u_id + gain_type) * sections + (u % sections) + 1;
                         lp.vtx2(u) = g_id;
-                        lp.temp_gain(u) = Kokkos::atomic_fetch_add(&lp.gain1(g_id), g.weights(u));
+                        lp.temp_gain(u) = Kokkos::atomic_fetch_add(&lp.gain1(g_id), (uniform_v_weights ? 1 : g.weights(u)));
 
                         u32 idx = Kokkos::atomic_fetch_inc(&lp.idx());
                         lp.vtx3(idx) = u;
@@ -841,8 +841,8 @@ namespace GPU_HeiPa {
                 weight_t limit = lp.partition.bweights(u_id) - lp.lmax;
 
                 if (score < limit) {
-                    if (score + g.weights(u) >= limit) {
-                        lp.evict_adjust(u_id) = score + g.weights(u);
+                    if (score + (uniform_v_weights ? 1 : g.weights(u)) >= limit) {
+                        lp.evict_adjust(u_id) = score + (uniform_v_weights ? 1 : g.weights(u));
                     }
 
                     u32 idx = Kokkos::atomic_fetch_inc(&lp.idx());
@@ -911,13 +911,13 @@ namespace GPU_HeiPa {
                         id++;
                     }
                     id--;
-                    if (id < (s32) lp.k && g.weights(u) / 2 <= lp.evict_start(id + 1) - lp.temp_gain(u)) {
+                    if (id < (s32) lp.k && (uniform_v_weights ? 1 : g.weights(u)) / 2 <= lp.evict_start(id + 1) - lp.temp_gain(u)) {
                         // at least half of vtx weight lies in chunk p
                         lp.dest_part(u) = (partition_t) id;
                         return;
                     }
                     if (id < (s32) lp.k) {
-                        lp.temp_gain(u) = Kokkos::atomic_fetch_add(&lp.max_vwgt(), g.weights(u));
+                        lp.temp_gain(u) = Kokkos::atomic_fetch_add(&lp.max_vwgt(), (uniform_v_weights ? 1 : g.weights(u)));
                     }
                 }
                 lp.dest_part(u) = lp.partition.map(u);
@@ -929,7 +929,7 @@ namespace GPU_HeiPa {
         return Kokkos::subview(lp.vtx1, std::make_pair((u32) 0, num_moves));
     }
 
-    template<typename d_oracle_t>
+    template<bool uniform_v_weights, typename d_oracle_t>
     inline UnmanagedDeviceVertex ProMap_rebalance_weak_new(ProMapLabelPropagation &lp,
                                                            Graph &g,
                                                            const BlockConn &bc,
@@ -989,7 +989,7 @@ namespace GPU_HeiPa {
                 partition_t best_id = u_id;
 
                 weight_t gain = 0;
-                if (lp.partition.bweights(u_id) > lp.lmax && g.weights(u) < 1.5 * (lp.partition.bweights(u_id) - opt_weight)) {
+                if (lp.partition.bweights(u_id) > lp.lmax && (uniform_v_weights ? 1 : g.weights(u)) < 1.5 * (lp.partition.bweights(u_id) - opt_weight)) {
                     weight_t best_delta = -max_sentinel<weight_t>();;
 
                     u32 r_beg = bc.row(u);
@@ -1016,11 +1016,11 @@ namespace GPU_HeiPa {
                 lp.dest_part(u) = best_id;
 
                 if (u_id != best_id) {
-                    vertex_t gain_type = ProMap_gain_bucket(gain, g.weights(u));
+                    vertex_t gain_type = ProMap_gain_bucket(gain, (uniform_v_weights ? 1 : g.weights(u)));
                     Kokkos::atomic_add(&lp.histogram(gain_type), 1);
 
                     vertex_t g_id = (MAX_BUCKETS * u_id + gain_type) * sections + (u % sections);
-                    lp.temp_gain(u) = Kokkos::atomic_fetch_add(&lp.gain1(g_id), g.weights(u));
+                    lp.temp_gain(u) = Kokkos::atomic_fetch_add(&lp.gain1(g_id), (uniform_v_weights ? 1 : g.weights(u)));
                     lp.vtx2(u) = g_id;
 
                     u32 idx = Kokkos::atomic_fetch_inc(&lp.idx());
@@ -1090,7 +1090,7 @@ namespace GPU_HeiPa {
         return Kokkos::subview(lp.vtx1, std::make_pair((vertex_t) 0, num_moves));
     }
 
-    template<typename d_oracle_t>
+    template<bool uniform_v_weights, bool uniform_e_weights, typename d_oracle_t>
     inline void ProMap_perform_moves(ProMapLabelPropagation &lp,
                                      const Graph &g,
                                      BlockConn &bc,
@@ -1115,7 +1115,7 @@ namespace GPU_HeiPa {
 
             Kokkos::parallel_for("cut_change_1", n_moves, KOKKOS_LAMBDA(const u32 &i) {
                 vertex_t u = moves(i);
-                weight_t u_w = g.weights(u);
+                weight_t u_w = (uniform_v_weights ? 1 : g.weights(u));
                 partition_t old_id = lp.partition.map(u);
                 partition_t new_id = lp.dest_part(u);
 
@@ -1148,9 +1148,9 @@ namespace GPU_HeiPa {
             ScopedTimer _t("refinement", "JetLabelPropagation", "update_block_conn");
 
             if (n_moves > (u32) g.n / 10) {
-                update_large(g, lp.partition, lp.zeros, lp.dest_cache, bc, moves);
+                update_large<uniform_e_weights>(g, lp.partition, lp.zeros, lp.dest_cache, bc, moves);
             } else {
-                update_small(g, lp.partition, lp.dest_part, lp.dest_cache, bc, moves);
+                update_small<uniform_e_weights>(g, lp.partition, lp.dest_part, lp.dest_cache, bc, moves);
             }
 
             KOKKOS_PROFILE_FENCE();
@@ -1172,7 +1172,7 @@ namespace GPU_HeiPa {
 
                 for (u32 j = g.neighborhood(u); j < g.neighborhood(u + 1); ++j) {
                     vertex_t v = g.edges_v(j);
-                    weight_t w = g.edges_w(j);
+                    weight_t w = (uniform_e_weights ? 1 : g.edges_w(j));
 
                     partition_t old_v_id = lp.old_map(v);
                     partition_t new_v_id = lp.partition.map(v);
@@ -1202,7 +1202,7 @@ namespace GPU_HeiPa {
         curr_comm_cost += lp.cut_change1();
     }
 
-    template<typename d_oracle_t>
+    template<bool uniform_v_weights, bool uniform_e_weights, typename d_oracle_t>
     inline std::pair<weight_t, weight_t> ProMap_jet_refine(Graph &g,
                                                            Partition &partition,
                                                            d_oracle_t &d_oracle,
@@ -1224,7 +1224,8 @@ namespace GPU_HeiPa {
         weight_t best_comm_cost = curr_comm_cost;
         weight_t best_max_weight = curr_max_weight;
 
-        BlockConn bc = init_BlockConn(g, lp.partition, mem_stack);
+        BlockConn bc;
+        bc = init_BlockConn<uniform_e_weights>(g, lp.partition, mem_stack);
 
         std::vector<f64> filter_ratios;
 
@@ -1242,22 +1243,22 @@ namespace GPU_HeiPa {
 
                 UnmanagedDeviceVertex moves;
                 if (curr_max_weight <= lmax) {
-                    moves = ProMap_jet_lp(lp, g, bc, d_oracle, filter_ratio);
+                    moves = ProMap_jet_lp<uniform_v_weights, uniform_e_weights>(lp, g, bc, d_oracle, filter_ratio);
                     balance_iteration = 0;
                 } else {
                     balance_iteration++;
 
                     if (balance_iteration < N_MAX_WEAK_ITERATIONS) {
-                        moves = ProMap_rebalance_weak(lp, g, bc, d_oracle);
+                        moves = ProMap_rebalance_weak<uniform_v_weights>(lp, g, bc, d_oracle);
                     } else {
-                        moves = ProMap_rebalance_strong(lp, g, bc, d_oracle);
+                        moves = ProMap_rebalance_strong<uniform_v_weights>(lp, g, bc, d_oracle);
                     }
                 }
 
                 u32 n_moves = (u32) moves.extent(0);
                 if (n_moves == 0) { continue; }
 
-                ProMap_perform_moves(lp, g, bc, d_oracle, moves, curr_max_weight, curr_comm_cost);
+                ProMap_perform_moves<uniform_v_weights, uniform_e_weights>(lp, g, bc, d_oracle, moves, curr_max_weight, curr_comm_cost);
 
                 if (best_max_weight > lmax && curr_max_weight < best_max_weight) {
                     // copy the partition

@@ -68,6 +68,7 @@ namespace GPU_HeiPa {
         return sum / 2;
     }
 
+    template<bool uniform_ew>
     inline weight_t edge_cut(const Graph &g,
                              const Partition &partition) {
         weight_t sum = 0;
@@ -75,7 +76,7 @@ namespace GPU_HeiPa {
         Kokkos::parallel_reduce("edge_cut", g.m, KOKKOS_LAMBDA(const u32 i, weight_t &local_sum) {
             vertex_t u = g.edges_u(i);
             vertex_t v = g.edges_v(i);
-            weight_t w = g.edges_w(i);
+            weight_t w = uniform_ew ? 1 : g.edges_w(i);
 
             partition_t u_id = partition.map(u);
             partition_t v_id = partition.map(v);
@@ -87,6 +88,7 @@ namespace GPU_HeiPa {
         return sum / 2;
     }
 
+    template<bool uniform_ew>
     inline weight_t edge_cut_update(weight_t old_edge_cut,
                                     const Graph &g,
                                     const Partition &partition,
@@ -101,7 +103,7 @@ namespace GPU_HeiPa {
 
             for (u32 j = g.neighborhood(u); j < g.neighborhood(u + 1); ++j) {
                 vertex_t v = g.edges_v(j);
-                weight_t w = g.edges_w(j);
+                weight_t w = uniform_ew ? 1 : g.edges_w(j);
 
                 partition_t old_v_id = old_map(v);
                 partition_t new_v_id = partition.map(v);

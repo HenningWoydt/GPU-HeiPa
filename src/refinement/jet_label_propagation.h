@@ -176,6 +176,7 @@ namespace GPU_HeiPa {
         return (vertex_t) b;
     }
 
+    template<bool uniform_v_weights, bool uniform_e_weights>
     inline UnmanagedDeviceVertex jet_lp(LabelPropagation &lp,
                                         const Graph &g,
                                         const BlockConn &bc,
@@ -258,7 +259,7 @@ namespace GPU_HeiPa {
         }
 
         // use afterburner
-        {
+        if ((f64) g.m / (f64) g.n < 8) {
             ScopedTimer _t("refinement", "jetlp", "afterburner");
 
             Kokkos::parallel_for("afterburner heuristic", num_pos, KOKKOS_LAMBDA(const u32 i) {
@@ -275,13 +276,51 @@ namespace GPU_HeiPa {
                     bool move_first = v_gain > u_gain || (v_gain == u_gain && v < u);
                     partition_t v_new_id = lp.dest_part(v);
                     partition_t v_old_id = lp.partition.map(v);
-                    weight_t w = g.edges_w(j) * move_first;
+                    weight_t w = uniform_e_weights ? move_first : g.edges_w(j) * move_first;
                     change += w * ((v_new_id == new_u_id) - (v_new_id == old_u_id) + (v_old_id == old_u_id) - (v_old_id == new_u_id));
                 }
 
                 if (u_gain + change >= 0) {
                     lp.lock(u) = 1;
                 }
+            });
+
+            KOKKOS_PROFILE_FENCE();
+        } else {
+            ScopedTimer _t("refinement", "jetlp", "afterburner_team");
+
+            using team_policy = Kokkos::TeamPolicy<DeviceExecutionSpace>;
+            using member_type = team_policy::member_type;
+
+            Kokkos::parallel_for("afterburner heuristic", team_policy(num_pos, Kokkos::AUTO()), KOKKOS_LAMBDA(const member_type &team) {
+                u32 i = team.league_rank();
+
+                vertex_t u = lp.vtx1(i);
+                weight_t u_gain = lp.gain1(u);
+                partition_t old_u_id = lp.partition.map(u);
+                partition_t new_u_id = lp.dest_part(u);
+
+                weight_t change = 0;
+
+                Kokkos::parallel_reduce(Kokkos::TeamThreadRange(team, g.neighborhood(u), g.neighborhood(u + 1)), [&](const u32 j, weight_t &local_change) {
+                    vertex_t v = g.edges_v(j);
+                    weight_t v_gain = lp.gain1(v);
+
+                    partition_t v_new_id = lp.dest_part(v);
+                    partition_t v_old_id = lp.partition.map(v);
+
+                    bool move_first = (v_gain > u_gain) || ((v_gain == u_gain) && (v < u));
+
+                    weight_t w = uniform_e_weights ? (weight_t) move_first : g.edges_w(j) * (weight_t) move_first;
+
+                    local_change += w * ((v_new_id == new_u_id) - (v_new_id == old_u_id) + (v_old_id == old_u_id) - (v_old_id == new_u_id));
+                }, change);
+
+                Kokkos::single(Kokkos::PerTeam(team), [&]() {
+                    if (u_gain + change >= 0) {
+                        lp.lock(u) = 1;
+                    }
+                });
             });
 
             KOKKOS_PROFILE_FENCE();
@@ -308,6 +347,7 @@ namespace GPU_HeiPa {
         return Kokkos::subview(lp.vtx2, std::make_pair((vertex_t) 0, num_pos));
     }
 
+    template<bool uniform_v_weights>
     inline UnmanagedDeviceVertex rebalance_strong(LabelPropagation &lp, const Graph &g, const BlockConn &bc) {
         weight_t opt_weight = (g.g_weight + (weight_t) (lp.k - 1)) / (weight_t) lp.k;
         weight_t max_b_w = std::max(opt_weight + 1, (weight_t) ((f64) lp.lmax * 0.99));
@@ -357,7 +397,7 @@ namespace GPU_HeiPa {
 
                 lp.vtx2(u) = NO_BLOCK_ID;
 
-                if (u_id_w > lp.lmax && g.weights(u) <= 2 * lp.max_vwgt() && g.weights(u) < 2 * (u_id_w - opt_weight)) {
+                if (u_id_w > lp.lmax && (uniform_v_weights ? 1 : g.weights(u)) <= 2 * lp.max_vwgt() && (uniform_v_weights ? 1 : g.weights(u)) < 2 * (u_id_w - opt_weight)) {
                     weight_t own_conn = 0;
                     weight_t count = 0;
                     weight_t sum_conn = 0;
@@ -380,13 +420,13 @@ namespace GPU_HeiPa {
 
                     if (count == 0) count = 1;
                     weight_t gain = (sum_conn / count) - own_conn;
-                    vertex_t gain_type = gain_bucket(gain, Kokkos::min(g.weights(u), u_id_w - lp.lmax));
+                    vertex_t gain_type = gain_bucket(gain, Kokkos::min((uniform_v_weights ? 1 : g.weights(u)), u_id_w - lp.lmax));
 
                     //add to count of appropriate bucket
                     if (gain_type < MAX_BUCKETS) {
                         vertex_t g_id = (MAX_BUCKETS * u_id + gain_type) * sections + (u % sections) + 1;
                         lp.vtx2(u) = g_id;
-                        lp.temp_gain(u) = Kokkos::atomic_fetch_add(&lp.gain1(g_id), g.weights(u));
+                        lp.temp_gain(u) = Kokkos::atomic_fetch_add(&lp.gain1(g_id), (uniform_v_weights ? 1 : g.weights(u)));
                     }
                 }
             });
@@ -445,8 +485,8 @@ namespace GPU_HeiPa {
 
                     if (score < limit) {
                         if (final) {
-                            if (score + g.weights(u) >= limit) {
-                                lp.evict_adjust(u_id) = score + g.weights(u);
+                            if (score + (uniform_v_weights ? 1 : g.weights(u)) >= limit) {
+                                lp.evict_adjust(u_id) = score + (uniform_v_weights ? 1 : g.weights(u));
                             }
 
                             lp.vtx1(update) = u;
@@ -519,13 +559,13 @@ namespace GPU_HeiPa {
                         id++;
                     }
                     id--;
-                    if (id < (s32) lp.k && g.weights(u) / 2 <= lp.evict_start(id + 1) - lp.temp_gain(u)) {
+                    if (id < (s32) lp.k && (uniform_v_weights ? 1 : g.weights(u)) / 2 <= lp.evict_start(id + 1) - lp.temp_gain(u)) {
                         // at least half of vtx weight lies in chunk p
                         lp.dest_part(u) = (partition_t) id;
                         return;
                     }
                     if (id < (s32) lp.k) {
-                        lp.temp_gain(u) = Kokkos::atomic_fetch_add(&lp.max_vwgt(), g.weights(u));
+                        lp.temp_gain(u) = Kokkos::atomic_fetch_add(&lp.max_vwgt(), (uniform_v_weights ? 1 : g.weights(u)));
                     }
                 }
                 lp.dest_part(u) = lp.partition.map(u);
@@ -537,6 +577,7 @@ namespace GPU_HeiPa {
         return Kokkos::subview(lp.vtx1, std::make_pair((u32) 0, num_moves));
     }
 
+    template<bool uniform_v_weights>
     inline UnmanagedDeviceVertex rebalance_weak(LabelPropagation &lp, Graph &g, const BlockConn &bc) {
         weight_t opt_weight = (g.g_weight + (weight_t) (lp.k - 1)) / (weight_t) lp.k;
         weight_t max_b_w = (weight_t) ((f64) lp.lmax * 0.99);
@@ -591,7 +632,7 @@ namespace GPU_HeiPa {
                 partition_t best_id = u_id;
 
                 weight_t gain = 0;
-                if (lp.partition.bweights(u_id) > lp.lmax && g.weights(u) < 1.5 * (lp.partition.bweights(u_id) - opt_weight)) {
+                if (lp.partition.bweights(u_id) > lp.lmax && (uniform_v_weights ? 1 : g.weights(u)) < 1.5 * (lp.partition.bweights(u_id) - opt_weight)) {
                     weight_t best_id_w = 0;
                     weight_t own_conn = 0;
 
@@ -623,9 +664,9 @@ namespace GPU_HeiPa {
                 lp.dest_part(u) = best_id;
 
                 if (u_id != best_id) {
-                    vertex_t gain_type = gain_bucket(gain, g.weights(u));
+                    vertex_t gain_type = gain_bucket(gain, (uniform_v_weights ? 1 : g.weights(u)));
                     vertex_t g_id = (MAX_BUCKETS * u_id + gain_type) * sections + (u % sections);
-                    lp.temp_gain(u) = Kokkos::atomic_fetch_add(&lp.gain1(g_id), g.weights(u));
+                    lp.temp_gain(u) = Kokkos::atomic_fetch_add(&lp.gain1(g_id), (uniform_v_weights ? 1 : g.weights(u)));
                     lp.vtx2(u) = g_id;
                 }
             });
@@ -693,6 +734,7 @@ namespace GPU_HeiPa {
         return Kokkos::subview(lp.vtx1, std::make_pair((vertex_t) 0, num_moves));
     }
 
+    template<bool uniform_v_weights, bool uniform_e_weights>
     inline void perform_moves(LabelPropagation &lp,
                               const Graph &g,
                               BlockConn &bc,
@@ -715,7 +757,7 @@ namespace GPU_HeiPa {
 
                     Kokkos::parallel_reduce(Kokkos::TeamThreadRange(team, (int) n_moves), [&](const int i, weight_t &gain_update) {
                         vertex_t u = moves((u32) i);
-                        weight_t u_w = g.weights(u);
+                        weight_t u_w = (uniform_v_weights ? 1 : g.weights(u));
                         partition_t old_id = lp.partition.map(u);
                         partition_t new_id = lp.dest_part(u);
 
@@ -747,7 +789,7 @@ namespace GPU_HeiPa {
 
                 Kokkos::parallel_reduce("cut_change_1", n_moves, KOKKOS_LAMBDA(const u32 &i, weight_t &gain_update) {
                     vertex_t u = moves(i);
-                    weight_t u_w = g.weights(u);
+                    weight_t u_w = (uniform_v_weights ? 1 : g.weights(u));
                     partition_t old_id = lp.partition.map(u);
                     partition_t new_id = lp.dest_part(u);
 
@@ -792,11 +834,9 @@ namespace GPU_HeiPa {
         // update block conn
         {
             if (n_moves > (u32) g.n / 10) {
-                ScopedTimer _t("refinement", "JetLabelPropagation", "update_block_conn_large");
-                update_large(g, lp.partition, lp.zeros, lp.dest_cache, bc, moves);
-                KOKKOS_PROFILE_FENCE();
+                update_large<uniform_e_weights>(g, lp.partition, lp.zeros, lp.dest_cache, bc, moves);
             } else {
-                update_small(g, lp.partition, lp.dest_part, lp.dest_cache, bc, moves);
+                update_small<uniform_e_weights>(g, lp.partition, lp.dest_part, lp.dest_cache, bc, moves);
             }
         }
 
@@ -866,7 +906,7 @@ namespace GPU_HeiPa {
         curr_edge_cut -= (lp.cut_change2() + lp.cut_change1()) / 2;
     }
 
-
+    template<bool uniform_v_weights, bool uniform_e_weights>
     inline std::pair<weight_t, weight_t> jet_refine(Graph &g,
                                                     Partition &partition,
                                                     partition_t k,
@@ -888,7 +928,8 @@ namespace GPU_HeiPa {
         weight_t best_edge_cut = curr_edge_cut;
         weight_t best_max_weight = curr_max_weight;
 
-        BlockConn bc = init_BlockConn(g, lp.partition, mem_stack);
+        BlockConn bc;
+        bc = init_BlockConn<uniform_e_weights>(g, lp.partition, mem_stack);
 
         std::vector<f64> filter_ratios;
 
@@ -910,14 +951,14 @@ namespace GPU_HeiPa {
 
                 UnmanagedDeviceVertex moves;
                 if (curr_max_weight <= lmax) {
-                    moves = jet_lp(lp, g, bc, filter_ratio);
+                    moves = jet_lp<uniform_v_weights, uniform_e_weights>(lp, g, bc, filter_ratio);
                     balance_iteration = 0;
 
                     // if lp found 0 moves, it will find 0 moves in the next iteration so skip
                     if (moves.extent(0) == 0) { break; }
                 } else {
                     if (balance_iteration < N_MAX_WEAK_ITERATIONS) {
-                        moves = rebalance_weak(lp, g, bc);
+                        moves = rebalance_weak<uniform_v_weights>(lp, g, bc);
 
                         // if weak reb found 0 moves, it will find 0 moves in the next iteration so skip to stron rebalance
                         if (moves.extent(0) == 0) {
@@ -925,7 +966,7 @@ namespace GPU_HeiPa {
                             continue;
                         }
                     } else {
-                        moves = rebalance_strong(lp, g, bc);
+                        moves = rebalance_strong<uniform_v_weights>(lp, g, bc);
 
                         // if strong reb found 0 moves, it will find 0 moves in the next iteration so skip
                         if (moves.extent(0) == 0) { break; }
@@ -933,7 +974,7 @@ namespace GPU_HeiPa {
                     balance_iteration++;
                 }
 
-                perform_moves(lp, g, bc, moves, curr_max_weight, curr_edge_cut);
+                perform_moves<uniform_v_weights, uniform_e_weights>(lp, g, bc, moves, curr_max_weight, curr_edge_cut);
 
                 if (best_max_weight > lmax && curr_max_weight < best_max_weight) {
                     // copy the partition

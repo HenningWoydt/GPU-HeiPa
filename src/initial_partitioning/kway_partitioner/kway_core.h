@@ -1268,7 +1268,7 @@ namespace GPU_HeiPa::ModifiedMetis {
         int bestobj = 0, curobj = 0;
         float bestbal = 0.0, curbal = 0.0;
 
-        if (g.n == 0){ return; }
+        if (g.n == 0) { return; }
 
         std::vector<int> pwgts(2);
         BisectInfo info(g.n);
@@ -1545,7 +1545,6 @@ namespace GPU_HeiPa::ModifiedMetis {
 
 
 namespace GPU_HeiPa {
-
     inline void kway_partition(HostGraph &g,
                                int k,
                                f64 imbalance,

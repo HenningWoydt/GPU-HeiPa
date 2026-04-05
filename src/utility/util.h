@@ -134,7 +134,7 @@ namespace GPU_HeiPa {
         }
 
         std::streamsize size = file.tellg(); // get size
-        file.seekg(0, std::ios::beg);        // rewind
+        file.seekg(0, std::ios::beg); // rewind
 
         std::vector<char> buffer((size_t) size);
         if (!file.read(buffer.data(), size)) {

@@ -39,11 +39,11 @@ namespace GPU_HeiPa {
         size_t n_bytes_allocated = 0; // total bytes in the pool
 
         // FRONT side (grows from the beginning of the buffer upwards)
-        size_t n_bytes_in_use = 0;           // bytes used from the front (kept for backward compat)
+        size_t n_bytes_in_use = 0; // bytes used from the front (kept for backward compat)
         std::vector<size_t> reserved_chunks; // LIFO sizes from the front (aligned)
 
         // BACK side (grows from the end of the buffer downwards)
-        size_t n_bytes_in_use_back = 0;           // bytes used from the back
+        size_t n_bytes_in_use_back = 0; // bytes used from the back
         std::vector<size_t> reserved_chunks_back; // LIFO sizes from the back (aligned)
 
         void *base = nullptr; // base pointer to Kokkos-allocated memory
@@ -54,7 +54,7 @@ namespace GPU_HeiPa {
         return (n + 63u) & ~size_t(63u);
     }
 
-    inline KokkosMemoryStack initialize_kokkos_memory_stack(size_t n_bytes, const std::string& t_name) {
+    inline KokkosMemoryStack initialize_kokkos_memory_stack(size_t n_bytes, const std::string &t_name) {
         ScopedTimer _t("misc", "KokkosMemoryStack", "allocate");
 
         KokkosMemoryStack stack;

@@ -56,32 +56,99 @@ namespace GPU_HeiPa {
         g.m = m;
         g.g_weight = g_weight;
 
-        // bytes needed per array
-        size_t off_weights = 0;
-        size_t bytes_weights = round_up_64(sizeof(weight_t) * (size_t) n);
+        size_t total = 0;
 
-        size_t off_neighborhood = off_weights + bytes_weights;
+        size_t off_weights = total;
+        size_t bytes_weights = g.uniform_vertex_weights ? 0 : round_up_64(sizeof(weight_t) * (size_t) n);
+        total += bytes_weights;
+
+        size_t off_neighborhood = total;
         size_t bytes_neighborhood = round_up_64(sizeof(vertex_t) * (size_t) (n + 1));
+        total += bytes_neighborhood;
 
-        size_t off_edges_v = off_neighborhood + bytes_neighborhood;
+        size_t off_edges_v = total;
         size_t bytes_edges_v = round_up_64(sizeof(vertex_t) * (size_t) m);
+        total += bytes_edges_v;
 
-        size_t off_edges_w = off_edges_v + bytes_edges_v;
-        size_t bytes_edges_w = round_up_64(sizeof(weight_t) * (size_t) m);
+        size_t off_edges_w = total;
+        size_t bytes_edges_w = g.uniform_edge_weights ? 0 : round_up_64(sizeof(weight_t) * (size_t) m);
+        total += bytes_edges_w;
 
-        // total n bytes needed
-        g.n_bytes = off_edges_w + bytes_edges_w;
+        g.n_bytes = total;
 
-        // allocate one owning chunk
         g.memory = HostU8(Kokkos::view_alloc(Kokkos::WithoutInitializing, "HostGraph::memory"), g.n_bytes);
         uint8_t *base = g.memory.data();
 
-        // create unmanaged views into the chunk
-        g.weights = UnmanagedHostWeight((weight_t *) (base + off_weights), n);
+        if (!g.uniform_vertex_weights) {
+            g.weights = UnmanagedHostWeight((weight_t *) (base + off_weights), n);
+        }
         g.neighborhood = UnmanagedHostVertex((vertex_t *) (base + off_neighborhood), n + 1);
         g.neighborhood(0) = 0;
         g.edges_v = UnmanagedHostVertex((vertex_t *) (base + off_edges_v), m);
-        g.edges_w = UnmanagedHostWeight((weight_t *) (base + off_edges_w), m);
+        if (!g.uniform_edge_weights) {
+            g.edges_w = UnmanagedHostWeight((weight_t *) (base + off_edges_w), m);
+        }
+    }
+
+    template<bool has_v_weights, bool has_e_weights>
+    inline void read_edges(HostGraph &g, char *p, const char *end) {
+        vertex_t *edges_v_ptr = g.edges_v.data();
+        weight_t *edges_w_ptr = has_e_weights ? g.edges_w.data() : nullptr;
+        weight_t *weights_ptr = has_v_weights ? g.weights.data() : nullptr;
+        vertex_t *neighborhood_ptr = g.neighborhood.data();
+
+        vertex_t u = 0;
+        size_t curr_m = 0;
+
+        while (p < end) {
+            while (*p == '%') {
+                while (*p != '\n') { ++p; }
+                ++p;
+            }
+            while (*p == ' ') { ++p; }
+
+            weight_t vw = 1;
+            if constexpr (has_v_weights) {
+                vw = 0;
+                while (*p != ' ' && *p != '\n') {
+                    vw = vw * 10 + (weight_t) (*p - '0');
+                    ++p;
+                }
+                while (*p == ' ') { ++p; }
+                weights_ptr[u] = vw;
+            }
+            g.g_weight += vw;
+
+            while (*p != '\n' && p < end) {
+                vertex_t v = 0;
+                while (*p != ' ' && *p != '\n') {
+                    v = v * 10 + (vertex_t) (*p - '0');
+                    ++p;
+                }
+                while (*p == ' ') { ++p; }
+
+                if constexpr (has_e_weights) {
+                    weight_t w = 0;
+                    while (*p != ' ' && *p != '\n') {
+                        w = w * 10 + (weight_t) (*p - '0');
+                        ++p;
+                    }
+                    while (*p == ' ') { ++p; }
+                    edges_w_ptr[curr_m] = w;
+                }
+
+                edges_v_ptr[curr_m] = v - 1;
+                ++curr_m;
+            }
+            neighborhood_ptr[u + 1] = (vertex_t) curr_m;
+            ++u;
+            ++p;
+        }
+
+        if (curr_m != g.m) {
+            std::cerr << "Number of expected edges " << g.m << " not equal to number edges " << curr_m << " found!\n";
+            exit(EXIT_FAILURE);
+        }
     }
 
     inline HostGraph from_file(const std::string &file_path) {
@@ -149,89 +216,27 @@ namespace GPU_HeiPa {
             // skip whitespaces
             while (*p == ' ') { ++p; }
         }
-        g.g_weight = 0;
-        allocate_memory(g, g.n, g.m, 0);
-
         has_v_weights = fmt[1] == '1';
         has_e_weights = fmt[2] == '1';
         g.uniform_edge_weights = !has_e_weights;
         g.uniform_vertex_weights = !has_v_weights;
 
-        // then keep your existing pointer prefetch:
-        vertex_t *edges_v_ptr = g.edges_v.data();
-        weight_t *edges_w_ptr = g.edges_w.data();
-        weight_t *weights_ptr = g.weights.data();
-        vertex_t *neighborhood_ptr = g.neighborhood.data();
+        g.g_weight = 0;
+        allocate_memory(g, g.n, g.m, 0);
 
         _t_read_header.stop();
         ScopedTimer _t_read_edges("io", "CSRGraph", "read_edges");
 
         ++p;
-        vertex_t u = 0;
-        size_t curr_m = 0;
 
-        while (p < end) {
-            // skip comment lines
-            while (*p == '%') {
-                while (*p != '\n') { ++p; }
-                ++p;
-            }
-
-            // skip whitespaces
-            while (*p == ' ') { ++p; }
-
-            // read in vertex weight - optimized
-            weight_t vw = 1;
-            if (has_v_weights) {
-                vw = 0;
-                while (*p != ' ' && *p != '\n') {
-                    vw = vw * 10 + (weight_t) (*p - '0');
-                    ++p;
-                }
-                // skip whitespaces
-                while (*p == ' ') { ++p; }
-            }
-            weights_ptr[u] = vw;
-            g.g_weight += vw;
-
-            // read in edges - optimized inner loop
-            while (*p != '\n' && p < end) {
-                vertex_t v = 0;
-                while (*p != ' ' && *p != '\n') {
-                    v = v * 10 + (vertex_t) (*p - '0');
-                    ++p;
-                }
-
-                // skip whitespaces
-                while (*p == ' ') { ++p; }
-
-                weight_t w = 1;
-                if (has_e_weights) {
-                    w = 0;
-                    while (*p != ' ' && *p != '\n') {
-                        w = w * 10 + (weight_t) (*p - '0');
-                        ++p;
-                    }
-                    // skip whitespaces
-                    while (*p == ' ') { ++p; }
-                }
-
-                edges_v_ptr[curr_m] = v - 1;
-                edges_w_ptr[curr_m] = w;
-                ASSERT(v-1 < g.n);
-                ASSERT(w > 0);
-                ASSERT(curr_m < g.m);
-                ++curr_m;
-            }
-            neighborhood_ptr[u + 1] = (vertex_t) curr_m;
-            ++u;
-            ++p;
-        }
-
-        if (curr_m != g.m) {
-            std::cerr << "Number of expected edges " << g.m << " not equal to number edges " << curr_m << " found!\n";
-            munmap_file(mm);
-            exit(EXIT_FAILURE);
+        if (has_v_weights && has_e_weights) {
+            read_edges<true, true>(g, p, end);
+        } else if (has_v_weights) {
+            read_edges<true, false>(g, p, end);
+        } else if (has_e_weights) {
+            read_edges<false, true>(g, p, end);
+        } else {
+            read_edges<false, false>(g, p, end);
         }
 
         _t_read_edges.stop();

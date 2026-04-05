@@ -101,6 +101,7 @@ namespace GPU_HeiPa {
         KOKKOS_PROFILE_FENCE();
     }
 
+    template<bool uniform_vw>
     inline void recalculate_weights(Partition &partition,
                                     const Graph &g) {
         ScopedTimer _t("initial_partitioning", "Partition", "recalculate_weights");
@@ -111,7 +112,7 @@ namespace GPU_HeiPa {
         // set weights
         Kokkos::parallel_for("set_block_weights", g.n, KOKKOS_LAMBDA(const vertex_t u) {
             partition_t u_id = partition.map(u);
-            Kokkos::atomic_add(&partition.bweights(u_id), g.weights(u));
+            Kokkos::atomic_add(&partition.bweights(u_id), uniform_vw ? 1 : g.weights(u));
         });
         KOKKOS_PROFILE_FENCE();
     }
