@@ -522,7 +522,8 @@ namespace GPU_HeiPa {
         void uncontraction(u32 level, KokkosMemoryStack &mem_stack) {
             auto p = get_time_point();
 
-            uncontract(partition, mappings.back());
+            Kokkos::Cuda space;
+            uncontract(partition, mappings.back(), space);
 
             free_graph(graphs.back(), mem_stack);
             graphs.pop_back();

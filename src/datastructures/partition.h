@@ -88,11 +88,15 @@ namespace GPU_HeiPa {
     }
 
     inline void uncontract(Partition &partition,
-                           const Mapping &mapping) {
+                           const Mapping &mapping,
+                           Kokkos::Cuda &exec_space
+                        ) {
         ScopedTimer _t("uncontraction", "partition", "uncontract");
 
         // reset activity
-        Kokkos::parallel_for("initialize", mapping.old_n, KOKKOS_LAMBDA(const vertex_t u) {
+        Kokkos::parallel_for("initialize",
+            Kokkos::RangePolicy<Kokkos::Cuda>(exec_space, 0, mapping.old_n),
+            KOKKOS_LAMBDA(const vertex_t u) {
             vertex_t new_v = mapping.mapping(u);
             partition.temp_map(u) = partition.map(new_v);
         });
@@ -121,6 +125,23 @@ namespace GPU_HeiPa {
         weight_t max_val = 0;
 
         Kokkos::parallel_reduce("compute_max_weight", partition.k, KOKKOS_LAMBDA(const partition_t i, weight_t &local_max) {
+                                    if (partition.bweights(i) > local_max) {
+                                        local_max = partition.bweights(i);
+                                    }
+                                },
+                                Kokkos::Max<weight_t>(max_val)
+        );
+
+        return max_val;
+    }
+
+    inline weight_t max_weight(const Partition &partition, Kokkos::Cuda &exec_space) {
+        weight_t max_val = 0;
+
+        Kokkos::parallel_reduce(
+            "compute_max_weight",
+            Kokkos::RangePolicy<Kokkos::Cuda>(exec_space, 0, partition.k),
+            KOKKOS_LAMBDA(const partition_t i, weight_t &local_max) {
                                     if (partition.bweights(i) > local_max) {
                                         local_max = partition.bweights(i);
                                     }
@@ -181,6 +202,16 @@ namespace GPU_HeiPa {
         auto rN = std::make_pair<size_t, size_t>(0, n);
         Kokkos::deep_copy(Kokkos::subview(dst.map, rN), Kokkos::subview(src.map, rN));
         Kokkos::deep_copy(dst.bweights, src.bweights);
+    }
+
+    inline void copy_into(Partition &dst, const Partition &src, u32 n, Kokkos::Cuda &exec_space) {
+        dst.n = src.n;
+        dst.k = src.k;
+        dst.lmax = src.lmax;
+
+        auto rN = std::make_pair<size_t, size_t>(0, n);
+        Kokkos::deep_copy(exec_space, Kokkos::subview(dst.map, rN), Kokkos::subview(src.map, rN));
+        Kokkos::deep_copy(exec_space, dst.bweights, src.bweights);
     }
 
     struct PartitionHost {

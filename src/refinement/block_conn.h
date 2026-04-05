@@ -48,7 +48,9 @@ namespace GPU_HeiPa {
     template<bool uniform_e_weights>
     inline BlockConn init_BlockConn(const Graph &g,
                                     const Partition &partition,
-                                    KokkosMemoryStack &mem_stack) {
+                                    KokkosMemoryStack &mem_stack,
+                                    Kokkos::Cuda &exec_space
+                                ) {
         BlockConn bc;
         //
         {
@@ -65,7 +67,9 @@ namespace GPU_HeiPa {
         {
             ScopedTimer _t("refinement", "BlockConnectivity_fs", "set_rows");
 
-            Kokkos::parallel_scan("set_rows", g.n + 1, KOKKOS_LAMBDA(const u32 i, u32 &running, const bool final) {
+            Kokkos::parallel_scan("set_rows",
+                Kokkos::RangePolicy<Kokkos::Cuda>(exec_space, 0, g.n + 1),
+                KOKKOS_LAMBDA(const u32 i, u32 &running, const bool final) {
                 if (i == 0) {
                     // first slot is 0
                     if (final) bc.row(0) = 0;
@@ -84,8 +88,9 @@ namespace GPU_HeiPa {
 
                 running += c;
             });
-            Kokkos::deep_copy(bc.size, Kokkos::subview(bc.row, g.n));
 
+            Kokkos::deep_copy(exec_space, bc.size, Kokkos::subview(bc.row, g.n));
+            exec_space.fence();
             KOKKOS_PROFILE_FENCE();
         }
 
@@ -95,9 +100,9 @@ namespace GPU_HeiPa {
 
             bc.ids = UnmanagedDevicePartition((partition_t *) get_chunk_back(mem_stack, sizeof(partition_t) * bc.size), bc.size);
             bc.weights = UnmanagedDeviceWeight((weight_t *) get_chunk_back(mem_stack, sizeof(weight_t) * bc.size), bc.size);
-            Kokkos::deep_copy(bc.ids, NULL_PART);
-            Kokkos::deep_copy(bc.weights, 0);
-
+            Kokkos::deep_copy(exec_space, bc.ids, NULL_PART);
+            Kokkos::deep_copy(exec_space, bc.weights, 0);
+            exec_space.fence();
             KOKKOS_PROFILE_FENCE();
         }
 
@@ -105,7 +110,9 @@ namespace GPU_HeiPa {
         if (g.m / g.n < 16) {
             ScopedTimer _t("refinement", "BlockConnectivity_fs", "fill");
 
-            Kokkos::parallel_for("fill", g.m, KOKKOS_LAMBDA(const u32 i) {
+            Kokkos::parallel_for("fill",
+                Kokkos::RangePolicy<Kokkos::Cuda>(exec_space, 0, g.m),
+                KOKKOS_LAMBDA(const u32 i) {
                 vertex_t u = g.edges_u(i);
                 vertex_t v = g.edges_v(i);
                 weight_t w = uniform_e_weights ? 1 : g.edges_w(i);
@@ -345,14 +352,18 @@ namespace GPU_HeiPa {
                              UnmanagedDevicePartition &dest_part,
                              UnmanagedDevicePartition &dest_cache,
                              BlockConn &bc,
-                             const DeviceVertex &moves) {
+                             const DeviceVertex &moves,
+                             Kokkos::Cuda &exec_space
+                            ) {
         u32 total_moves = (u32) moves.extent(0);
 
         //
         {
             ScopedTimer _t("refinement", "JetLabelPropagation", "update_small_remove_weight");
 
-            Kokkos::parallel_for("remove_weight", Kokkos::TeamPolicy<>((int) total_moves, Kokkos::AUTO), KOKKOS_LAMBDA(const Kokkos::TeamPolicy<>::member_type &t) {
+            Kokkos::parallel_for("remove_weight",
+                Kokkos::TeamPolicy<>(exec_space, (int) total_moves, Kokkos::AUTO),
+                KOKKOS_LAMBDA(const Kokkos::TeamPolicy<>::member_type &t) {
                 vertex_t u = moves((u32) t.league_rank());
                 partition_t old_u_id = dest_part(u);
 
@@ -381,7 +392,9 @@ namespace GPU_HeiPa {
         {
             ScopedTimer _t("refinement", "JetLabelPropagation", "update_small_add_weight");
 
-            Kokkos::parallel_for("add_weight", Kokkos::TeamPolicy<>((int) total_moves, Kokkos::AUTO), KOKKOS_LAMBDA(const Kokkos::TeamPolicy<>::member_type &t) {
+            Kokkos::parallel_for("add_weight",
+                Kokkos::TeamPolicy<>(exec_space, (int) total_moves, Kokkos::AUTO),
+                KOKKOS_LAMBDA(const Kokkos::TeamPolicy<>::member_type &t) {
                 vertex_t u = moves((u32) t.league_rank());
                 partition_t new_u_id = partition.map(u);
 

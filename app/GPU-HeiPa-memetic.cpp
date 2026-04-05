@@ -28,8 +28,9 @@
 
 #include <Kokkos_Core.hpp>
 
-#include "../src/datastructures/solver.h"
-#include "../src/utility/configuration.h"
+#include "../src/datastructures/memeticSolver.h"
+#include "../src/datastructures/memeticSolverShrinking.h"
+#include "../src/utility/memetic_configuration.h"
 
 using namespace GPU_HeiPa;
 
@@ -44,29 +45,20 @@ int main(int argc, char *argv[]) {
         Kokkos::initialize();
     }
 
-    Configuration config;
+    MemeticConfiguration config;
     if (argc == 1) {
         config.print_help_message();
-        // return 0;
+        return 0;
         {
             ScopedTimer _t("io", "main", "parse_args");
             std::vector<std::pair<std::string, std::string> > input = {
-                // {"--graph", "../../ProMapRepo/data/mapping/rgg23.graph"}, // 100.054 in 334ms
+                {"--graph", "./res/graphs/144.graph"},    // 100.054 in 334ms
                 // {"--graph", "../../ProMapRepo/data/mapping/cfd2.mtx.graph"}, // 92.920 in 40ms
-                // {"--graph", "../../ProMapRepo/data/mapping/shipsec5.mtx.graph"},
-                // {"--graph", "../../GPU-HeiPa-Experiments/data/SuiteSparse/Hook_1498.graph"},
-                // {"--graph", "../../GPU-HeiPa-Experiments/data/SuiteSparse/mawi_201512020000.graph"},
-                // {"--graph", "../../GPU-HeiPa-Experiments/data/SuiteSparse/mycielskian18.graph"},
-                // {"--graph", "../../GPU-HeiPa-Experiments/data/SuiteSparse/HV15R.graph"},
-                // {"--graph", "../../GPU-HeiPa-Experiments/data/SuiteSparse/europe_osm.graph"},
-                // {"--graph", "../../GPU-HeiPa-Experiments/data/SuiteSparse/kron_g500-logn20.graph"},
-                // {"--graph", "../../GPU-HeiPa-Experiments/data/SuiteSparse/circuit5M.graph"},
-                {"--graph", "../../GPU-HeiPa-Experiments/data/SuiteSparse/indochina-2004.graph"},
-                // {"--graph", "../../GPU-HeiPa-Experiments/data/SuiteSparse/hugebubbles-00000.graph"},
-                {"--k", "32"},
+                {"--k", "4"},
                 {"--imbalance", "0.03"},
                 {"--config", "default"},
-                {"--verbose-level", "1"}
+                {"--seed", "1"},
+                {"--verbose-level", "2"}
             };
 
             std::vector<std::string> args = {"GPU-HeiPa"};
@@ -91,18 +83,18 @@ int main(int argc, char *argv[]) {
                 std::strcpy(argv_temp[i], args[i].c_str());
             }
 
-            config = Configuration(argc_temp, argv_temp);
+            config = MemeticConfiguration(argc_temp, argv_temp);
 
             for (int i = 0; i < argc_temp; ++i) { delete[] argv_temp[i]; }
             delete[] argv_temp;
         }
     } else {
         ScopedTimer _t("io", "main", "parse_args");
-        config = Configuration(argc, argv);
+        config = MemeticConfiguration(argc, argv);
     }
-
+    
     config.verbose_level = 2;
-
+    
     verbose_level = config.verbose_level;
 
     auto t_before_dtors = get_time_point();
@@ -118,7 +110,15 @@ int main(int argc, char *argv[]) {
 
 
         auto sp_solver = get_time_point();
-        HostPartition host_partition = Solver(config).solve(host_g);
+        HostPartition host_partition;
+        std::cout << config.population_management << std::endl;
+        if (config.population_management == "shrinking") {
+            host_partition = memeticSolverShrinking(config).solve(host_g);
+        }else{
+            host_partition = memeticSolver(config).solve(host_g);
+        }
+
+        
         Kokkos::fence();
 
         if (verbose_level >= 1) {

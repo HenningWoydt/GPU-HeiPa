@@ -10,6 +10,10 @@ build/
 data/
 
 extern/
-
+tests/
 res/
 .clangd
+out.txt
+
+*.nsys-rep
+test_*.cpp

@@ -29,6 +29,8 @@
 #include <Kokkos_Core.hpp>
 
 #include "../src/datastructures/solver.h"
+#include "../src/datastructures/solverRecursiveBisectionHost.h"
+#include "../src/datastructures/solverRecursiveBisectionDevice.h"
 #include "../src/utility/configuration.h"
 
 using namespace GPU_HeiPa;
@@ -37,7 +39,7 @@ int main(int argc, char *argv[]) {
     auto sp = get_time_point();
     std::ios::sync_with_stdio(false);
     std::cout.tie(nullptr);
-    int verbose_level = 2;
+    int verbose_level = 1;
     //
     {
         ScopedTimer _t("io", "main", "Kokkos::initialize");
@@ -46,27 +48,19 @@ int main(int argc, char *argv[]) {
 
     Configuration config;
     if (argc == 1) {
-        config.print_help_message();
+        // Configuration config;
+        // config.print_help_message();
         // return 0;
         {
             ScopedTimer _t("io", "main", "parse_args");
             std::vector<std::pair<std::string, std::string> > input = {
-                // {"--graph", "../../ProMapRepo/data/mapping/rgg23.graph"}, // 100.054 in 334ms
-                // {"--graph", "../../ProMapRepo/data/mapping/cfd2.mtx.graph"}, // 92.920 in 40ms
-                // {"--graph", "../../ProMapRepo/data/mapping/shipsec5.mtx.graph"},
-                // {"--graph", "../../GPU-HeiPa-Experiments/data/SuiteSparse/Hook_1498.graph"},
-                // {"--graph", "../../GPU-HeiPa-Experiments/data/SuiteSparse/mawi_201512020000.graph"},
-                // {"--graph", "../../GPU-HeiPa-Experiments/data/SuiteSparse/mycielskian18.graph"},
-                // {"--graph", "../../GPU-HeiPa-Experiments/data/SuiteSparse/HV15R.graph"},
-                // {"--graph", "../../GPU-HeiPa-Experiments/data/SuiteSparse/europe_osm.graph"},
-                // {"--graph", "../../GPU-HeiPa-Experiments/data/SuiteSparse/kron_g500-logn20.graph"},
-                // {"--graph", "../../GPU-HeiPa-Experiments/data/SuiteSparse/circuit5M.graph"},
-                {"--graph", "../../GPU-HeiPa-Experiments/data/SuiteSparse/indochina-2004.graph"},
-                // {"--graph", "../../GPU-HeiPa-Experiments/data/SuiteSparse/hugebubbles-00000.graph"},
-                {"--k", "32"},
+                {"--graph", "./res/graphs/144.graph"},    
+                {"--mapping", "./res/mapping144.txt"},  
+                {"--k", "4"},
                 {"--imbalance", "0.03"},
                 {"--config", "default"},
-                {"--verbose-level", "1"}
+                {"--seed", "1"},
+                {"--verbose-level", "2"}
             };
 
             std::vector<std::string> args = {"GPU-HeiPa"};
@@ -100,14 +94,11 @@ int main(int argc, char *argv[]) {
         ScopedTimer _t("io", "main", "parse_args");
         config = Configuration(argc, argv);
     }
-
-    config.verbose_level = 2;
-
     verbose_level = config.verbose_level;
-
-    auto t_before_dtors = get_time_point();
     //
     {
+        
+
         HostGraph host_g = from_file(config.graph_in);
 
         f64 io_ms = get_milli_seconds(sp, get_time_point());
@@ -118,8 +109,8 @@ int main(int argc, char *argv[]) {
 
 
         auto sp_solver = get_time_point();
-        HostPartition host_partition = Solver(config).solve(host_g);
-        Kokkos::fence();
+        // HostPartition host_partition = SolverRecursiveBisectionDevice(config).solve(host_g);
+        HostPartition host_partition = SolverRecursiveBisectionHost(config).solve(host_g);
 
         if (verbose_level >= 1) {
             std::cout << "Solved in         : " << get_milli_seconds(sp_solver, get_time_point()) << std::endl;
@@ -128,19 +119,14 @@ int main(int argc, char *argv[]) {
         if (config.is_set("--mapping")) {
             ScopedTimer _t("io", "main", "write_partition");
             auto p = get_time_point();
-
-            write_partition(host_partition, host_g.n, config.mapping_out);
-
-            if (verbose_level >= 1) {
+           write_partition(host_partition, host_g.n, config.mapping_out);
+           if (verbose_level >= 1) {
                 io_ms = get_milli_seconds(p, get_time_point());
                 std::cout << "Write partition in: " << io_ms << std::endl;
             }
         }
-        t_before_dtors = get_time_point();
     }
-    if (verbose_level >= 1) {
-        std::cout << "Destructed in     : " << get_milli_seconds(t_before_dtors, get_time_point()) << std::endl;
-    }
+    Kokkos::fence();
 
     //
     {
@@ -149,7 +135,6 @@ int main(int argc, char *argv[]) {
     }
 
     if (verbose_level >= 1) {
-        //! das hier macht gefühlt nix
         Profiler::instance().print_table(std::cout);
     }
 
