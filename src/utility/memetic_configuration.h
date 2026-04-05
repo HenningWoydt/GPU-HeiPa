@@ -183,7 +183,7 @@ namespace GPU_HeiPa {
                     perform_memetic_refinement = false;
                 } else {
                     std::cerr << "Warning: perform memetic refinement value \"" << refinement
-                              << "\" is invalid. Falling back to \"true\"." << std::endl;
+                            << "\" is invalid. Falling back to \"true\"." << std::endl;
                     perform_memetic_refinement = true;
                 }
             }
@@ -233,7 +233,7 @@ namespace GPU_HeiPa {
             }
             if (distance != "exact" && distance != "sampled") {
                 std::cerr << "Warning: distance mode \"" << distance
-                          << "\" is invalid. Falling back to \"exact\"." << std::endl;
+                        << "\" is invalid. Falling back to \"exact\"." << std::endl;
                 distance = "exact";
             }
 
@@ -253,7 +253,7 @@ namespace GPU_HeiPa {
             }
             if (population_management != "shrinking" && population_management != "steadystate") {
                 std::cerr << "Warning: population management mode \"" << population_management
-                          << "\" is invalid. Falling back to \"shrinking\"." << std::endl;
+                        << "\" is invalid. Falling back to \"shrinking\"." << std::endl;
                 population_management = "shrinking";
             }
 
@@ -273,7 +273,7 @@ namespace GPU_HeiPa {
                 leftover_strategy != "mixed"
             ) {
                 std::cerr << "Warning: leftover strategy \"" << leftover_strategy
-                          << "\" is invalid. Falling back to \"mixed\"." << std::endl;
+                        << "\" is invalid. Falling back to \"mixed\"." << std::endl;
                 leftover_strategy = "mixed";
             }
 
@@ -304,7 +304,7 @@ namespace GPU_HeiPa {
             }
             if (num_parents > num_individuals) {
                 std::cerr << "Warning: num_parents (" << num_parents << ") > num_individuals ("
-                          << num_individuals << "), capping num_parents to num_individuals." << std::endl;
+                        << num_individuals << "), capping num_parents to num_individuals." << std::endl;
                 num_parents = (u32) num_individuals;
             }
             if (tournament_size == 0) {
@@ -313,7 +313,7 @@ namespace GPU_HeiPa {
             }
             if (tournament_size > num_individuals) {
                 std::cerr << "Warning: tournament_size (" << tournament_size << ") > num_individuals ("
-                          << num_individuals << "), capping tournament_size to num_individuals." << std::endl;
+                        << num_individuals << "), capping tournament_size to num_individuals." << std::endl;
                 tournament_size = (u32) num_individuals;
             }
 
@@ -323,7 +323,7 @@ namespace GPU_HeiPa {
             }
             if (k > 0 && extent > k) {
                 std::cerr << "Warning: extent (" << extent << ") > k (" << k
-                          << "), capping extent to k." << std::endl;
+                        << "), capping extent to k." << std::endl;
                 extent = k;
             }
         }

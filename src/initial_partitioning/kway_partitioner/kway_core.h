@@ -1574,9 +1574,10 @@ namespace GPU_HeiPa {
                                int k,
                                f64 imbalance,
                                u64 seed,
-                               Partition &partition) {
+                               Partition &partition,
+                               DeviceExecutionSpace &exec_space) {
         // Convert device graph to simple CSR arrays on host
-        HostGraph host_g = to_host_graph(g);
+        HostGraph host_g = to_host_graph(g, exec_space);
         HostPartition host_partition(Kokkos::view_alloc(Kokkos::WithoutInitializing, "host_partition"), g.n);
 
         kway_partition(host_g, k, imbalance, seed, host_partition);

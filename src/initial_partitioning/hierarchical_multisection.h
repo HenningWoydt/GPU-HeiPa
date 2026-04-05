@@ -41,15 +41,16 @@ namespace GPU_HeiPa {
                                     u64 seed,
                                     bool use_ultra,
                                     UnmanagedDevicePartition &partition,
-                                    KokkosMemoryStack &mem_stack) {
+                                    KokkosMemoryStack &mem_stack,
+                                    DeviceExecutionSpace &exec_space) {
         if (k == 1) {
             ScopedTimer t{"hm", "recursive", "partition k=1"};
-            Kokkos::deep_copy(partition, 0);
-            Kokkos::fence();
+            Kokkos::deep_copy(exec_space, partition, 0);
+            exec_space.fence();
             return;
         }
 
-        Solver solver(device_g, k, imbalance, seed, use_ultra, partition, mem_stack);
+        Solver solver(device_g, k, imbalance, seed, use_ultra, partition, mem_stack, exec_space);
     }
 
     inline void recursive_multisection_device(Graph &device_g,
@@ -66,7 +67,8 @@ namespace GPU_HeiPa {
                                               const std::vector<partition_t> &k_rem,
                                               std::vector<partition_t> &identifier, // path of ids
                                               UnmanagedDevicePartition &global_partition, // size global_n
-                                              KokkosMemoryStack &mem_stack) {
+                                              KokkosMemoryStack &mem_stack,
+                                              DeviceExecutionSpace &exec_space) {
         ScopedTimer t{"hm", "recursive", "allocate"};
         const partition_t l = (partition_t) hierarchy.size();
         const partition_t k = hierarchy[level];
@@ -79,7 +81,7 @@ namespace GPU_HeiPa {
         t.stop();
 
         // 1) Partition current device graph into k blocks
-        gpu_heipa_partition(device_g, k, imb, seed, use_ultra, tmp_part, mem_stack);
+        gpu_heipa_partition(device_g, k, imb, seed, use_ultra, tmp_part, mem_stack, exec_space);
 
         // 2) Leaf: last split -> write into global_partition
         if (identifier.size() == (size_t) (l - 1)) {
@@ -88,11 +90,11 @@ namespace GPU_HeiPa {
             partition_t offset = 0;
             for (partition_t i = 0; i < l - 1; ++i) { offset += identifier[i] * index_vec[index_vec.size() - 1 - i]; }
 
-            Kokkos::parallel_for("WriteLeafPartition", device_g.n, KOKKOS_LAMBDA(const vertex_t u) {
+            Kokkos::parallel_for("WriteLeafPartition", Kokkos::RangePolicy<DeviceExecutionSpace>(exec_space, 0, device_g.n), KOKKOS_LAMBDA(const vertex_t u) {
                 const vertex_t orig_u = n_to_o(u);
                 global_partition(orig_u) = offset + tmp_part(u);
             });
-            Kokkos::fence();
+            exec_space.fence();
 
             pop_front(mem_stack); // tmp_part
             return;
@@ -107,15 +109,15 @@ namespace GPU_HeiPa {
             vertex_t sub_m = 0;
             weight_t sub_weight = 0;
 
-            Kokkos::parallel_reduce("SubN", device_g.n, KOKKOS_LAMBDA(const vertex_t u, vertex_t &lsum) {
+            Kokkos::parallel_reduce("SubN", Kokkos::RangePolicy<DeviceExecutionSpace>(exec_space, 0, device_g.n), KOKKOS_LAMBDA(const vertex_t u, vertex_t &lsum) {
                 if (tmp_part(u) == id) lsum += 1;
             }, sub_n);
 
-            Kokkos::parallel_reduce("SubWeight", device_g.n, KOKKOS_LAMBDA(const vertex_t u, weight_t &lsum) {
+            Kokkos::parallel_reduce("SubWeight", Kokkos::RangePolicy<DeviceExecutionSpace>(exec_space, 0, device_g.n), KOKKOS_LAMBDA(const vertex_t u, weight_t &lsum) {
                 if (tmp_part(u) == id) lsum += device_g.weights(u);
             }, sub_weight);
 
-            Kokkos::parallel_reduce("SubM", device_g.n, KOKKOS_LAMBDA(const vertex_t u, vertex_t &lsum) {
+            Kokkos::parallel_reduce("SubM", Kokkos::RangePolicy<DeviceExecutionSpace>(exec_space, 0, device_g.n), KOKKOS_LAMBDA(const vertex_t u, vertex_t &lsum) {
                 if (tmp_part(u) == id) {
                     vertex_t cnt = 0;
                     for (u32 i = device_g.neighborhood(u); i < device_g.neighborhood(u + 1); ++i) {
@@ -126,7 +128,7 @@ namespace GPU_HeiPa {
                 }
             }, sub_m);
 
-            Kokkos::fence();
+            exec_space.fence();
 
             // Empty block => skip
             if (sub_n == 0) {
@@ -139,7 +141,7 @@ namespace GPU_HeiPa {
             UnmanagedDeviceVertex child_o_to_n = UnmanagedDeviceVertex((vertex_t *) get_chunk_back(mem_stack, sizeof(vertex_t) * global_n), global_n);
 
             // --- Fill translation tables and weights
-            Kokkos::parallel_scan("AssignLocalIndex", device_g.n, KOKKOS_LAMBDA(const vertex_t u, vertex_t &prefix, const bool final) {
+            Kokkos::parallel_scan("AssignLocalIndex", Kokkos::RangePolicy<DeviceExecutionSpace>(exec_space, 0, device_g.n), KOKKOS_LAMBDA(const vertex_t u, vertex_t &prefix, const bool final) {
                 if (tmp_part(u) == id) {
                     const vertex_t my_idx = prefix;
                     if (final) {
@@ -151,14 +153,14 @@ namespace GPU_HeiPa {
                     prefix += 1;
                 }
             });
-            Kokkos::fence();
+            exec_space.fence();
 
             // init neighborhood(0)
-            Kokkos::parallel_for("InitNeighborhood0", 1, KOKKOS_LAMBDA(const int) { child_g.neighborhood(0) = 0; });
-            Kokkos::fence();
+            Kokkos::parallel_for("InitNeighborhood0", Kokkos::RangePolicy<DeviceExecutionSpace>(exec_space, 0, 1), KOKKOS_LAMBDA(const int) { child_g.neighborhood(0) = 0; });
+            exec_space.fence();
 
             // --- Fill edges + neighborhood offsets
-            Kokkos::parallel_scan("FillEdges", device_g.n, KOKKOS_LAMBDA(const vertex_t u, u32 &edge_prefix, const bool final) {
+            Kokkos::parallel_scan("FillEdges", Kokkos::RangePolicy<DeviceExecutionSpace>(exec_space, 0, device_g.n), KOKKOS_LAMBDA(const vertex_t u, u32 &edge_prefix, const bool final) {
                 if (tmp_part(u) == id) {
                     u32 start = edge_prefix;
                     u32 cnt = 0;
@@ -184,17 +186,17 @@ namespace GPU_HeiPa {
                     edge_prefix += cnt;
                 }
             });
-            Kokkos::fence();
+            exec_space.fence();
 
             // fill the u array
-            Kokkos::parallel_for("fill_edges_u", child_g.n, KOKKOS_LAMBDA(const vertex_t u) {
+            Kokkos::parallel_for("fill_edges_u", Kokkos::RangePolicy<DeviceExecutionSpace>(exec_space, 0, child_g.n), KOKKOS_LAMBDA(const vertex_t u) {
                 u32 begin = child_g.neighborhood(u);
                 u32 end = child_g.neighborhood(u + 1);
                 for (u32 i = begin; i < end; ++i) {
                     child_g.edges_u(i) = u;
                 }
             });
-            Kokkos::fence();
+            exec_space.fence();
 
             // We no longer need child_o_to_n after edges built
             pop_back(mem_stack);
@@ -218,7 +220,8 @@ namespace GPU_HeiPa {
                 k_rem,
                 identifier,
                 global_partition,
-                mem_stack
+                mem_stack,
+                exec_space
             );
             identifier.pop_back();
 
@@ -239,16 +242,18 @@ namespace GPU_HeiPa {
                                                    bool use_ultra) {
         ScopedTimer t{"hm", "initialize", "allocate"};
 
+        DeviceExecutionSpace exec_space = DeviceExecutionSpace();
+
         KokkosMemoryStack mem_stack = initialize_kokkos_memory_stack(30 * (size_t) g.n * sizeof(vertex_t) + 10 * (size_t) g.m * sizeof(vertex_t), "Stack");
 
         f64 time = 0.0;
-        Graph dev_g = from_HostGraph(g, mem_stack, time);
+        Graph dev_g = from_HostGraph(g, mem_stack, time, exec_space);
         UnmanagedDevicePartition dev_global_part = UnmanagedDevicePartition((partition_t *) get_chunk_front(mem_stack, sizeof(partition_t) * g.n), g.n);
         UnmanagedDeviceVertex dev_n_to_o = UnmanagedDeviceVertex((vertex_t *) get_chunk_front(mem_stack, sizeof(vertex_t) * g.n), g.n);
-        Kokkos::fence();
+        exec_space.fence();
 
-        Kokkos::parallel_for("InitIdMap", g.n, KOKKOS_LAMBDA(const vertex_t u) { dev_n_to_o(u) = u; });
-        Kokkos::fence();
+        Kokkos::parallel_for("InitIdMap", Kokkos::RangePolicy<DeviceExecutionSpace>(exec_space, 0, g.n), KOKKOS_LAMBDA(const vertex_t u) { dev_n_to_o(u) = u; });
+        exec_space.fence();
 
         partition_t l = (partition_t) hierarchy.size();
 
@@ -283,14 +288,15 @@ namespace GPU_HeiPa {
                                       k_rem,
                                       identifier,
                                       dev_global_part,
-                                      mem_stack);
+                                      mem_stack,
+                                      exec_space);
 
         ScopedTimer t_copy{"hm", "io", "copy_to_host"};
 
         // copy back to host
         HostPartition host_part = HostPartition(Kokkos::view_alloc(Kokkos::WithoutInitializing, "host_partition"), g.n);;
-        Kokkos::deep_copy(host_part, dev_global_part);
-        Kokkos::fence();
+        Kokkos::deep_copy(exec_space, host_part, dev_global_part);
+        exec_space.fence();
 
         // cleanup (reverse order)
         pop_front(mem_stack); // dev_n_to_o

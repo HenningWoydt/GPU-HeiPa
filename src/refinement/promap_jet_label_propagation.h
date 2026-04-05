@@ -68,7 +68,8 @@ namespace GPU_HeiPa {
                                                                       const vertex_t t_m,
                                                                       const partition_t t_k,
                                                                       const weight_t t_lmax,
-                                                                      KokkosMemoryStack &mem_stack) {
+                                                                      KokkosMemoryStack &mem_stack,
+                                                                      DeviceExecutionSpace &exec_space) {
         ScopedTimer _t("refinement", "JetLabelPropagation", "allocate");
 
         ProMapLabelPropagation lp;
@@ -79,7 +80,7 @@ namespace GPU_HeiPa {
         lp.lmax = t_lmax;
         lp.min_size = t_k * MAX_SECTIONS * MAX_BUCKETS;
 
-        lp.partition = initialize_partition(t_n, t_k, t_lmax, mem_stack);
+        lp.partition = initialize_partition(t_n, t_k, t_lmax, mem_stack, exec_space);
 
         lp.gain1 = UnmanagedDeviceWeight((weight_t *) get_chunk_back(mem_stack, sizeof(weight_t) * std::max(lp.n, lp.min_size)), std::max(lp.n, lp.min_size));
         lp.temp_gain = UnmanagedDeviceWeight((weight_t *) get_chunk_back(mem_stack, sizeof(weight_t) * lp.n), lp.n);
@@ -207,7 +208,8 @@ namespace GPU_HeiPa {
                                                const Graph &g,
                                                const BlockConn &bc,
                                                d_oracle_t &d_oracle,
-                                               f64 conn_c) {
+                                               f64 conn_c,
+                                               DeviceExecutionSpace &exec_space) {
         vertex_t num_pos = 0;
         //
         {
@@ -271,7 +273,7 @@ namespace GPU_HeiPa {
             Kokkos::deep_copy(lp.host_pinned_u32, lp.idx);
             num_pos = (vertex_t) lp.host_pinned_u32();
 
-            KOKKOS_PROFILE_FENCE();
+            KOKKOS_PROFILE_FENCE(exec_space);
         }
 
         // use afterburner
@@ -322,7 +324,7 @@ namespace GPU_HeiPa {
             Kokkos::deep_copy(lp.host_pinned_u32, lp.idx);
             num_pos = (vertex_t) lp.host_pinned_u32();
 
-            KOKKOS_PROFILE_FENCE();
+            KOKKOS_PROFILE_FENCE(exec_space);
         }
         return Kokkos::subview(lp.vtx2, std::make_pair((vertex_t) 0, num_pos));
     }
@@ -331,7 +333,8 @@ namespace GPU_HeiPa {
     inline UnmanagedDeviceVertex ProMap_rebalance_strong(ProMapLabelPropagation &lp,
                                                          const Graph &g,
                                                          const BlockConn &bc,
-                                                         d_oracle_t &d_oracle) {
+                                                         d_oracle_t &d_oracle,
+                                                         DeviceExecutionSpace &exec_space) {
         weight_t opt_weight = (g.g_weight + (weight_t) (lp.k - 1)) / (weight_t) lp.k;
         weight_t max_b_w = std::max(opt_weight + 1, (weight_t) ((f64) lp.lmax * 0.99));
 
@@ -358,7 +361,7 @@ namespace GPU_HeiPa {
                 }
             }, Kokkos::Max(lp.max_vwgt));
 
-            KOKKOS_PROFILE_FENCE();
+            KOKKOS_PROFILE_FENCE(exec_space);
         }
 
         u32 num_moves = 0;
@@ -414,7 +417,7 @@ namespace GPU_HeiPa {
 
             Kokkos::deep_copy(num_moves, lp.idx);
 
-            KOKKOS_PROFILE_FENCE();
+            KOKKOS_PROFILE_FENCE(exec_space);
         }
 
         //
@@ -440,6 +443,8 @@ namespace GPU_HeiPa {
                     update += gain;
                 });
             }
+
+            KOKKOS_PROFILE_FENCE(exec_space);
         }
 
         //
@@ -470,7 +475,7 @@ namespace GPU_HeiPa {
 
             Kokkos::deep_copy(num_moves, lp.idx);
 
-            KOKKOS_PROFILE_FENCE();
+            KOKKOS_PROFILE_FENCE(exec_space);
         }
 
         // the rest of this method determines the destination part for each evicted vtx
@@ -508,7 +513,7 @@ namespace GPU_HeiPa {
                 });
             });
 
-            KOKKOS_PROFILE_FENCE();
+            KOKKOS_PROFILE_FENCE(exec_space);
         }
         //
         {
@@ -540,7 +545,7 @@ namespace GPU_HeiPa {
                 lp.dest_part(u) = lp.partition.map(u);
             });
 
-            KOKKOS_PROFILE_FENCE();
+            KOKKOS_PROFILE_FENCE(exec_space);
         }
 
         return Kokkos::subview(lp.vtx1, std::make_pair((u32) 0, num_moves));
@@ -550,7 +555,8 @@ namespace GPU_HeiPa {
     inline UnmanagedDeviceVertex ProMap_rebalance_weak(ProMapLabelPropagation &lp,
                                                        Graph &g,
                                                        const BlockConn &bc,
-                                                       d_oracle_t &d_oracle) {
+                                                       d_oracle_t &d_oracle,
+                                                       DeviceExecutionSpace &exec_space) {
         weight_t opt_weight = (g.g_weight + (weight_t) (lp.k - 1)) / (weight_t) lp.k;
         weight_t max_b_w = (weight_t) ((f64) lp.lmax * 0.99);
         if (max_b_w < lp.lmax - 100) { max_b_w = lp.lmax - 100; }
@@ -583,7 +589,7 @@ namespace GPU_HeiPa {
                 });
             });
 
-            KOKKOS_PROFILE_FENCE();
+            KOKKOS_PROFILE_FENCE(exec_space);
         }
 
         //
@@ -592,7 +598,7 @@ namespace GPU_HeiPa {
 
             Kokkos::deep_copy(Kokkos::subview(lp.gain1, std::make_pair((vertex_t) 0, t_minibuckets + 1)), 0);
 
-            KOKKOS_PROFILE_FENCE();
+            KOKKOS_PROFILE_FENCE(exec_space);
         }
 
         // determine best block
@@ -648,7 +654,7 @@ namespace GPU_HeiPa {
                 }
             });
 
-            KOKKOS_PROFILE_FENCE();
+            KOKKOS_PROFILE_FENCE(exec_space);
         }
 
         //
@@ -676,7 +682,7 @@ namespace GPU_HeiPa {
                 });
             }
 
-            KOKKOS_PROFILE_FENCE();
+            KOKKOS_PROFILE_FENCE(exec_space);
         }
         //
         {
@@ -701,7 +707,7 @@ namespace GPU_HeiPa {
                 }
             }, lp.scan_host);
 
-            KOKKOS_PROFILE_FENCE();
+            KOKKOS_PROFILE_FENCE(exec_space);
         }
 
         Kokkos::fence();
@@ -714,7 +720,8 @@ namespace GPU_HeiPa {
     inline UnmanagedDeviceVertex ProMap_rebalance_strong_new(ProMapLabelPropagation &lp,
                                                              const Graph &g,
                                                              const BlockConn &bc,
-                                                             d_oracle_t &d_oracle) {
+                                                             d_oracle_t &d_oracle,
+                                                             DeviceExecutionSpace &exec_space) {
         weight_t opt_weight = (g.g_weight + (weight_t) (lp.k - 1)) / (weight_t) lp.k;
         weight_t max_b_w = std::max(opt_weight + 1, (weight_t) ((f64) lp.lmax * 0.99));
 
@@ -741,7 +748,7 @@ namespace GPU_HeiPa {
                 }
             }, Kokkos::Max(lp.max_vwgt));
 
-            KOKKOS_PROFILE_FENCE();
+            KOKKOS_PROFILE_FENCE(exec_space);
         }
 
         u32 num_moves = 0;
@@ -797,7 +804,7 @@ namespace GPU_HeiPa {
 
             Kokkos::deep_copy(num_moves, lp.idx);
 
-            KOKKOS_PROFILE_FENCE();
+            KOKKOS_PROFILE_FENCE(exec_space);
         }
 
         //
@@ -823,6 +830,8 @@ namespace GPU_HeiPa {
                     update += gain;
                 });
             }
+
+            KOKKOS_PROFILE_FENCE(exec_space);
         }
 
         //
@@ -853,7 +862,7 @@ namespace GPU_HeiPa {
 
             Kokkos::deep_copy(num_moves, lp.idx);
 
-            KOKKOS_PROFILE_FENCE();
+            KOKKOS_PROFILE_FENCE(exec_space);
         }
 
         // the rest of this method determines the destination part for each evicted vtx
@@ -891,7 +900,7 @@ namespace GPU_HeiPa {
                 });
             });
 
-            KOKKOS_PROFILE_FENCE();
+            KOKKOS_PROFILE_FENCE(exec_space);
         }
         //
         {
@@ -923,7 +932,7 @@ namespace GPU_HeiPa {
                 lp.dest_part(u) = lp.partition.map(u);
             });
 
-            KOKKOS_PROFILE_FENCE();
+            KOKKOS_PROFILE_FENCE(exec_space);
         }
 
         return Kokkos::subview(lp.vtx1, std::make_pair((u32) 0, num_moves));
@@ -933,7 +942,8 @@ namespace GPU_HeiPa {
     inline UnmanagedDeviceVertex ProMap_rebalance_weak_new(ProMapLabelPropagation &lp,
                                                            Graph &g,
                                                            const BlockConn &bc,
-                                                           d_oracle_t &d_oracle) {
+                                                           d_oracle_t &d_oracle,
+                                                           DeviceExecutionSpace &exec_space) {
         weight_t opt_weight = (g.g_weight + (weight_t) (lp.k - 1)) / (weight_t) lp.k;
         weight_t max_b_w = (weight_t) ((f64) lp.lmax * 0.99);
         if (max_b_w < lp.lmax - 100) { max_b_w = lp.lmax - 100; }
@@ -966,7 +976,7 @@ namespace GPU_HeiPa {
                 });
             });
 
-            KOKKOS_PROFILE_FENCE();
+            KOKKOS_PROFILE_FENCE(exec_space);
         }
 
         //
@@ -975,7 +985,7 @@ namespace GPU_HeiPa {
 
             Kokkos::deep_copy(Kokkos::subview(lp.gain1, std::make_pair((vertex_t) 0, t_minibuckets + 1)), 0);
 
-            KOKKOS_PROFILE_FENCE();
+            KOKKOS_PROFILE_FENCE(exec_space);
         }
 
         // determine best block
@@ -1028,7 +1038,7 @@ namespace GPU_HeiPa {
                 }
             });
 
-            KOKKOS_PROFILE_FENCE();
+            KOKKOS_PROFILE_FENCE(exec_space);
         }
 
         //
@@ -1056,7 +1066,7 @@ namespace GPU_HeiPa {
                 });
             }
 
-            KOKKOS_PROFILE_FENCE();
+            KOKKOS_PROFILE_FENCE(exec_space);
         }
         //
         {
@@ -1081,7 +1091,7 @@ namespace GPU_HeiPa {
                 }
             }, lp.scan_host);
 
-            KOKKOS_PROFILE_FENCE();
+            KOKKOS_PROFILE_FENCE(exec_space);
         }
 
         Kokkos::fence();
@@ -1097,7 +1107,8 @@ namespace GPU_HeiPa {
                                      d_oracle_t &d_oracle,
                                      const UnmanagedDeviceVertex &moves,
                                      weight_t &curr_max_weight,
-                                     weight_t &curr_comm_cost) {
+                                     weight_t &curr_comm_cost,
+                                     DeviceExecutionSpace &exec_space) {
         u32 n_moves = (u32) moves.extent(0);
 
         // copy old partition
@@ -1106,7 +1117,7 @@ namespace GPU_HeiPa {
 
             Kokkos::deep_copy(lp.old_map, lp.partition.map);
 
-            KOKKOS_PROFILE_FENCE();
+            KOKKOS_PROFILE_FENCE(exec_space);
         }
 
         // first change in cut
@@ -1127,20 +1138,20 @@ namespace GPU_HeiPa {
                 lp.dest_part(u) = old_id;
             });
 
-            KOKKOS_PROFILE_FENCE();
+            KOKKOS_PROFILE_FENCE(exec_space);
         }
 
         // update max weight
         {
             ScopedTimer _t("refinement", "JetLabelPropagation", "update_max_weight");
 
-            Kokkos::parallel_reduce("update_max_weight", Kokkos::RangePolicy<>(DeviceExecutionSpace(), 0, lp.k), KOKKOS_LAMBDA(const s32 i, weight_t &update) {
+            Kokkos::parallel_reduce("update_max_weight", Kokkos::RangePolicy<DeviceExecutionSpace>(exec_space, 0, lp.k), KOKKOS_LAMBDA(const s32 i, weight_t &update) {
                 if (lp.partition.bweights(i) > update) {
                     update = lp.partition.bweights(i);
                 }
             }, Kokkos::Max(lp.max_part));
 
-            KOKKOS_PROFILE_FENCE();
+            KOKKOS_PROFILE_FENCE(exec_space);
         }
 
         // update block conn
@@ -1148,12 +1159,12 @@ namespace GPU_HeiPa {
             ScopedTimer _t("refinement", "JetLabelPropagation", "update_block_conn");
 
             if (n_moves > (u32) g.n / 10) {
-                update_large<uniform_e_weights>(g, lp.partition, lp.zeros, lp.dest_cache, bc, moves);
+                update_large<uniform_e_weights>(g, lp.partition, lp.zeros, lp.dest_cache, bc, moves, exec_space);
             } else {
-                update_small<uniform_e_weights>(g, lp.partition, lp.dest_part, lp.dest_cache, bc, moves);
+                update_small<uniform_e_weights>(g, lp.partition, lp.dest_part, lp.dest_cache, bc, moves, exec_space);
             }
 
-            KOKKOS_PROFILE_FENCE();
+            KOKKOS_PROFILE_FENCE(exec_space);
         }
 
         // change in comm cost
@@ -1194,6 +1205,8 @@ namespace GPU_HeiPa {
                     local_delta += contrib;
                 }
             }, lp.cut_change1);
+
+            KOKKOS_PROFILE_FENCE(exec_space);
         }
         Kokkos::fence();
 
@@ -1211,21 +1224,24 @@ namespace GPU_HeiPa {
                                                            u32 level,
                                                            weight_t curr_comm_cost,
                                                            weight_t curr_max_weight,
-                                                           KokkosMemoryStack &mem_stack) {
-        ProMapLabelPropagation lp = initialize_ProMap_label_propagation(g.n, g.m, k, lmax, mem_stack);
+                                                           KokkosMemoryStack &mem_stack,
+                                                           DeviceExecutionSpace &exec_space) {
+        ProMapLabelPropagation lp = initialize_ProMap_label_propagation(g.n, g.m, k, lmax, mem_stack, exec_space);
 
         // copy partition
         {
             ScopedTimer _t("refinement", "JetLabelPropagation", "copy_partition");
-            copy_into(lp.partition, partition, g.n);
-            KOKKOS_PROFILE_FENCE();
+
+            copy_into(lp.partition, partition, g.n, exec_space);
+
+            KOKKOS_PROFILE_FENCE(exec_space);
         }
 
         weight_t best_comm_cost = curr_comm_cost;
         weight_t best_max_weight = curr_max_weight;
 
         BlockConn bc;
-        bc = init_BlockConn<uniform_e_weights>(g, lp.partition, mem_stack);
+        bc = init_BlockConn<uniform_e_weights>(g, lp.partition, mem_stack, exec_space);
 
         std::vector<f64> filter_ratios;
 
@@ -1243,34 +1259,34 @@ namespace GPU_HeiPa {
 
                 UnmanagedDeviceVertex moves;
                 if (curr_max_weight <= lmax) {
-                    moves = ProMap_jet_lp<uniform_v_weights, uniform_e_weights>(lp, g, bc, d_oracle, filter_ratio);
+                    moves = ProMap_jet_lp<uniform_v_weights, uniform_e_weights>(lp, g, bc, d_oracle, filter_ratio, exec_space);
                     balance_iteration = 0;
                 } else {
                     balance_iteration++;
 
                     if (balance_iteration < N_MAX_WEAK_ITERATIONS) {
-                        moves = ProMap_rebalance_weak<uniform_v_weights>(lp, g, bc, d_oracle);
+                        moves = ProMap_rebalance_weak<uniform_v_weights>(lp, g, bc, d_oracle, exec_space);
                     } else {
-                        moves = ProMap_rebalance_strong<uniform_v_weights>(lp, g, bc, d_oracle);
+                        moves = ProMap_rebalance_strong<uniform_v_weights>(lp, g, bc, d_oracle, exec_space);
                     }
                 }
 
                 u32 n_moves = (u32) moves.extent(0);
                 if (n_moves == 0) { continue; }
 
-                ProMap_perform_moves<uniform_v_weights, uniform_e_weights>(lp, g, bc, d_oracle, moves, curr_max_weight, curr_comm_cost);
+                ProMap_perform_moves<uniform_v_weights, uniform_e_weights>(lp, g, bc, d_oracle, moves, curr_max_weight, curr_comm_cost, exec_space);
 
                 if (best_max_weight > lmax && curr_max_weight < best_max_weight) {
                     // copy the partition
                     {
                         ScopedTimer _t("refinement", "JetLabelPropagation", "copy_partition");
 
-                        copy_into(partition, lp.partition, g.n);
+                        copy_into(partition, lp.partition, g.n, exec_space);
                         best_comm_cost = curr_comm_cost;
                         best_max_weight = curr_max_weight;
                         iteration = 0;
 
-                        KOKKOS_PROFILE_FENCE();
+                        KOKKOS_PROFILE_FENCE(exec_space);
                     }
                 } else if (curr_comm_cost < best_comm_cost && (curr_max_weight <= lmax || curr_max_weight < best_max_weight)) {
                     if ((f64) curr_comm_cost < PHI * (f64) best_comm_cost) { iteration = 0; }
@@ -1278,11 +1294,11 @@ namespace GPU_HeiPa {
                     {
                         ScopedTimer _t("refinement", "JetLabelPropagation", "copy_partition");
 
-                        copy_into(partition, lp.partition, g.n);
+                        copy_into(partition, lp.partition, g.n, exec_space);
                         best_comm_cost = curr_comm_cost;
                         best_max_weight = curr_max_weight;
 
-                        KOKKOS_PROFILE_FENCE();
+                        KOKKOS_PROFILE_FENCE(exec_space);
                     }
                 }
             }

@@ -261,7 +261,8 @@ namespace GPU_HeiPa {
                                     partition_t k,
                                     f64 imbalance,
                                     u64 seed,
-                                    Partition &partition) {
+                                    Partition &partition,
+                                    DeviceExecutionSpace &exec_space) {
         HostGraph host_g;
         HostPartition host_partition;
         // initialize the host
@@ -269,7 +270,7 @@ namespace GPU_HeiPa {
             ScopedTimer _t("initial_partitioning", "global_multisection", "init_host");
 
             // Convert device graph to simple CSR arrays on host
-            host_g = to_host_graph(g);
+            host_g = to_host_graph(g, exec_space);
             host_partition = HostPartition(Kokkos::view_alloc(Kokkos::WithoutInitializing, "host_partition"), g.n);
         }
 
@@ -280,8 +281,8 @@ namespace GPU_HeiPa {
             ScopedTimer _t("initial_partitioning", "global_multisection", "upload_partition");
 
             auto device_subview = Kokkos::subview(partition.map, std::pair<size_t, size_t>(0, host_partition.extent(0)));
-            Kokkos::deep_copy(device_subview, host_partition);
-            Kokkos::fence();
+            Kokkos::deep_copy(exec_space, device_subview, host_partition);
+            exec_space.fence();
         }
     }
 }

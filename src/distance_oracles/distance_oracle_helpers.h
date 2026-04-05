@@ -38,15 +38,17 @@ namespace GPU_HeiPa {
     DOracle initialize_distance_oracle(partition_t k,
                                        std::vector<partition_t> &hierarchy,
                                        std::vector<weight_t> &distances,
-                                       KokkosMemoryStack &mem_stack);
+                                       KokkosMemoryStack &mem_stack,
+                                       DeviceExecutionSpace &exec_space);
 
     // Specialization for matrix
     template<>
     inline DistanceOracleMatrix initialize_distance_oracle<DistanceOracleMatrix>(partition_t k,
                                                                                  std::vector<partition_t> &hierarchy,
                                                                                  std::vector<weight_t> &distances,
-                                                                                 KokkosMemoryStack &mem_stack) {
-        return initialize_distance_oracle_matrix(k, hierarchy, distances, mem_stack);
+                                                                                 KokkosMemoryStack &mem_stack,
+                                                                                 DeviceExecutionSpace &exec_space) {
+        return initialize_distance_oracle_matrix(k, hierarchy, distances, mem_stack, exec_space);
     }
 
     // Declaration

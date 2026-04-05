@@ -147,9 +147,11 @@ namespace GPU_HeiPa {
                u64 seed,
                bool t_use_ultra,
                UnmanagedDevicePartition &dev_partition,
-               KokkosMemoryStack &dev_mem_stack) {
+               KokkosMemoryStack &dev_mem_stack,
+               DeviceExecutionSpace &exec_space) {
             // Main stack: Graph + coarsening overhead
             ScopedTimer t_init{"hm", "solver", "initialize"};
+
             n = dev_g.n;
             m = dev_g.m;
             k = t_k;
@@ -163,9 +165,9 @@ namespace GPU_HeiPa {
 
             graphs.emplace_back(dev_g);
 
-            partition = initialize_partition(n, k, lmax, dev_mem_stack);
+            partition = initialize_partition(n, k, lmax, dev_mem_stack, exec_space);
 
-            assert_state_pre_partition(graphs.back());
+            assert_state_pre_partition(graphs.back(), exec_space);
 
             t_init.stop();
 
@@ -246,6 +248,8 @@ namespace GPU_HeiPa {
         HostPartition solve(HostGraph &host_g) {
             auto sp = get_time_point();
 
+            DeviceExecutionSpace exec_space = DeviceExecutionSpace();
+
             KokkosMemoryStack mem_stack = initialize_kokkos_memory_stack(config.n_bytes_requested, "Stack");
 
             internal_solve(host_g, mem_stack);
@@ -267,7 +271,7 @@ namespace GPU_HeiPa {
             weight_t sum_too_much = 0;
             if (config.verbose_level >= 1) {
                 ScopedTimer _t("misc", "Solver", "calc_stats");
-                PartitionHost partition_host = to_host_partition(partition);
+                PartitionHost partition_host = to_host_partition(partition, exec_space);
                 for (partition_t id = 0; id < config.k; ++id) {
                     n_empty_partitions += partition_host.bweights(id) == 0;
                     n_overloaded_partitions += partition_host.bweights(id) > lmax;
@@ -398,6 +402,8 @@ namespace GPU_HeiPa {
         void initialize(HostGraph &host_g, KokkosMemoryStack &mem_stack) {
             auto p = get_time_point();
 
+            DeviceExecutionSpace exec_space = DeviceExecutionSpace();
+
             n = host_g.n;
             m = host_g.m;
             k = config.k;
@@ -405,28 +411,30 @@ namespace GPU_HeiPa {
             use_ultra = config.config == "ultra";
 
             f64 up_ms = 0;
-            graphs.emplace_back(from_HostGraph(host_g, mem_stack, up_ms));
+            graphs.emplace_back(from_HostGraph(host_g, mem_stack, up_ms, exec_space));
 
-            partition = initialize_partition(n, k, lmax, mem_stack);
+            partition = initialize_partition(n, k, lmax, mem_stack, exec_space);
 
             misc_ms += get_milli_seconds(p, get_time_point());
             misc_ms -= up_ms;
             down_up_load_ms += up_ms;
 
-            assert_state_pre_partition(graphs.back());
+            assert_state_pre_partition(graphs.back(), exec_space);
         }
 
         void coarsening(u32 level, KokkosMemoryStack &mem_stack) {
             auto p = get_time_point();
 
+            DeviceExecutionSpace exec_space = DeviceExecutionSpace();
+
             if (graphs.back().uniform_vertex_weights && graphs.back().uniform_edge_weights) {
-                mappings.emplace_back(two_hop_matcher_get_mapping<true, true>(graphs.back(), partition, lmax, mem_stack));
+                mappings.emplace_back(two_hop_matcher_get_mapping<true, true>(graphs.back(), partition, lmax, mem_stack, exec_space));
             } else if (graphs.back().uniform_vertex_weights) {
-                mappings.emplace_back(two_hop_matcher_get_mapping<true, false>(graphs.back(), partition, lmax, mem_stack));
+                mappings.emplace_back(two_hop_matcher_get_mapping<true, false>(graphs.back(), partition, lmax, mem_stack, exec_space));
             } else if (graphs.back().uniform_edge_weights) {
-                mappings.emplace_back(two_hop_matcher_get_mapping<false, true>(graphs.back(), partition, lmax, mem_stack));
+                mappings.emplace_back(two_hop_matcher_get_mapping<false, true>(graphs.back(), partition, lmax, mem_stack, exec_space));
             } else {
-                mappings.emplace_back(two_hop_matcher_get_mapping<false, false>(graphs.back(), partition, lmax, mem_stack));
+                mappings.emplace_back(two_hop_matcher_get_mapping<false, false>(graphs.back(), partition, lmax, mem_stack, exec_space));
             }
 
             Kokkos::fence();
@@ -436,23 +444,25 @@ namespace GPU_HeiPa {
             level_infos[level].t_coarsening = get_milli_seconds(p, get_time_point());
             #endif
 
-            assert_state_pre_partition(graphs.back());
+            assert_state_pre_partition(graphs.back(), exec_space);
         }
 
         void contraction(u32 level, KokkosMemoryStack &mem_stack) {
             auto p = get_time_point();
 
+            DeviceExecutionSpace exec_space = DeviceExecutionSpace();
+
             const Graph &cur = graphs.back();
             if (cur.uniform_vertex_weights && cur.uniform_edge_weights) {
-                graphs.emplace_back(from_Graph_Mapping<true, true>(cur, mappings.back(), mem_stack));
+                graphs.emplace_back(from_Graph_Mapping<true, true>(cur, mappings.back(), mem_stack, exec_space));
             } else if (cur.uniform_vertex_weights) {
-                graphs.emplace_back(from_Graph_Mapping<true, false>(cur, mappings.back(), mem_stack));
+                graphs.emplace_back(from_Graph_Mapping<true, false>(cur, mappings.back(), mem_stack, exec_space));
             } else if (cur.uniform_edge_weights) {
-                graphs.emplace_back(from_Graph_Mapping<false, true>(cur, mappings.back(), mem_stack));
+                graphs.emplace_back(from_Graph_Mapping<false, true>(cur, mappings.back(), mem_stack, exec_space));
             } else {
-                graphs.emplace_back(from_Graph_Mapping<false, false>(cur, mappings.back(), mem_stack));
+                graphs.emplace_back(from_Graph_Mapping<false, false>(cur, mappings.back(), mem_stack, exec_space));
             }
-            contract(partition, mappings.back());
+            contract(partition, mappings.back(), exec_space);
 
             Kokkos::fence();
             contraction_ms += get_milli_seconds(p, get_time_point());
@@ -461,16 +471,18 @@ namespace GPU_HeiPa {
             level_infos[level].t_contraction = get_milli_seconds(p, get_time_point());
             #endif
 
-            assert_state_pre_partition(graphs.back());
+            assert_state_pre_partition(graphs.back(), exec_space);
         }
 
         void initial_partitioning(KokkosMemoryStack &mem_stack) {
             auto p = get_time_point();
 
-            // Use METIS for initial partitioning
-            kway_partition(graphs.back(), (int) k, config.imbalance, config.seed, partition);
+            DeviceExecutionSpace exec_space = DeviceExecutionSpace();
 
-            recalculate_weights<false>(partition, graphs.back());
+            // Use METIS for initial partitioning
+            kway_partition(graphs.back(), (int) k, config.imbalance, config.seed, partition, exec_space);
+
+            recalculate_weights<false>(partition, graphs.back(), exec_space);
 
             ScopedTimer _t("initial_partitioning", "Partition", "first_stats");
 
@@ -482,22 +494,24 @@ namespace GPU_HeiPa {
             Kokkos::fence();
             initial_partitioning_ms += get_milli_seconds(p, get_time_point());
 
-            assert_state_after_partition(graphs.back(), partition, config.k);
+            assert_state_after_partition(graphs.back(), partition, config.k, exec_space);
         }
 
         void refinement(u32 level, KokkosMemoryStack &mem_stack) {
             auto p = get_time_point();
 
+            DeviceExecutionSpace execution_space = DeviceExecutionSpace();
+
             Graph &cur = graphs.back();
             std::pair<weight_t, weight_t> pair;
             if (cur.uniform_vertex_weights && cur.uniform_edge_weights) {
-                pair = jet_refine<true, true>(cur, partition, k, lmax, use_ultra, level, curr_edge_cut, curr_max_block_weight, mem_stack);
+                pair = jet_refine<true, true>(cur, partition, k, lmax, use_ultra, level, curr_edge_cut, curr_max_block_weight, mem_stack, execution_space);
             } else if (cur.uniform_vertex_weights) {
-                pair = jet_refine<true, false>(cur, partition, k, lmax, use_ultra, level, curr_edge_cut, curr_max_block_weight, mem_stack);
+                pair = jet_refine<true, false>(cur, partition, k, lmax, use_ultra, level, curr_edge_cut, curr_max_block_weight, mem_stack, execution_space);
             } else if (cur.uniform_edge_weights) {
-                pair = jet_refine<false, true>(cur, partition, k, lmax, use_ultra, level, curr_edge_cut, curr_max_block_weight, mem_stack);
+                pair = jet_refine<false, true>(cur, partition, k, lmax, use_ultra, level, curr_edge_cut, curr_max_block_weight, mem_stack, execution_space);
             } else {
-                pair = jet_refine<false, false>(cur, partition, k, lmax, use_ultra, level, curr_edge_cut, curr_max_block_weight, mem_stack);
+                pair = jet_refine<false, false>(cur, partition, k, lmax, use_ultra, level, curr_edge_cut, curr_max_block_weight, mem_stack, execution_space);
             }
             curr_edge_cut = pair.first;
             curr_max_block_weight = pair.second;
@@ -516,14 +530,14 @@ namespace GPU_HeiPa {
             level_infos[level].t_refinement = get_milli_seconds(p, get_time_point());
             #endif
 
-            assert_state_after_partition(graphs.back(), partition, config.k);
+            assert_state_after_partition(graphs.back(), partition, config.k, execution_space);
         }
 
         void uncontraction(u32 level, KokkosMemoryStack &mem_stack) {
             auto p = get_time_point();
 
-            Kokkos::Cuda space;
-            uncontract(partition, mappings.back(), space);
+            DeviceExecutionSpace exec_space;
+            uncontract(partition, mappings.back(), exec_space);
 
             free_graph(graphs.back(), mem_stack);
             graphs.pop_back();
@@ -538,7 +552,7 @@ namespace GPU_HeiPa {
             level_infos[level].t_uncontraction = get_milli_seconds(p, get_time_point());
             #endif
 
-            assert_state_after_partition(graphs.back(), partition, config.k);
+            assert_state_after_partition(graphs.back(), partition, config.k, exec_space);
         }
     };
 }

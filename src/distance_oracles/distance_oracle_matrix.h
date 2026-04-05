@@ -41,7 +41,8 @@ namespace GPU_HeiPa {
     inline DistanceOracleMatrix initialize_distance_oracle_matrix(partition_t k,
                                                                   std::vector<partition_t> &hierarchy,
                                                                   std::vector<weight_t> &distance,
-                                                                  KokkosMemoryStack &mem_stack) {
+                                                                  KokkosMemoryStack &mem_stack,
+                                                                  DeviceExecutionSpace &exec_space) {
         DistanceOracleMatrix d_oracle;
 
         d_oracle.k = k;
@@ -56,11 +57,11 @@ namespace GPU_HeiPa {
         auto host_distance = Kokkos::View<weight_t *, Kokkos::HostSpace>(distance.data(), l);
 
         // Deep copy to device
-        Kokkos::deep_copy(dev_hierarchy, host_hierarchy);
-        Kokkos::deep_copy(dev_distance, host_distance);
+        Kokkos::deep_copy(exec_space, dev_hierarchy, host_hierarchy);
+        Kokkos::deep_copy(exec_space, dev_distance, host_distance);
 
         // Fill w_mtx and h_mtx in parallel
-        Kokkos::parallel_for("build_distance_oracle", k * k, KOKKOS_LAMBDA(const u32 idx) {
+        Kokkos::parallel_for("build_distance_oracle", Kokkos::RangePolicy<DeviceExecutionSpace>(exec_space, 0, k * k), KOKKOS_LAMBDA(const u32 idx) {
             partition_t i = idx / k;
             partition_t j = idx % k;
             if (i == j) {
@@ -79,7 +80,7 @@ namespace GPU_HeiPa {
 
             d_oracle.w_mtx(idx) = dev_distance(level);
         });
-        Kokkos::fence();
+        exec_space.fence();
 
 
         pop_back(mem_stack);

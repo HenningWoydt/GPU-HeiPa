@@ -70,10 +70,11 @@ namespace GPU_HeiPa {
 
     template<bool uniform_ew>
     inline weight_t edge_cut(const Graph &g,
-                             const Partition &partition) {
+                             const Partition &partition,
+                             DeviceExecutionSpace &exec_space) {
         weight_t sum = 0;
 
-        Kokkos::parallel_reduce("edge_cut", g.m, KOKKOS_LAMBDA(const u32 i, weight_t &local_sum) {
+        Kokkos::parallel_reduce("edge_cut", Kokkos::RangePolicy<DeviceExecutionSpace>(exec_space, 0, g.m), KOKKOS_LAMBDA(const u32 i, weight_t &local_sum) {
             vertex_t u = g.edges_u(i);
             vertex_t v = g.edges_v(i);
             weight_t w = uniform_ew ? 1 : g.edges_w(i);
@@ -83,7 +84,7 @@ namespace GPU_HeiPa {
 
             local_sum += w * (u_id != v_id);
         }, sum);
-        Kokkos::fence();
+        exec_space.fence();
 
         return sum / 2;
     }
@@ -94,9 +95,10 @@ namespace GPU_HeiPa {
                                     const Partition &partition,
                                     const UnmanagedDevicePartition &old_map,
                                     const UnmanagedDeviceVertex &moves,
-                                    const u32 n_moves) {
+                                    const u32 n_moves,
+                                    DeviceExecutionSpace &exec_space) {
         weight_t delta = 0;
-        Kokkos::parallel_reduce("edge_cut", n_moves, KOKKOS_LAMBDA(const u32 i, weight_t &local_delta) {
+        Kokkos::parallel_reduce("edge_cut", Kokkos::RangePolicy<DeviceExecutionSpace>(exec_space, 0, n_moves), KOKKOS_LAMBDA(const u32 i, weight_t &local_delta) {
             vertex_t u = moves(i);
             partition_t old_u_id = old_map(u);
             partition_t new_u_id = partition.map(u);

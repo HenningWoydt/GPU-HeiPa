@@ -47,7 +47,8 @@ namespace GPU_HeiPa {
     inline Partition initialize_partition(const vertex_t t_n,
                                           const partition_t t_k,
                                           const weight_t t_lmax,
-                                          KokkosMemoryStack &mem_stack) {
+                                          KokkosMemoryStack &mem_stack,
+                                          DeviceExecutionSpace &exec_space) {
         ScopedTimer t{"misc", "partition", "initialize_partition"};
 
         Partition partition;
@@ -60,8 +61,8 @@ namespace GPU_HeiPa {
         partition.temp_map = UnmanagedDevicePartition((partition_t *) get_chunk_front(mem_stack, sizeof(partition_t) * t_n), t_n);
         partition.bweights = UnmanagedDeviceWeight((weight_t *) get_chunk_front(mem_stack, sizeof(weight_t) * t_k), t_k);
 
-        Kokkos::deep_copy(partition.map, 0);
-        Kokkos::deep_copy(partition.bweights, 0);
+        Kokkos::deep_copy(exec_space, partition.map, 0);
+        Kokkos::deep_copy(exec_space, partition.bweights, 0);
 
         return partition;
     }
@@ -74,9 +75,10 @@ namespace GPU_HeiPa {
     }
 
     inline void contract(Partition &partition,
-                         const Mapping &mapping) {
+                         const Mapping &mapping,
+                         DeviceExecutionSpace &exec_space) {
         ScopedTimer t{"contraction", "partition", "contract"};
-        Kokkos::parallel_for("initialize", mapping.old_n, KOKKOS_LAMBDA(const vertex_t u) {
+        Kokkos::parallel_for("initialize", Kokkos::RangePolicy<DeviceExecutionSpace>(exec_space, 0, mapping.old_n), KOKKOS_LAMBDA(const vertex_t u) {
             // TODO: multiple threads may write the same value, is this bad?
             vertex_t u_new = mapping.mapping(u);
             partition.temp_map(u_new) = partition.map(u);
@@ -84,70 +86,63 @@ namespace GPU_HeiPa {
 
         std::swap(partition.map, partition.temp_map);
 
-        KOKKOS_PROFILE_FENCE();
+        KOKKOS_PROFILE_FENCE(exec_space);
     }
 
     inline void uncontract(Partition &partition,
                            const Mapping &mapping,
-                           Kokkos::Cuda &exec_space
-                        ) {
+                           DeviceExecutionSpace &exec_space) {
         ScopedTimer _t("uncontraction", "partition", "uncontract");
 
         // reset activity
-        Kokkos::parallel_for("initialize",
-            Kokkos::RangePolicy<Kokkos::Cuda>(exec_space, 0, mapping.old_n),
-            KOKKOS_LAMBDA(const vertex_t u) {
+        Kokkos::parallel_for("initialize", Kokkos::RangePolicy<DeviceExecutionSpace>(exec_space, 0, mapping.old_n), KOKKOS_LAMBDA(const vertex_t u) {
             vertex_t new_v = mapping.mapping(u);
             partition.temp_map(u) = partition.map(new_v);
         });
         std::swap(partition.map, partition.temp_map);
 
-        KOKKOS_PROFILE_FENCE();
+        KOKKOS_PROFILE_FENCE(exec_space);
     }
 
     template<bool uniform_vw>
     inline void recalculate_weights(Partition &partition,
-                                    const Graph &g) {
+                                    const Graph &g,
+                                    DeviceExecutionSpace &exec_space) {
         ScopedTimer _t("initial_partitioning", "Partition", "recalculate_weights");
 
         // reset weights
-        Kokkos::deep_copy(partition.bweights, 0);
+        Kokkos::deep_copy(exec_space, partition.bweights, 0);
 
         // set weights
-        Kokkos::parallel_for("set_block_weights", g.n, KOKKOS_LAMBDA(const vertex_t u) {
+        Kokkos::parallel_for("set_block_weights", Kokkos::RangePolicy<DeviceExecutionSpace>(exec_space, 0, g.n), KOKKOS_LAMBDA(const vertex_t u) {
             partition_t u_id = partition.map(u);
             Kokkos::atomic_add(&partition.bweights(u_id), uniform_vw ? 1 : g.weights(u));
         });
-        KOKKOS_PROFILE_FENCE();
+
+        KOKKOS_PROFILE_FENCE(exec_space);
     }
 
     inline weight_t max_weight(const Partition &partition) {
         weight_t max_val = 0;
 
-        Kokkos::parallel_reduce("compute_max_weight", partition.k, KOKKOS_LAMBDA(const partition_t i, weight_t &local_max) {
-                                    if (partition.bweights(i) > local_max) {
-                                        local_max = partition.bweights(i);
-                                    }
-                                },
-                                Kokkos::Max<weight_t>(max_val)
-        );
+        Kokkos::parallel_reduce("compute_max_weight", Kokkos::RangePolicy<DeviceExecutionSpace>(0, partition.k), KOKKOS_LAMBDA(const partition_t i, weight_t &local_max) {
+            if (partition.bweights(i) > local_max) {
+                local_max = partition.bweights(i);
+            }
+        }, Kokkos::Max<weight_t>(max_val));
 
         return max_val;
     }
 
-    inline weight_t max_weight(const Partition &partition, Kokkos::Cuda &exec_space) {
+    inline weight_t max_weight(const Partition &partition,
+                               DeviceExecutionSpace &exec_space) {
         weight_t max_val = 0;
 
-        Kokkos::parallel_reduce(
-            "compute_max_weight",
-            Kokkos::RangePolicy<Kokkos::Cuda>(exec_space, 0, partition.k),
-            KOKKOS_LAMBDA(const partition_t i, weight_t &local_max) {
-                                    if (partition.bweights(i) > local_max) {
-                                        local_max = partition.bweights(i);
-                                    }
-                                },
-                                Kokkos::Max<weight_t>(max_val)
-        );
+        Kokkos::parallel_reduce("compute_max_weight", Kokkos::RangePolicy<DeviceExecutionSpace>(exec_space, 0, partition.k), KOKKOS_LAMBDA(const partition_t i, weight_t &local_max) {
+            if (partition.bweights(i) > local_max) {
+                local_max = partition.bweights(i);
+            }
+        }, Kokkos::Max<weight_t>(max_val));
 
         return max_val;
     }
@@ -155,7 +150,7 @@ namespace GPU_HeiPa {
     inline partition_t n_empty_blocks(const Partition &partition) {
         partition_t s = 0;
 
-        Kokkos::parallel_reduce("compute_max_weight", partition.k, KOKKOS_LAMBDA(const partition_t i, partition_t &local_s) {
+        Kokkos::parallel_reduce("compute_max_weight", Kokkos::RangePolicy<DeviceExecutionSpace>(0, partition.k), KOKKOS_LAMBDA(const partition_t i, partition_t &local_s) {
                                     if (partition.bweights(i) == 0) {
                                         local_s += 1;
                                     }
@@ -169,7 +164,7 @@ namespace GPU_HeiPa {
     inline partition_t n_oload_blocks(const Partition &partition) {
         partition_t s = 0;
 
-        Kokkos::parallel_reduce("compute_max_weight", partition.k, KOKKOS_LAMBDA(const partition_t i, partition_t &local_s) {
+        Kokkos::parallel_reduce("compute_max_weight", Kokkos::RangePolicy<DeviceExecutionSpace>(0, partition.k), KOKKOS_LAMBDA(const partition_t i, partition_t &local_s) {
                                     if (partition.bweights(i) > partition.lmax) {
                                         local_s += 1;
                                     }
@@ -183,7 +178,7 @@ namespace GPU_HeiPa {
     inline weight_t sum_oload_weight(const Partition &partition) {
         weight_t s = 0;
 
-        Kokkos::parallel_reduce("compute_max_weight", partition.k, KOKKOS_LAMBDA(const partition_t i, weight_t &local_s) {
+        Kokkos::parallel_reduce("compute_max_weight", Kokkos::RangePolicy<DeviceExecutionSpace>(0, partition.k), KOKKOS_LAMBDA(const partition_t i, weight_t &local_s) {
                                     if (partition.bweights(i) > partition.lmax) {
                                         local_s += partition.bweights(i) - partition.lmax;
                                     }
@@ -194,17 +189,7 @@ namespace GPU_HeiPa {
         return s;
     }
 
-    inline void copy_into(Partition &dst, const Partition &src, u32 n) {
-        dst.n = src.n;
-        dst.k = src.k;
-        dst.lmax = src.lmax;
-
-        auto rN = std::make_pair<size_t, size_t>(0, n);
-        Kokkos::deep_copy(Kokkos::subview(dst.map, rN), Kokkos::subview(src.map, rN));
-        Kokkos::deep_copy(dst.bweights, src.bweights);
-    }
-
-    inline void copy_into(Partition &dst, const Partition &src, u32 n, Kokkos::Cuda &exec_space) {
+    inline void copy_into(Partition &dst, const Partition &src, u32 n, DeviceExecutionSpace &exec_space) {
         dst.n = src.n;
         dst.k = src.k;
         dst.lmax = src.lmax;
@@ -223,7 +208,7 @@ namespace GPU_HeiPa {
         HostWeight bweights;
     };
 
-    inline PartitionHost to_host_partition(const Partition &partition) {
+    inline PartitionHost to_host_partition(const Partition &partition, DeviceExecutionSpace &exec_space) {
         PartitionHost host_partition;
 
         host_partition.n = partition.n;
@@ -232,9 +217,9 @@ namespace GPU_HeiPa {
 
         host_partition.map = HostPartition("partition", partition.n);
         host_partition.bweights = HostWeight("b_weights", partition.k);
-        Kokkos::deep_copy(host_partition.map, partition.map);
-        Kokkos::deep_copy(host_partition.bweights, partition.bweights);
-        Kokkos::fence();
+        Kokkos::deep_copy(exec_space, host_partition.map, partition.map);
+        Kokkos::deep_copy(exec_space, host_partition.bweights, partition.bweights);
+        exec_space.fence();
 
         return host_partition;
     }

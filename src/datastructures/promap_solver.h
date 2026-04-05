@@ -146,6 +146,8 @@ namespace GPU_HeiPa {
         HostPartition solve(HostGraph &host_g) {
             auto sp = get_time_point();
 
+            DeviceExecutionSpace exec_space = DeviceExecutionSpace();
+
             internal_solve(host_g);
 
             auto p = get_time_point();
@@ -167,7 +169,7 @@ namespace GPU_HeiPa {
             if (config.verbose_level >= 1) {
                 ScopedTimer _t("misc", "Solver", "calc_stats");
                 max_block_w = max_weight(partition);
-                partition_host = to_host_partition(partition);
+                partition_host = to_host_partition(partition, exec_space);
                 for (partition_t id = 0; id < config.k; ++id) {
                     n_empty_partitions += partition_host.bweights(id) == 0;
                     n_overloaded_partitions += partition_host.bweights(id) > lmax;
@@ -299,6 +301,8 @@ namespace GPU_HeiPa {
         void initialize(HostGraph &host_g) {
             auto p = get_time_point();
 
+            DeviceExecutionSpace exec_space = DeviceExecutionSpace();
+
             // Main stack: Graph + coarsening overhead
             mem_stack = initialize_kokkos_memory_stack(
                 30 * host_g.n * sizeof(vertex_t) + // 20% buffer for vertices
@@ -313,36 +317,38 @@ namespace GPU_HeiPa {
             distances = config.distance;
             lmax = (weight_t) std::ceil((1.0 + config.imbalance) * ((f64) host_g.g_weight / (f64) config.k));
 
-            graphs.emplace_back(from_HostGraph(host_g, mem_stack, down_upload_ms));
+            graphs.emplace_back(from_HostGraph(host_g, mem_stack, down_upload_ms, exec_space));
 
             // initialize distance oracle
             {
                 ScopedTimer t{"misc", "distance_oracle", "initialize"};
-                d_oracle = initialize_distance_oracle<d_oracle_t>(k, hierarchy, distances, mem_stack);
+                d_oracle = initialize_distance_oracle<d_oracle_t>(k, hierarchy, distances, mem_stack, exec_space);
             }
 
             // initialize partition
             {
                 ScopedTimer t{"misc", "partition", "initialize"};
-                partition = initialize_partition(n, k, lmax, mem_stack);
+                partition = initialize_partition(n, k, lmax, mem_stack, exec_space);
             }
 
             misc_ms += get_milli_seconds(p, get_time_point());
 
-            assert_state_pre_partition(graphs.back());
+            assert_state_pre_partition(graphs.back(), exec_space);
         }
 
         void coarsening(u32 level) {
             auto p = get_time_point();
 
+            DeviceExecutionSpace exec_space = DeviceExecutionSpace();
+
             if (graphs.back().uniform_vertex_weights && graphs.back().uniform_edge_weights) {
-                mappings.emplace_back(two_hop_matcher_get_mapping<true, true>(graphs.back(), partition, lmax, mem_stack));
+                mappings.emplace_back(two_hop_matcher_get_mapping<true, true>(graphs.back(), partition, lmax, mem_stack, exec_space));
             } else if (graphs.back().uniform_vertex_weights) {
-                mappings.emplace_back(two_hop_matcher_get_mapping<true, false>(graphs.back(), partition, lmax, mem_stack));
+                mappings.emplace_back(two_hop_matcher_get_mapping<true, false>(graphs.back(), partition, lmax, mem_stack, exec_space));
             } else if (graphs.back().uniform_edge_weights) {
-                mappings.emplace_back(two_hop_matcher_get_mapping<false, true>(graphs.back(), partition, lmax, mem_stack));
+                mappings.emplace_back(two_hop_matcher_get_mapping<false, true>(graphs.back(), partition, lmax, mem_stack, exec_space));
             } else {
-                mappings.emplace_back(two_hop_matcher_get_mapping<false, false>(graphs.back(), partition, lmax, mem_stack));
+                mappings.emplace_back(two_hop_matcher_get_mapping<false, false>(graphs.back(), partition, lmax, mem_stack, exec_space));
             }
 
             Kokkos::fence();
@@ -352,23 +358,25 @@ namespace GPU_HeiPa {
             level_infos[level].t_coarsening = get_milli_seconds(p, get_time_point());
             #endif
 
-            assert_state_pre_partition(graphs.back());
+            assert_state_pre_partition(graphs.back(), exec_space);
         }
 
         void contraction(u32 level) {
             auto p = get_time_point();
 
+            DeviceExecutionSpace exec_space = DeviceExecutionSpace();
+
             const Graph &cur = graphs.back();
             if (cur.uniform_vertex_weights && cur.uniform_edge_weights) {
-                graphs.emplace_back(from_Graph_Mapping<true, true>(cur, mappings.back(), mem_stack));
+                graphs.emplace_back(from_Graph_Mapping<true, true>(cur, mappings.back(), mem_stack, exec_space));
             } else if (cur.uniform_vertex_weights) {
-                graphs.emplace_back(from_Graph_Mapping<true, false>(cur, mappings.back(), mem_stack));
+                graphs.emplace_back(from_Graph_Mapping<true, false>(cur, mappings.back(), mem_stack, exec_space));
             } else if (cur.uniform_edge_weights) {
-                graphs.emplace_back(from_Graph_Mapping<false, true>(cur, mappings.back(), mem_stack));
+                graphs.emplace_back(from_Graph_Mapping<false, true>(cur, mappings.back(), mem_stack, exec_space));
             } else {
-                graphs.emplace_back(from_Graph_Mapping<false, false>(cur, mappings.back(), mem_stack));
+                graphs.emplace_back(from_Graph_Mapping<false, false>(cur, mappings.back(), mem_stack, exec_space));
             }
-            contract(partition, mappings.back());
+            contract(partition, mappings.back(), exec_space);
 
             Kokkos::fence();
             contraction_ms += get_milli_seconds(p, get_time_point());
@@ -377,15 +385,17 @@ namespace GPU_HeiPa {
             level_infos[level].t_contraction = get_milli_seconds(p, get_time_point());
             #endif
 
-            assert_state_pre_partition(graphs.back());
+            assert_state_pre_partition(graphs.back(), exec_space);
         }
 
         void initial_partitioning() {
             auto p = get_time_point();
 
-            global_multisection(graphs.back(), config.hierarchy, k, config.imbalance, config.seed, partition);
+            DeviceExecutionSpace exec_space = DeviceExecutionSpace();
 
-            recalculate_weights<false>(partition, graphs.back());
+            global_multisection(graphs.back(), config.hierarchy, k, config.imbalance, config.seed, partition, exec_space);
+
+            recalculate_weights<false>(partition, graphs.back(), exec_space);
 
             initial_comm_cost = comm_cost<false>(graphs.back(), partition, d_oracle);
             curr_comm_cost = initial_comm_cost;
@@ -395,13 +405,15 @@ namespace GPU_HeiPa {
             Kokkos::fence();
             initial_partitioning_ms += get_milli_seconds(p, get_time_point());
 
-            assert_state_after_partition(graphs.back(), partition, config.k);
+            assert_state_after_partition(graphs.back(), partition, config.k, exec_space);
         }
 
         void refinement(u32 level) {
             auto p = get_time_point();
 
-            auto pair = ProMap_jet_refine<false, false>(graphs.back(), partition, d_oracle, k, lmax, level, curr_comm_cost, curr_max_block_weight, mem_stack);
+            DeviceExecutionSpace exec_space = DeviceExecutionSpace();
+
+            auto pair = ProMap_jet_refine<false, false>(graphs.back(), partition, d_oracle, k, lmax, level, curr_comm_cost, curr_max_block_weight, mem_stack, exec_space);
             curr_comm_cost = pair.first;
             curr_max_block_weight = pair.second;
 
@@ -412,13 +424,15 @@ namespace GPU_HeiPa {
             level_infos[level].t_refinement = get_milli_seconds(p, get_time_point());
             #endif
 
-            assert_state_after_partition(graphs.back(), partition, config.k);
+            assert_state_after_partition(graphs.back(), partition, config.k, exec_space);
         }
 
         void uncontraction(u32 level) {
             auto p = get_time_point();
 
-            uncontract(partition, mappings.back());
+            DeviceExecutionSpace exec_space = DeviceExecutionSpace();
+
+            uncontract(partition, mappings.back(), exec_space);
 
             free_graph(graphs.back(), mem_stack);
             graphs.pop_back();
@@ -433,7 +447,7 @@ namespace GPU_HeiPa {
             level_infos[level].t_uncontraction = get_milli_seconds(p, get_time_point());
             #endif
 
-            assert_state_after_partition(graphs.back(), partition, config.k);
+            assert_state_after_partition(graphs.back(), partition, config.k, exec_space);
         }
     };
 }

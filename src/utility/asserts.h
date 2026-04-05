@@ -128,14 +128,15 @@ namespace GPU_HeiPa {
     }
 
 
-    inline void assert_state_pre_partition(const Graph &device_g) {
+    inline void assert_state_pre_partition(const Graph &device_g,
+                                           DeviceExecutionSpace &exec_space) {
         #if !ASSERT_ENABLED
         return;
         #endif
-        HostGraph host_g = to_host_graph(device_g);
+        HostGraph host_g = to_host_graph(device_g, exec_space);
         HostVertex host_edges_u = HostVertex("edges_u", host_g.m);
-        Kokkos::deep_copy(host_edges_u, device_g.edges_u);
-        Kokkos::fence();
+        Kokkos::deep_copy(exec_space, host_edges_u, device_g.edges_u);
+        exec_space.fence();
 
         assert_all_vertices_small(host_g);
         assert_no_loops(host_g);
@@ -146,14 +147,15 @@ namespace GPU_HeiPa {
 
     inline void assert_state_after_partition(const Graph &device_g,
                                              const Partition &partition,
-                                             const partition_t k) {
+                                             const partition_t k,
+                                             DeviceExecutionSpace &exec_space) {
         #if !ASSERT_ENABLED
         return;
         #endif
-        HostGraph host_g = to_host_graph(device_g);
+        HostGraph host_g = to_host_graph(device_g, exec_space);
         HostVertex host_edges_u = HostVertex("edges_u", host_g.m);
-        Kokkos::deep_copy(host_edges_u, device_g.edges_u);
-        PartitionHost host_p_manager = to_host_partition(partition);
+        Kokkos::deep_copy(exec_space, host_edges_u, device_g.edges_u);
+        PartitionHost host_p_manager = to_host_partition(partition, exec_space);
 
         assert_all_vertices_small(host_g);
         assert_no_loops(host_g);

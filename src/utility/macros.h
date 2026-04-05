@@ -45,9 +45,9 @@ namespace GPU_HeiPa {
     #endif
 
     #if (ENABLE_PROFILER)
-    #define KOKKOS_PROFILE_FENCE() do { Kokkos::fence(); } while(0)
+    #define KOKKOS_PROFILE_FENCE(exec_space) do { exec_space.fence(); } while(0)
     #else
-    #define KOKKOS_PROFILE_FENCE() do {} while(0)
+    #define KOKKOS_PROFILE_FENCE(exec_space) do {} while(0)
     #endif
 }
 

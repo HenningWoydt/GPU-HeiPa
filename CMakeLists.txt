@@ -32,11 +32,11 @@ file(GLOB_RECURSE SOURCES CONFIGURE_DEPENDS "src/*.cpp")
 file(GLOB_RECURSE HEADERS CONFIGURE_DEPENDS "src/*.h")
 
 add_executable(GPU-HeiPa app/GPU-HeiPa.cpp ${SOURCES} ${HEADERS})
-#add_executable(GPU-HeiProMap app/GPU-HeiProMap.cpp ${SOURCES} ${HEADERS})
+add_executable(GPU-HeiProMap app/GPU-HeiProMap.cpp ${SOURCES} ${HEADERS})
 #add new executable for new solver (to execute both)
 #add_executable(GPU-HeiPa2k app/GPU-HeiPa-k2.cpp ${SOURCES} ${HEADERS})
-add_executable(GPU-HeiPa-memetic app/GPU-HeiPa-memetic.cpp ${SOURCES} ${HEADERS})
-add_executable(shrinking app/GPU-HeiPa-memeticShrinking.cpp ${SOURCES} ${HEADERS})
+#add_executable(GPU-HeiPa-memetic app/GPU-HeiPa-memetic.cpp ${SOURCES} ${HEADERS})
+#add_executable(shrinking app/GPU-HeiPa-memeticShrinking.cpp ${SOURCES} ${HEADERS})
 
 target_link_libraries(GPU-HeiPa
         PRIVATE
@@ -44,21 +44,27 @@ target_link_libraries(GPU-HeiPa
         Kokkos::kokkoskernels
 )
 
-target_link_libraries(GPU-HeiPa-memetic
+target_link_libraries(GPU-HeiProMap
         PRIVATE
         Kokkos::kokkos
         Kokkos::kokkoskernels
 )
 
-target_link_libraries(shrinking
-        PRIVATE
-        ${KAHIP_LIBRARY}
-        ${METIS_LIBRARY}
-        ${GKLIB_LIBRARY}
-        Kokkos::kokkos
-        Kokkos::kokkoskernels
-        OpenMP::OpenMP_CXX
-)
+#target_link_libraries(GPU-HeiPa-memetic
+#        PRIVATE
+#        Kokkos::kokkos
+#        Kokkos::kokkoskernels
+#)
+
+#target_link_libraries(shrinking
+#        PRIVATE
+#        ${KAHIP_LIBRARY}
+#        ${METIS_LIBRARY}
+#        ${GKLIB_LIBRARY}
+#        Kokkos::kokkos
+#        Kokkos::kokkoskernels
+#        OpenMP::OpenMP_CXX
+#)
 
 #target_link_libraries(GPU-HeiProMap
 #        PRIVATE
@@ -73,26 +79,7 @@ target_link_libraries(shrinking
 # Disable CUDA lazy loading via linker flags
 if(Kokkos_ENABLE_CUDA)
     target_link_options(GPU-HeiPa PRIVATE "LINKER:--require-defined,cudaDeviceSynchronize")
-    target_link_options(GPU-HeiPa-memetic PRIVATE "LINKER:--require-defined,cudaDeviceSynchronize")
-    target_link_options(shrinking PRIVATE "LINKER:--require-defined,cudaDeviceSynchronize")
-    #target_link_options(GPU-HeiProMap PRIVATE "LINKER:--require-defined,cudaDeviceSynchronize")
+    #target_link_options(GPU-HeiPa-memetic PRIVATE "LINKER:--require-defined,cudaDeviceSynchronize")
+    #target_link_options(shrinking PRIVATE "LINKER:--require-defined,cudaDeviceSynchronize")
+    target_link_options(GPU-HeiProMap PRIVATE "LINKER:--require-defined,cudaDeviceSynchronize")
 endif()
-
-#target_compile_definitions(GPU-HeiProMap PRIVATE
- #       ENABLE_PROFILER=$<IF:$<BOOL:${ENABLE_PROFILER}>,1,0>
-#)
-
-target_compile_definitions(GPU-HeiPa PRIVATE
-        ENABLE_PROFILER=$<IF:$<BOOL:${ENABLE_PROFILER}>,1,0>
-)
-
-target_compile_definitions(GPU-HeiPa-memetic PRIVATE
-        ENABLE_PROFILER=$<IF:$<BOOL:${ENABLE_PROFILER}>,1,0>
-        ASSERT_ENABLED=$<IF:$<BOOL:${ASSERT_ENABLED}>,1,0>
-)
-
-
-target_compile_definitions(shrinking PRIVATE
-        ENABLE_PROFILER=$<IF:$<BOOL:${ENABLE_PROFILER}>,1,0>
-        ASSERT_ENABLED=$<IF:$<BOOL:${ASSERT_ENABLED}>,1,0>
-)
