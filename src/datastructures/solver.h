@@ -486,7 +486,7 @@ namespace GPU_HeiPa {
 
             ScopedTimer _t("initial_partitioning", "Partition", "first_stats");
 
-            initial_edge_cut = edge_cut<false>(graphs.back(), partition);
+            initial_edge_cut = edge_cut<false>(graphs.back(), partition, exec_space);
             curr_edge_cut = initial_edge_cut;
             initial_max_block_weight = max_weight(partition);
             curr_max_block_weight = initial_max_block_weight;

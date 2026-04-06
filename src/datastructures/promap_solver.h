@@ -397,7 +397,7 @@ namespace GPU_HeiPa {
 
             recalculate_weights<false>(partition, graphs.back(), exec_space);
 
-            initial_comm_cost = comm_cost<false>(graphs.back(), partition, d_oracle);
+            initial_comm_cost = comm_cost<false>(graphs.back(), partition, d_oracle, exec_space);
             curr_comm_cost = initial_comm_cost;
             initial_max_block_weight = max_weight(partition);
             curr_max_block_weight = initial_max_block_weight;
