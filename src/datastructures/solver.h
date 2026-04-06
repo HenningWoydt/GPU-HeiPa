@@ -355,8 +355,6 @@ namespace GPU_HeiPa {
                 coarsening(level, mem_stack);
                 contraction(level, mem_stack);
 
-                std::cout << graphs.back().n << " " << graphs.back().m << std::endl;
-
                 level += 1;
             }
 

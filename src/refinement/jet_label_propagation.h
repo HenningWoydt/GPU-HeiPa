@@ -54,7 +54,8 @@ namespace GPU_HeiPa {
         UnmanagedDeviceWeight gain1, temp_gain, gain_cache, evict_start, evict_adjust;
         UnmanagedDeviceVertex vtx1, vtx2, vtx3;
         UnmanagedDevicePartition dest_part, underloaded_blocks;
-        UnmanagedDeviceU32 zeros;
+        UnmanagedDeviceU32 moved_round;
+        u32 round = 0;
 
         DeviceScalarU32 idx;
 
@@ -100,8 +101,8 @@ namespace GPU_HeiPa {
         lp.dest_part = UnmanagedDevicePartition((partition_t *) get_chunk_back(mem_stack, sizeof(partition_t) * lp.n), lp.n);
         lp.underloaded_blocks = UnmanagedDevicePartition((partition_t *) get_chunk_back(mem_stack, sizeof(partition_t) * lp.k), lp.k);
 
-        lp.zeros = UnmanagedDeviceU32((u32 *) get_chunk_back(mem_stack, sizeof(u32) * lp.n), lp.n);
-        Kokkos::deep_copy(exec_space, lp.zeros, 0);
+        lp.moved_round = UnmanagedDeviceU32((u32 *) get_chunk_back(mem_stack, sizeof(u32) * lp.n), lp.n);
+        Kokkos::deep_copy(exec_space, lp.moved_round, 0);
 
         lp.idx = DeviceScalarU32("idx");
 
@@ -448,7 +449,6 @@ namespace GPU_HeiPa {
         {
             ScopedTimer _t("refinement", "jetrs", "prefix_sum_score_buckets");
 
-
             if (t_minibuckets < 10000) {
                 Kokkos::parallel_for("prefix_sum_score_buckets", Kokkos::TeamPolicy<DeviceExecutionSpace>(exec_space, 1, 1024), KOKKOS_LAMBDA(const Kokkos::TeamPolicy<DeviceExecutionSpace>::member_type &t) {
                     Kokkos::parallel_scan(Kokkos::TeamThreadRange(t, 0, t_minibuckets + 1), [&](const vertex_t &u, weight_t &update, const bool final) {
@@ -514,9 +514,6 @@ namespace GPU_HeiPa {
 
             KOKKOS_PROFILE_FENCE(exec_space);
         }
-
-        // the rest of this method determines the destination part for each evicted vtx
-        //assign consecutive chunks of vertices to undersized parts using scan result
 
         //
         {
@@ -693,7 +690,6 @@ namespace GPU_HeiPa {
         {
             ScopedTimer _t("refinement", "jetrw", "scan_score_buckets");
 
-
             if (t_minibuckets < 10000) {
                 Kokkos::parallel_for("scan score buckets", Kokkos::TeamPolicy<DeviceExecutionSpace>(exec_space, 1, 1024), KOKKOS_LAMBDA(const Kokkos::TeamPolicy<DeviceExecutionSpace>::member_type &t) {
                     //this scan is small so do it within a team instead of an entire grid to save kernel launch time
@@ -765,8 +761,7 @@ namespace GPU_HeiPa {
             if (n_moves < 32) {
                 ScopedTimer _t("refinement", "JetLabelPropagation", "cut_change_1_<32");
 
-                using Exec = DeviceExecutionSpace;
-                using TeamPol = Kokkos::TeamPolicy<Exec>;
+                using TeamPol = Kokkos::TeamPolicy<DeviceExecutionSpace>;
                 using Member = TeamPol::member_type;
 
                 Kokkos::parallel_for("cut_change_1_small", TeamPol(exec_space, 1, 32), KOKKOS_LAMBDA(const Member &team) {
@@ -851,7 +846,7 @@ namespace GPU_HeiPa {
         // update block conn
         {
             if (n_moves > (u32) g.n / 10) {
-                update_large<uniform_e_weights>(g, lp.partition, lp.zeros, lp.dest_cache, bc, moves, exec_space);
+                update_large<uniform_e_weights>(g, lp.partition, lp.moved_round, lp.round, lp.dest_cache, bc, moves, exec_space);
             } else {
                 update_small<uniform_e_weights>(g, lp.partition, lp.dest_part, lp.dest_cache, bc, moves, exec_space);
             }

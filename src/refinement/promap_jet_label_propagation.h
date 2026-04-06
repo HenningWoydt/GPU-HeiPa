@@ -46,7 +46,8 @@ namespace GPU_HeiPa {
         UnmanagedDeviceWeight gain1, temp_gain, gain_cache, evict_start, evict_adjust;
         UnmanagedDeviceVertex vtx1, vtx2, vtx3;
         UnmanagedDevicePartition dest_part, underloaded_blocks;
-        UnmanagedDeviceU32 zeros;
+        UnmanagedDeviceU32 round_moved;
+        u32 round = 0;
 
         DeviceScalarU32 idx;
 
@@ -95,8 +96,8 @@ namespace GPU_HeiPa {
         lp.dest_part = UnmanagedDevicePartition((partition_t *) get_chunk_back(mem_stack, sizeof(partition_t) * lp.n), lp.n);
         lp.underloaded_blocks = UnmanagedDevicePartition((partition_t *) get_chunk_back(mem_stack, sizeof(partition_t) * lp.k), lp.k);
 
-        lp.zeros = UnmanagedDeviceU32((u32 *) get_chunk_back(mem_stack, sizeof(u32) * lp.n), lp.n);
-        Kokkos::deep_copy(lp.zeros, 0);
+        lp.round_moved = UnmanagedDeviceU32((u32 *) get_chunk_back(mem_stack, sizeof(u32) * lp.n), lp.n);
+        Kokkos::deep_copy(lp.round_moved, 0);
 
         lp.idx = DeviceScalarU32("idx");
 
@@ -1159,7 +1160,7 @@ namespace GPU_HeiPa {
             ScopedTimer _t("refinement", "JetLabelPropagation", "update_block_conn");
 
             if (n_moves > (u32) g.n / 10) {
-                update_large<uniform_e_weights>(g, lp.partition, lp.zeros, lp.dest_cache, bc, moves, exec_space);
+                update_large<uniform_e_weights>(g, lp.partition, lp.round_moved, lp.round, lp.dest_cache, bc, moves, exec_space);
             } else {
                 update_small<uniform_e_weights>(g, lp.partition, lp.dest_part, lp.dest_cache, bc, moves, exec_space);
             }

@@ -67,27 +67,25 @@ namespace GPU_HeiPa {
         {
             ScopedTimer _t("refinement", "BlockConnectivity_fs", "set_rows");
 
-            Kokkos::parallel_scan("set_rows",
-                                  Kokkos::RangePolicy<DeviceExecutionSpace>(exec_space, 0, g.n + 1),
-                                  KOKKOS_LAMBDA(const u32 i, u32 &running, const bool final) {
-                                      if (i == 0) {
-                                          // first slot is 0
-                                          if (final) bc.row(0) = 0;
-                                          return;
-                                      }
+            Kokkos::parallel_scan("set_rows", Kokkos::RangePolicy<DeviceExecutionSpace>(exec_space, 0, g.n + 1), KOKKOS_LAMBDA(const u32 i, u32 &running, const bool final) {
+                if (i == 0) {
+                    // first slot is 0
+                    if (final) bc.row(0) = 0;
+                    return;
+                }
 
-                                      const vertex_t u = i - 1;
-                                      const u32 len = g.neighborhood(u + 1) - g.neighborhood(u);
-                                      const u32 c = len < partition.k ? len : partition.k;
+                const vertex_t u = i - 1;
+                const u32 len = g.neighborhood(u + 1) - g.neighborhood(u);
+                const u32 c = len < partition.k ? len : partition.k;
 
-                                      // write inclusive row[i] = running + c
-                                      if (final) {
-                                          bc.row(i) = running + c;
-                                          bc.sizes(u) = 0; // c;
-                                      }
+                // write inclusive row[i] = running + c
+                if (final) {
+                    bc.row(i) = running + c;
+                    bc.sizes(u) = 0; // c;
+                }
 
-                                      running += c;
-                                  });
+                running += c;
+            });
 
             Kokkos::deep_copy(exec_space, bc.size, Kokkos::subview(bc.row, g.n));
             exec_space.fence();
@@ -208,7 +206,8 @@ namespace GPU_HeiPa {
     template<bool uniform_e_weights>
     inline void update_large(const Graph &g,
                              Partition &partition,
-                             UnmanagedDeviceU32 &zeros,
+                             UnmanagedDeviceU32 &moved_round,
+                             u32 &round,
                              UnmanagedDevicePartition &dest_cache,
                              BlockConn &bc,
                              const DeviceVertex &moves,
@@ -216,11 +215,12 @@ namespace GPU_HeiPa {
         {
             ScopedTimer _t("refinement", "JetLabelPropagation", "update_large_mark");
 
+            round += 1;
             u32 total_moves = (u32) moves.extent(0);
             Kokkos::parallel_for("mark", Kokkos::TeamPolicy((int) total_moves, Kokkos::AUTO), KOKKOS_LAMBDA(const Kokkos::TeamPolicy<>::member_type &t) {
                 u32 i = (u32) t.league_rank();
                 vertex_t u = moves(i);
-                zeros(u) = 1;
+                moved_round(u) = round;
             });
 
             KOKKOS_PROFILE_FENCE(exec_space);
@@ -230,28 +230,19 @@ namespace GPU_HeiPa {
         {
             ScopedTimer _t("refinement", "JetLabelPropagation", "update_large_rebuild");
 
-            Kokkos::parallel_for("rebuild", Kokkos::TeamPolicy<>((int) g.n, Kokkos::AUTO).set_scratch_size(0, Kokkos::PerTeam(partition.k * sizeof(weight_t) + partition.k * sizeof(partition_t) + 4 * sizeof(partition_t))), KOKKOS_LAMBDA(const Kokkos::TeamPolicy<>::member_type &t) {
+            Kokkos::parallel_for("rebuild", Kokkos::TeamPolicy<DeviceExecutionSpace>((int) g.n, Kokkos::AUTO).set_scratch_size(0, Kokkos::PerTeam(partition.k * sizeof(weight_t) + partition.k * sizeof(partition_t) + 4 * sizeof(partition_t))), KOKKOS_LAMBDA(const Kokkos::TeamPolicy<DeviceExecutionSpace>::member_type &t) {
                 vertex_t u = (vertex_t) t.league_rank();
 
                 bool needs_update = false;
-                for (u32 i = g.neighborhood(u); i < g.neighborhood(u + 1); ++i) {
-                    vertex_t v = g.edges_v(i);
-                    if (zeros(v) == 1) {
-                        needs_update = true;
-                        break;
-                    }
-                }
+                Kokkos::parallel_reduce(Kokkos::TeamThreadRange(t, g.neighborhood(u), g.neighborhood(u + 1)), [&](const u32 i, bool &local_update) {
+                    const vertex_t v = g.edges_v(i);
+                    local_update = local_update || (moved_round(v) == round);
+                }, Kokkos::LOr<bool>(needs_update));
 
                 if (needs_update) {
                     u32 r_beg = bc.row(u);
                     u32 r_end = bc.row(u + 1);
                     u32 r_len = r_end - r_beg;
-
-                    // reset global memory
-                    Kokkos::parallel_for(Kokkos::TeamThreadRange(t, r_beg, r_end), [&](const u32 i) {
-                        bc.weights(i) = 0;
-                        bc.ids(i) = NULL_PART;
-                    });
 
                     // build the row
                     weight_t *s_weights = (weight_t *) t.team_shmem().get_shmem(sizeof(weight_t) * r_len);
@@ -271,9 +262,9 @@ namespace GPU_HeiPa {
                         vertex_t v = g.edges_v(i);
                         weight_t w = uniform_e_weights ? 1 : g.edges_w(i);
                         partition_t v_id = partition.map(v);
-                        u32 idx = (u32) v_id % r_len;
+                        u32 idx = v_id % r_len;
 
-                        if (r_len == (u32) partition.k) {
+                        if (r_len == partition.k) {
                             if (NULL_PART == Kokkos::atomic_compare_exchange(s_ids + idx, NULL_PART, v_id)) {
                                 Kokkos::atomic_add(n_needed_slots, 1);
                             }
@@ -285,59 +276,53 @@ namespace GPU_HeiPa {
                                     Kokkos::atomic_add(n_needed_slots, 1);
                                     break;
                                 }
-                                idx = (idx + 1) % r_len;
+                                idx += 1;
+                                if (idx == r_len) { idx = 0; }
                             }
                         }
                         Kokkos::atomic_add(s_weights + idx, w);
                     });
                     t.team_barrier();
 
-                    u32 old_size = r_len;
                     u32 new_size = *n_needed_slots + ((*n_needed_slots / 4) < 3 ? 3 : (*n_needed_slots / 4));
 
-                    if (new_size < old_size) {
+                    if (new_size < r_len) {
+                        // reset global memory
+                        Kokkos::parallel_for(Kokkos::TeamThreadRange(t, r_beg, r_end), [&](const u32 i) {
+                            bc.weights(i) = 0;
+                            bc.ids(i) = NULL_PART;
+                        });
+
                         bc.sizes(u) = new_size;
-                        Kokkos::parallel_for(Kokkos::TeamThreadRange(t, 0, old_size), [&](const u32 &i) {
+                        Kokkos::parallel_for(Kokkos::TeamThreadRange(t, 0, r_len), [&](const u32 &i) {
                             partition_t id = s_ids[i];
                             if (id != NULL_PART) {
-                                u32 idx = (u32) id % new_size;
+                                u32 idx = id % new_size;
 
                                 while (true) {
                                     partition_t found_id = Kokkos::atomic_compare_exchange(&bc.ids(r_beg + idx), NULL_PART, id);
                                     if (found_id == NULL_PART || found_id == id) { break; }
-                                    idx = (idx + 1) % new_size;
+                                    idx += 1;
+                                    if (idx == new_size) { idx = 0; }
                                 }
 
                                 bc.weights(r_beg + idx) = s_weights[i];
                             }
                         });
                     } else {
-                        bc.sizes(u) = old_size;
+                        bc.sizes(u) = r_len;
                         //copy conn table into global memory
-                        Kokkos::parallel_for(Kokkos::TeamThreadRange(t, 0, old_size), [&](const u32 i) {
+                        Kokkos::parallel_for(Kokkos::TeamThreadRange(t, 0, r_len), [&](const u32 i) {
                             bc.weights(r_beg + i) = s_weights[i];
                             bc.ids(r_beg + i) = s_ids[i];
                         });
                     }
 
-                    // reset cache and memory
+                    // reset cache
                     Kokkos::single(Kokkos::PerTeam(t), [=]() {
                         dest_cache(u) = NULL_PART;
                     });
                 }
-            });
-
-            KOKKOS_PROFILE_FENCE(exec_space);
-        }
-
-        {
-            ScopedTimer _t("refinement", "JetLabelPropagation", "reset_0");
-
-            u32 total_moves = (u32) moves.extent(0);
-            Kokkos::parallel_for("mark", Kokkos::TeamPolicy((int) total_moves, Kokkos::AUTO), KOKKOS_LAMBDA(const Kokkos::TeamPolicy<>::member_type &t) {
-                u32 i = (u32) t.league_rank();
-                vertex_t u = moves(i);
-                zeros(u) = 0;
             });
 
             KOKKOS_PROFILE_FENCE(exec_space);
@@ -371,7 +356,10 @@ namespace GPU_HeiPa {
 
                     // find correct idx
                     partition_t idx = old_u_id % r_len;
-                    while (bc.ids(r_beg + idx) != old_u_id) { idx = (idx + 1) % r_len; }
+                    while (bc.ids(r_beg + idx) != old_u_id) {
+                        idx += 1;
+                        if (idx == r_len) { idx = 0; }
+                    }
 
                     // remove weight
                     weight_t id_w = Kokkos::atomic_fetch_add(&bc.weights(r_beg + idx), -w);
