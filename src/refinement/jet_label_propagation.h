@@ -753,6 +753,7 @@ namespace GPU_HeiPa {
                               const UnmanagedDeviceVertex &moves,
                               weight_t &curr_max_weight,
                               weight_t &curr_edge_cut,
+                              KokkosMemoryStack &mem_stack,
                               DeviceExecutionSpace &exec_space) {
         u32 n_moves = (u32) moves.extent(0);
 
@@ -974,7 +975,7 @@ namespace GPU_HeiPa {
                     if (balance_iteration < N_MAX_WEAK_ITERATIONS) {
                         moves = rebalance_weak<uniform_v_weights>(lp, g, bc, exec_space);
 
-                        // if weak reb found 0 moves, it will find 0 moves in the next iteration so skip to stron rebalance
+                        // if weak reb found 0 moves, it will find 0 moves in the next iteration so skip to strong rebalance
                         if (moves.extent(0) == 0) {
                             balance_iteration = N_MAX_WEAK_ITERATIONS;
                             continue;
@@ -988,7 +989,7 @@ namespace GPU_HeiPa {
                     balance_iteration++;
                 }
 
-                perform_moves<uniform_v_weights, uniform_e_weights>(lp, g, bc, moves, curr_max_weight, curr_edge_cut, exec_space);
+                perform_moves<uniform_v_weights, uniform_e_weights>(lp, g, bc, moves, curr_max_weight, curr_edge_cut, mem_stack, exec_space);
 
                 if (best_max_weight > lmax && curr_max_weight < best_max_weight) {
                     // copy the partition
