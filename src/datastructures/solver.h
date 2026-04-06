@@ -206,9 +206,9 @@ namespace GPU_HeiPa {
             level_infos[level].max_b_weight = max_weight(partition);
             level_infos[level].imb = (f64) level_infos[level].max_b_weight / ((f64) dev_g.g_weight / (f64) config.k);
             if (graphs.back().uniform_edge_weights) {
-                level_infos[level].edge_cut = edge_cut<true>(graphs.back(), partition);
+                level_infos[level].edge_cut = edge_cut<true>(graphs.back(), partition, exec_space);
             } else {
-                level_infos[level].edge_cut = edge_cut<false>(graphs.back(), partition);
+                level_infos[level].edge_cut = edge_cut<false>(graphs.back(), partition, exec_space);
             }
             level_infos[level].empty_partitions = n_empty_blocks(partition);
             level_infos[level].oload_partitions = n_oload_blocks(partition);
@@ -227,9 +227,9 @@ namespace GPU_HeiPa {
                 level_infos[level].max_b_weight = max_weight(partition);
                 level_infos[level].imb = (f64) level_infos[level].max_b_weight / ((f64) dev_g.g_weight / (f64) config.k);
                 if (graphs.back().uniform_edge_weights) {
-                    level_infos[level].edge_cut = edge_cut<true>(graphs.back(), partition);
+                    level_infos[level].edge_cut = edge_cut<true>(graphs.back(), partition, exec_space);
                 } else {
-                    level_infos[level].edge_cut = edge_cut<false>(graphs.back(), partition);
+                    level_infos[level].edge_cut = edge_cut<false>(graphs.back(), partition, exec_space);
                 }
                 level_infos[level].empty_partitions = n_empty_blocks(partition);
                 level_infos[level].oload_partitions = n_oload_blocks(partition);
@@ -360,6 +360,8 @@ namespace GPU_HeiPa {
                 level += 1;
             }
 
+            DeviceExecutionSpace exec_space = DeviceExecutionSpace();
+
             #if ENABLE_PROFILER
             level_infos.emplace_back();
             level_infos[level].level = level;
@@ -372,7 +374,11 @@ namespace GPU_HeiPa {
             #if ENABLE_PROFILER
             level_infos[level].max_b_weight = max_weight(partition);
             level_infos[level].imb = (f64) level_infos[level].max_b_weight / ((f64) host_g.g_weight / (f64) config.k);
-            level_infos[level].edge_cut = edge_cut<false>(graphs.back(), partition);
+            if (graphs.back().uniform_edge_weights) {
+                level_infos[level].edge_cut = edge_cut<true>(graphs.back(), partition, exec_space);
+            } else {
+                level_infos[level].edge_cut = edge_cut<false>(graphs.back(), partition, exec_space);
+            }
             level_infos[level].empty_partitions = n_empty_blocks(partition);
             level_infos[level].oload_partitions = n_oload_blocks(partition);
             level_infos[level].sum_oload_weights = sum_oload_weight(partition);
@@ -388,9 +394,9 @@ namespace GPU_HeiPa {
                 level_infos[level].max_b_weight = max_weight(partition);
                 level_infos[level].imb = (f64) level_infos[level].max_b_weight / ((f64) host_g.g_weight / (f64) config.k);
                 if (graphs.back().uniform_edge_weights) {
-                    level_infos[level].edge_cut = edge_cut<true>(graphs.back(), partition);
+                    level_infos[level].edge_cut = edge_cut<true>(graphs.back(), partition, exec_space);
                 } else {
-                    level_infos[level].edge_cut = edge_cut<false>(graphs.back(), partition);
+                    level_infos[level].edge_cut = edge_cut<false>(graphs.back(), partition, exec_space);
                 }
                 level_infos[level].empty_partitions = n_empty_blocks(partition);
                 level_infos[level].oload_partitions = n_oload_blocks(partition);

@@ -247,6 +247,8 @@ namespace GPU_HeiPa {
             const partition_t c = 8;
             const partition_t max_n = c * k;
 
+            DeviceExecutionSpace exec_space = DeviceExecutionSpace();
+
             u32 level = 0;
             while (graphs.back().n > max_n) {
                 #if ENABLE_PROFILER
@@ -274,7 +276,11 @@ namespace GPU_HeiPa {
             #if ENABLE_PROFILER
             level_infos[level].max_b_weight = max_weight(partition);
             level_infos[level].imb = (f64) level_infos[level].max_b_weight / ((f64) host_g.g_weight / (f64) config.k);
-            level_infos[level].comm_cost = comm_cost<false>(graphs.back(), partition, d_oracle);
+            if (graphs.back().uniform_edge_weights) {
+                level_infos[level].comm_cost = comm_cost<true>(graphs.back(), partition, d_oracle, exec_space);
+            } else {
+                level_infos[level].comm_cost = comm_cost<false>(graphs.back(), partition, d_oracle, exec_space);
+            }
             level_infos[level].empty_partitions = n_empty_blocks(partition);
             level_infos[level].oload_partitions = n_oload_blocks(partition);
             level_infos[level].sum_oload_weights = sum_oload_weight(partition);
@@ -290,7 +296,11 @@ namespace GPU_HeiPa {
                 #if ENABLE_PROFILER
                 level_infos[level].max_b_weight = max_weight(partition);
                 level_infos[level].imb = (f64) level_infos[level].max_b_weight / ((f64) host_g.g_weight / (f64) config.k);
-                level_infos[level].comm_cost = comm_cost<false>(graphs.back(), partition, d_oracle);
+                if (graphs.back().uniform_edge_weights) {
+                    level_infos[level].comm_cost = comm_cost<true>(graphs.back(), partition, d_oracle, exec_space);
+                } else {
+                    level_infos[level].comm_cost = comm_cost<false>(graphs.back(), partition, d_oracle, exec_space);
+                }
                 level_infos[level].empty_partitions = n_empty_blocks(partition);
                 level_infos[level].oload_partitions = n_oload_blocks(partition);
                 level_infos[level].sum_oload_weights = sum_oload_weight(partition);
