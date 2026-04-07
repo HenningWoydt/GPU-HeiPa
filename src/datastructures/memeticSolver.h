@@ -42,7 +42,7 @@
 #include "../coarsening/two_hop_matching.h"
 #include "../refinement/jet_label_propagation.h"
 #include "../refinement/memetic_refinement.h"
-#include "../initial_partitioning/metis_partitioning.h"
+#include "../initial_partitioning/kway_partitioner/kway_core.h"
 #include "../utility/definitions.h"
 #include "../utility/memetic_configuration.h"
 #include "../utility/profiler.h"
@@ -385,7 +385,7 @@ namespace GPU_HeiPa {
             weight_t sum_too_much = 0;
             if (config.verbose_level >= 2) {
                 ScopedTimer _t("misc", "Solver", "calc_stats");
-                PartitionHost partition_host = to_host_partition(partitions[min_id]);
+                PartitionHost partition_host = to_host_partition(partitions[min_id], exec_spaces[0]);
                 for (partition_t id = 0; id < config.k; ++id) {
                     n_empty_partitions += partition_host.bweights(id) == 0;
                     n_overloaded_partitions += partition_host.bweights(id) > lmax;
@@ -515,7 +515,11 @@ namespace GPU_HeiPa {
             //! übergangslösung
             level_infos[level].max_b_weight = max_weight(partitions[0]);
             level_infos[level].imb = (f64) level_infos[level].max_b_weight / ((f64) host_g.g_weight / (f64) config.k);
-            level_infos[level].edge_cut = edge_cut(graphs.back(), partitions[0]);
+            if (graphs.back().uniform_edge_weights) {
+                level_infos[level].edge_cut = edge_cut<true>(graphs.back(), partitions[0], exec_spaces[0]);
+            } else {
+                level_infos[level].edge_cut = edge_cut<false>(graphs.back(), partitions[0], exec_spaces[0]);
+            }
             level_infos[level].empty_partitions = n_empty_blocks(partitions[0]);
             level_infos[level].oload_partitions = n_oload_blocks(partitions[0]);
             level_infos[level].sum_oload_weights = sum_oload_weight(partitions[0]);
@@ -603,7 +607,11 @@ namespace GPU_HeiPa {
                 //! übergangslösung
                 level_infos[level].max_b_weight = max_weight(partitions[0]);
                 level_infos[level].imb = (f64) level_infos[level].max_b_weight / ((f64) host_g.g_weight / (f64) config.k);
-                level_infos[level].edge_cut = edge_cut(graphs.back(), partitions[0]);
+                if (graphs.back().uniform_edge_weights) {
+                    level_infos[level].edge_cut = edge_cut<true>(graphs.back(), partitions[0], exec_spaces[0]);
+                } else {
+                    level_infos[level].edge_cut = edge_cut<false>(graphs.back(), partitions[0], exec_spaces[0]);
+                }
                 level_infos[level].empty_partitions = n_empty_blocks(partitions[0]);
                 level_infos[level].oload_partitions = n_oload_blocks(partitions[0]);
                 level_infos[level].sum_oload_weights = sum_oload_weight(partitions[0]);
@@ -642,12 +650,13 @@ namespace GPU_HeiPa {
             use_ultra = config.config == "ultra";
 
             f64 up_ms = 0;
-
-            graphs.emplace_back(from_HostGraph(host_g, mem_stacks[orga_stack], up_ms));
+            
+            DeviceExecutionSpace exec_space = DeviceExecutionSpace();
+            graphs.emplace_back(from_HostGraph(host_g, mem_stacks[orga_stack], up_ms, exec_space));
 
 
             for (size_t i = 0; i < num_individuals; ++i) {
-                partitions[i] = initialize_partition(n, k, lmax, mem_stacks[partition_stack]);
+                partitions[i] = initialize_partition(n, k, lmax, mem_stacks[partition_stack], exec_space);
             }
 
 
@@ -655,14 +664,26 @@ namespace GPU_HeiPa {
             misc_ms -= up_ms;
             down_up_load_ms += up_ms;
 
-            assert_state_pre_partition(graphs.back());
+            assert_state_pre_partition(graphs.back(), exec_spaces[0]);
         }
 
         void coarsening(u32 level, KokkosMemoryStack &mem_stack) {
             auto p = get_time_point();
 
 
-            mappings.emplace_back(two_hop_matcher_get_mapping(graphs.back(), partitions[0], lmax, mem_stack));
+            DeviceExecutionSpace exec_space = DeviceExecutionSpace();
+
+            if (graphs.back().uniform_vertex_weights && graphs.back().uniform_edge_weights) {
+                mappings.emplace_back(two_hop_matcher_get_mapping<true, true>(graphs.back(), partitions[0], lmax, mem_stack, exec_space));
+            } else if (graphs.back().uniform_vertex_weights) {
+                mappings.emplace_back(two_hop_matcher_get_mapping<true, false>(graphs.back(), partitions[0], lmax, mem_stack, exec_space));
+            } else if (graphs.back().uniform_edge_weights) {
+                mappings.emplace_back(two_hop_matcher_get_mapping<false, true>(graphs.back(), partitions[0], lmax, mem_stack, exec_space));
+            } else {
+                mappings.emplace_back(two_hop_matcher_get_mapping<false, false>(graphs.back(), partitions[0], lmax, mem_stack, exec_space));
+            }
+
+            // mappings.emplace_back(two_hop_matcher_get_mapping(graphs.back(), partitions[0], lmax, mem_stack));
 
             Kokkos::fence();
             coarsening_ms += get_milli_seconds(p, get_time_point());
@@ -671,16 +692,29 @@ namespace GPU_HeiPa {
             level_infos[level].t_coarsening = get_milli_seconds(p, get_time_point());
             #endif
 
-            assert_state_pre_partition(graphs.back());
+            assert_state_pre_partition(graphs.back(), exec_spaces[0]);
         }
 
         void contraction(u32 level, KokkosMemoryStack &mem_stack) {
             auto p = get_time_point();
 
-            graphs.emplace_back(from_Graph_Mapping(graphs.back(), mappings.back(), mem_stack));
+            DeviceExecutionSpace exec_space = DeviceExecutionSpace();
+
+            const Graph &cur = graphs.back();
+            if (cur.uniform_vertex_weights && cur.uniform_edge_weights) {
+                graphs.emplace_back(from_Graph_Mapping<true, true>(cur, mappings.back(), mem_stack, exec_space));
+            } else if (cur.uniform_vertex_weights) {
+                graphs.emplace_back(from_Graph_Mapping<true, false>(cur, mappings.back(), mem_stack, exec_space));
+            } else if (cur.uniform_edge_weights) {
+                graphs.emplace_back(from_Graph_Mapping<false, true>(cur, mappings.back(), mem_stack, exec_space));
+            } else {
+                graphs.emplace_back(from_Graph_Mapping<false, false>(cur, mappings.back(), mem_stack, exec_space));
+            }
+
+            // graphs.emplace_back(from_Graph_Mapping(graphs.back(), mappings.back(), mem_stack));
 
             for (size_t i = 0; i < num_individuals; ++i) {
-                contract(partitions[i], mappings.back());
+                contract(partitions[i], mappings.back(), exec_space);
             }
 
             Kokkos::fence();
@@ -690,18 +724,21 @@ namespace GPU_HeiPa {
             level_infos[level].t_contraction = get_milli_seconds(p, get_time_point());
             #endif
 
-            assert_state_pre_partition(graphs.back());
+            assert_state_pre_partition(graphs.back(), exec_space);
         }
 
 
         void initial_partitioning(size_t individual_id, size_t tid) {
             //! better way to pick the seed? more randomness?
-            metis_partition(graphs.back(), (int) k, config.imbalance, config.seed + individual_id, partitions[individual_id], METIS_RECURSIVE);
+            //metis_partition(graphs.back(), (int) k, config.imbalance, config.seed + individual_id, partitions[individual_id], METIS_RECURSIVE);
 
-            recalculate_weights(partitions[individual_id], graphs.back());
+            kway_partition(graphs.back(), (int) k, config.imbalance, config.seed + individual_id, partitions[individual_id], exec_spaces[tid]);
 
 
-            initial_edge_cut[individual_id] = edge_cut(graphs.back(), partitions[individual_id], exec_spaces[tid]);
+            recalculate_weights<false>(partitions[individual_id], graphs.back(), exec_spaces[tid]);
+
+
+            initial_edge_cut[individual_id] = edge_cut<false>(graphs.back(), partitions[individual_id], exec_spaces[tid]);
             curr_edge_cut[individual_id] = initial_edge_cut[individual_id];
 
             initial_max_block_weight[individual_id] = max_weight(partitions[individual_id], exec_spaces[tid]);
@@ -709,29 +746,52 @@ namespace GPU_HeiPa {
 
             exec_spaces[tid].fence();
 
-            assert_state_after_partition(graphs.back(), partitions[individual_id], config.k);
+            assert_state_after_partition(graphs.back(), partitions[individual_id], config.k, exec_spaces[tid]);
         }
 
         void refinement(u32 level, KokkosMemoryStack &mem_stack, size_t individual_id, size_t tid) {
             //! each thread needs their own values for this call, only graphs is shared (right?)
-            auto pair = jet_refine(graphs.back(), partitions[individual_id], k, lmax, use_ultra, level, curr_edge_cut[individual_id], curr_max_block_weight[individual_id], mem_stack, exec_spaces[tid]);
+
+            Graph &cur = graphs.back();
+            std::pair<weight_t, weight_t> pair;
+            if (cur.uniform_vertex_weights && cur.uniform_edge_weights) {
+                pair = jet_refine<true, true>(cur, partitions[individual_id], k, lmax, use_ultra, level, curr_edge_cut[individual_id], curr_max_block_weight[individual_id], mem_stack, exec_spaces[tid]);
+            } else if (cur.uniform_vertex_weights) {
+                pair = jet_refine<true, false>(cur, partitions[individual_id], k, lmax, use_ultra, level, curr_edge_cut[individual_id], curr_max_block_weight[individual_id], mem_stack, exec_spaces[tid]);
+            } else if (cur.uniform_edge_weights) {
+                pair = jet_refine<false, true>(cur, partitions[individual_id], k, lmax, use_ultra, level, curr_edge_cut[individual_id], curr_max_block_weight[individual_id], mem_stack, exec_spaces[tid]);
+            } else {
+                pair = jet_refine<false, false>(cur, partitions[individual_id], k, lmax, use_ultra, level, curr_edge_cut[individual_id], curr_max_block_weight[individual_id], mem_stack, exec_spaces[tid]);
+            }
+
+
+            // auto pair = jet_refine(graphs.back(), partitions[individual_id], k, lmax, use_ultra, level, curr_edge_cut[individual_id], curr_max_block_weight[individual_id], mem_stack, exec_spaces[tid]);
 
             curr_edge_cut[individual_id] = pair.first;
             curr_max_block_weight[individual_id] = pair.second;
 
             exec_spaces[tid].fence();
 
-            ASSERT(curr_edge_cut[individual_id] == edge_cut(graphs.back(), partitions[individual_id]));
-            ASSERT(curr_max_block_weight[individual_id] == max_weight(partitions[individual_id]));
 
-            assert_state_after_partition(graphs.back(), partitions[individual_id], config.k);
+            if (graphs.back().uniform_edge_weights) {
+                ASSERT(curr_edge_cut == edge_cut<true>(graphs.back(), partitions[individual_id]));
+            } else {
+                ASSERT(curr_edge_cut == edge_cut<false>(graphs.back(), partitions[individual_id]));
+            }
+            ASSERT(curr_max_block_weight == max_weight(partitions[individual_id]));
+
+
+            // ASSERT(curr_edge_cut[individual_id] == edge_cut(graphs.back(), partitions[individual_id]));
+            // ASSERT(curr_max_block_weight[individual_id] == max_weight(partitions[individual_id]));
+
+            assert_state_after_partition(graphs.back(), partitions[individual_id], config.k, exec_spaces[tid]);
         }
 
 
         void uncontraction(u32 level, size_t individual_id, size_t tid) {
             uncontract(partitions[individual_id], mappings.back(), exec_spaces[tid]);
 
-            assert_state_after_partition(graphs.back(), partitions[individual_id], config.k);
+            assert_state_after_partition(graphs.back(), partitions[individual_id], config.k, exec_spaces[tid]);
         }
 
         void free_after_uncontraction(KokkosMemoryStack &mem_stack) {
@@ -788,7 +848,8 @@ namespace GPU_HeiPa {
                         mem_stacks[partition_stack],
                         config.leftover_strategy,
                         config.alpha,
-                        config.extent
+                        config.extent,
+                        exec_spaces[0]
                     );
                 }
                 //! for experiments:
@@ -817,7 +878,13 @@ namespace GPU_HeiPa {
  
  */
 
-                edge_cut_offspring[i] = edge_cut(graphs.back(), offspring);
+                if (graphs.back().uniform_edge_weights) {
+                    edge_cut_offspring[i] = edge_cut<true>(graphs.back(), offspring, exec_spaces[0]);
+                } else {
+                    edge_cut_offspring[i] = edge_cut<false>(graphs.back(), offspring, exec_spaces[0]);
+                }
+
+                // edge_cut_offspring[i] = edge_cut(graphs.back(), offspring);
 
                 // std::cout << "Edge cut of offspring " << i << ": " << edge_cut_offspring[i] << std::endl;
 
@@ -825,8 +892,21 @@ namespace GPU_HeiPa {
 
                 {
                     ScopedTimer _t("memetic", "memetic_refinement", "refine individual");
-                    auto pair = jet_refine(graphs.back(), offspring, k, lmax, use_ultra, level,
-                                           edge_cut_offspring[i], max_block_weight_offspring[i], mem_stacks[partition_stack], exec_spaces[0]);
+                    //auto pair = jet_refine(graphs.back(), offspring, k, lmax, use_ultra, level,
+                    //                       edge_cut_offspring[i], max_block_weight_offspring[i], mem_stacks[partition_stack], exec_spaces[0]);
+
+                    Graph &cur = graphs.back();
+                    std::pair<weight_t, weight_t> pair;
+                    if (cur.uniform_vertex_weights && cur.uniform_edge_weights) {
+                        pair = jet_refine<true, true>(cur, offspring, k, lmax, use_ultra, level, edge_cut_offspring[i], max_block_weight_offspring[i], mem_stacks[partition_stack], exec_spaces[0]);
+                    } else if (cur.uniform_vertex_weights) {
+                        pair = jet_refine<true, false>(cur, offspring, k, lmax, use_ultra, level, edge_cut_offspring[i], max_block_weight_offspring[i], mem_stacks[partition_stack], exec_spaces[0]);
+                    } else if (cur.uniform_edge_weights) {
+                        pair = jet_refine<false, true>(cur, offspring, k, lmax, use_ultra, level, edge_cut_offspring[i], max_block_weight_offspring[i], mem_stacks[partition_stack], exec_spaces[0]);
+                    } else {
+                        pair = jet_refine<false, false>(cur, offspring, k, lmax, use_ultra, level, edge_cut_offspring[i], max_block_weight_offspring[i], mem_stacks[partition_stack], exec_spaces[0]);
+                    }
+
 
                     edge_cut_offspring[i] = pair.first;
                     max_block_weight_offspring[i] = pair.second;
@@ -836,7 +916,7 @@ namespace GPU_HeiPa {
                 // std::cout << std::endl;
 
 
-                assert_state_after_partition(graphs.back(), offspring, config.k);
+                assert_state_after_partition(graphs.back(), offspring, config.k, exec_spaces[0]);
                 {
                     //! soll ich das hier aus der loop rausziehen?
                     //! -> erst alle individuen erstellen, dann in einem schritt updaten?

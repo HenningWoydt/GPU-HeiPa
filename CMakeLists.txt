@@ -15,6 +15,10 @@ set(CMAKE_CXX_EXTENSIONS OFF)
 set(CMAKE_POSITION_INDEPENDENT_CODE ON)
 set(CMAKE_EXPORT_COMPILE_COMMANDS ON)
 
+# --- openMP setup ---
+find_package(OpenMP REQUIRED)
+
+
 # --- Kokkos Setup ---
 set(KokkosKernels_DIR "${CMAKE_CURRENT_SOURCE_DIR}/extern/local/kokkos-kernels/lib/cmake/KokkosKernels")
 find_package(KokkosKernels CONFIG REQUIRED)
@@ -35,7 +39,7 @@ add_executable(GPU-HeiPa app/GPU-HeiPa.cpp ${SOURCES} ${HEADERS})
 add_executable(GPU-HeiProMap app/GPU-HeiProMap.cpp ${SOURCES} ${HEADERS})
 #add new executable for new solver (to execute both)
 #add_executable(GPU-HeiPa2k app/GPU-HeiPa-k2.cpp ${SOURCES} ${HEADERS})
-#add_executable(GPU-HeiPa-memetic app/GPU-HeiPa-memetic.cpp ${SOURCES} ${HEADERS})
+add_executable(GPU-HeiPa-memetic app/GPU-HeiPa-memetic.cpp ${SOURCES} ${HEADERS})
 #add_executable(shrinking app/GPU-HeiPa-memeticShrinking.cpp ${SOURCES} ${HEADERS})
 
 target_link_libraries(GPU-HeiPa
@@ -50,11 +54,12 @@ target_link_libraries(GPU-HeiProMap
         Kokkos::kokkoskernels
 )
 
-#target_link_libraries(GPU-HeiPa-memetic
-#        PRIVATE
-#        Kokkos::kokkos
-#        Kokkos::kokkoskernels
-#)
+target_link_libraries(GPU-HeiPa-memetic
+        PRIVATE
+        Kokkos::kokkos
+        Kokkos::kokkoskernels
+        OpenMP::OpenMP_CXX
+)
 
 #target_link_libraries(shrinking
 #        PRIVATE
@@ -79,7 +84,7 @@ target_link_libraries(GPU-HeiProMap
 # Disable CUDA lazy loading via linker flags
 if(Kokkos_ENABLE_CUDA)
     target_link_options(GPU-HeiPa PRIVATE "LINKER:--require-defined,cudaDeviceSynchronize")
-    #target_link_options(GPU-HeiPa-memetic PRIVATE "LINKER:--require-defined,cudaDeviceSynchronize")
+    target_link_options(GPU-HeiPa-memetic PRIVATE "LINKER:--require-defined,cudaDeviceSynchronize")
     #target_link_options(shrinking PRIVATE "LINKER:--require-defined,cudaDeviceSynchronize")
     target_link_options(GPU-HeiProMap PRIVATE "LINKER:--require-defined,cudaDeviceSynchronize")
 endif()
