@@ -75,7 +75,7 @@ namespace GPU_HeiPa {
     //! --------------------------- crossover: ----------------------------------------------------------
     //! -------------------------------------------------------------------------------------------------
 
-
+    template<bool uniform_vw>
     inline void backbone_based_crossover(
         Partition &child,
         const Graph &graph,
@@ -163,7 +163,7 @@ namespace GPU_HeiPa {
                             else
                                 id = k - i - 1; //! "reverse assignment" from full buckets to underloaded partitions
 
-                            Kokkos::atomic_fetch_add(&child.bweights(id), graph.weights(u));
+                             Kokkos::atomic_add(&child.bweights(id), uniform_vw ? 1 : graph.weights(u));
                             in_backbone = true;
                             break;
                         }
@@ -181,7 +181,14 @@ namespace GPU_HeiPa {
 
 
         if (leftover_strategy == "random") {
-            assign_leftovers_fullyRandom(graph, child, k, exec_space);
+            
+            if(uniform_vw) {
+
+                assign_leftovers_fullyRandom<true>(graph, child, k, exec_space);
+            }else{
+                assign_leftovers_fullyRandom<false>(graph, child, k, exec_space);
+            }
+
         } else if (leftover_strategy == "balanced") {
             assign_leftovers_favorUnderloadedBlocks(graph, child, k, lmax, mem_stack, exec_space);
         } else if (leftover_strategy == "gain") {

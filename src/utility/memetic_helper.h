@@ -96,7 +96,12 @@ namespace GPU_HeiPa {
         Kokkos::Random_XorShift64_Pool<> random_pool(12345);
 
 
-        BlockConn bc = init_BlockConn<false>(graph, child, mem_stack, exec_space);
+        BlockConn bc;
+        if (graph.uniform_edge_weights) {
+            bc = init_BlockConn<true>(graph, child, mem_stack, exec_space);
+        } else {
+            bc = init_BlockConn<false>(graph, child, mem_stack, exec_space);
+        }
 
         //! determine max gain
         DeviceScalarWeight max_gain = DeviceScalarWeight("highest gain value");;
@@ -118,7 +123,7 @@ namespace GPU_HeiPa {
                 // calculate gain
                 if (child.map(u) == 5 * k) {
                     auto gen = random_pool.get_state();
-                    partition_t best_id = static_cast<partition_t>(gen.urand(0, k));
+                    partition_t best_id = static_cast<partition_t>(gen.urand64() % static_cast<u64>(k));
                     random_pool.free_state(gen);
 
                     f64 best_score = 0;
@@ -160,26 +165,30 @@ namespace GPU_HeiPa {
 
 
 
+
+    template<bool uniform_vw>
     inline void assign_leftovers_fullyRandom(
         const Graph &graph,
         Partition &child,
         partition_t k,
         DeviceExecutionSpace &exec_space
     ) {
+
         Kokkos::Random_XorShift64_Pool<> random_pool(12345);
 
         // assign remaining vertices
         Kokkos::parallel_for(
             "assign leftovers",
-            Kokkos::RangePolicy<Kokkos::Cuda>(exec_space, 0, graph.n),
+            Kokkos::RangePolicy<DeviceExecutionSpace>(exec_space, 0, graph.n),
             KOKKOS_LAMBDA(vertex_t u) {
                 if (child.map(u) == 5 * k) {
                     auto gen = random_pool.get_state();
-                    partition_t id = static_cast<partition_t>(gen.urand(0, k));
+                    partition_t id = static_cast<partition_t>(gen.urand64() % static_cast<u64>(k));
                     random_pool.free_state(gen);
 
                     child.map(u) = id;
-                    Kokkos::atomic_fetch_add(&child.bweights(id), graph.weights(u));
+                    Kokkos::atomic_add(&child.bweights(id), uniform_vw ? 1 : graph.weights(u));
+                    
                 }
             }
         );
@@ -199,7 +208,12 @@ namespace GPU_HeiPa {
         Kokkos::Random_XorShift64_Pool<> random_pool(12345);
 
 
-        BlockConn bc = init_BlockConn<false>(graph, child, mem_stack, exec_space);
+        BlockConn bc;
+        if (graph.uniform_edge_weights) {
+            bc = init_BlockConn<true>(graph, child, mem_stack, exec_space);
+        } else {
+            bc = init_BlockConn<false>(graph, child, mem_stack, exec_space);
+        }
 
 
         Kokkos::parallel_for(
@@ -209,7 +223,7 @@ namespace GPU_HeiPa {
                 // calculate gain
                 if (child.map(u) == 5 * k) {
                     auto gen = random_pool.get_state();
-                    partition_t best_id = static_cast<partition_t>(gen.urand(0, k));
+                    partition_t best_id = static_cast<partition_t>(gen.urand64() % static_cast<u64>(k));
                     random_pool.free_state(gen);
 
                     weight_t best_conn = 0;

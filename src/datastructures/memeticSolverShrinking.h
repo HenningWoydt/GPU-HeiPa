@@ -904,9 +904,9 @@ namespace GPU_HeiPa {
 
 
             if (graphs.back().uniform_edge_weights) {
-                ASSERT(curr_edge_cut[individual_id] == edge_cut<true>(graphs.back(), solutions[level % 2][individual_id]));
+                ASSERT(curr_edge_cut[individual_id] == edge_cut<true>(graphs.back(), solutions[level % 2][individual_id], exec_spaces[tid]));
             } else {
-                ASSERT(curr_edge_cut[individual_id] == edge_cut<false>(graphs.back(), solutions[level % 2][individual_id]));
+                ASSERT(curr_edge_cut[individual_id] == edge_cut<false>(graphs.back(), solutions[level % 2][individual_id], exec_spaces[tid]));
             }
 
             //ASSERT(curr_edge_cut[individual_id] == edge_cut(graphs.back(), solutions[level % 2][individual_id]));
@@ -964,21 +964,38 @@ namespace GPU_HeiPa {
                     }
                 }
 
+                 if (graphs.back().uniform_edge_weights) {
+                    backbone_based_crossover<true>(
+                         solutions[level % 2][parents_curr + i],
+                         graphs.back(),
+                         parent_ids,
+                         solutions[level % 2],
+                         k,
+                         lmax,
+                         mem_stacks[tid],
+                         config.leftover_strategy,
+                         config.alpha,
+                         config.extent,
+                         exec_spaces[tid]
+                        );
+                        
+                }else{
+                     backbone_based_crossover<false>(
+                         solutions[level % 2][parents_curr + i],
+                         graphs.back(),
+                         parent_ids,
+                         solutions[level % 2],
+                         k,
+                         lmax,
+                         mem_stacks[tid],
+                         config.leftover_strategy,
+                         config.alpha,
+                         config.extent,
+                         exec_spaces[tid]
+                        );
+                    
 
-                backbone_based_crossover(
-                    solutions[level % 2][parents_curr + i],
-                    graphs.back(),
-                    parent_ids,
-                    solutions[level % 2],
-                    k,
-                    lmax,
-                    mem_stacks[tid],
-                    config.leftover_strategy,
-                    config.alpha,
-                    config.extent,
-                    exec_spaces[tid]
-                );
-
+                }
 
                 if (graphs.back().uniform_edge_weights) {
                     curr_edge_cut[parents_curr + i] = edge_cut<true>(graphs.back(), solutions[level % 2][parents_curr + i], exec_spaces[tid]);

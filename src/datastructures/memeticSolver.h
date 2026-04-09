@@ -737,6 +737,7 @@ namespace GPU_HeiPa {
 
             recalculate_weights<false>(partitions[individual_id], graphs.back(), exec_spaces[tid]);
 
+            exec_spaces[tid].fence();
 
             initial_edge_cut[individual_id] = edge_cut<false>(graphs.back(), partitions[individual_id], exec_spaces[tid]);
             curr_edge_cut[individual_id] = initial_edge_cut[individual_id];
@@ -774,11 +775,11 @@ namespace GPU_HeiPa {
 
 
             if (graphs.back().uniform_edge_weights) {
-                ASSERT(curr_edge_cut == edge_cut<true>(graphs.back(), partitions[individual_id]));
+                ASSERT(curr_edge_cut[individual_id] == edge_cut<true>(graphs.back(), partitions[individual_id], exec_spaces[tid]));
             } else {
-                ASSERT(curr_edge_cut == edge_cut<false>(graphs.back(), partitions[individual_id]));
+                ASSERT(curr_edge_cut[individual_id] == edge_cut<false>(graphs.back(), partitions[individual_id], exec_spaces[tid]));
             }
-            ASSERT(curr_max_block_weight == max_weight(partitions[individual_id]));
+            ASSERT(curr_max_block_weight[individual_id] == max_weight(partitions[individual_id]));
 
 
             // ASSERT(curr_edge_cut[individual_id] == edge_cut(graphs.back(), partitions[individual_id]));
@@ -789,9 +790,9 @@ namespace GPU_HeiPa {
 
 
         void uncontraction(u32 level, size_t individual_id, size_t tid) {
+            
             uncontract(partitions[individual_id], mappings.back(), exec_spaces[tid]);
 
-            assert_state_after_partition(graphs.back(), partitions[individual_id], config.k, exec_spaces[tid]);
         }
 
         void free_after_uncontraction(KokkosMemoryStack &mem_stack) {
@@ -802,6 +803,13 @@ namespace GPU_HeiPa {
             mappings.pop_back();
 
             Kokkos::fence();
+
+            for (size_t i = 0; i < active.size(); ++i) {
+                
+                size_t id = active[i];
+                
+                assert_state_after_partition(graphs.back(), partitions[id], config.k, exec_spaces[0]);
+            }
         }
 
         f64 determine_goodness_score(size_t id) {
@@ -839,18 +847,38 @@ namespace GPU_HeiPa {
                 Partition offspring;
                 {
                     ScopedTimer _t("memetic", "memetic_refinement", "create offspring");
-                    offspring = backbone_based_crossover(
-                        graphs.back(),
-                        parent_ids,
-                        partitions,
-                        k,
-                        lmax,
-                        mem_stacks[partition_stack],
-                        config.leftover_strategy,
-                        config.alpha,
-                        config.extent,
-                        exec_spaces[0]
-                    );
+
+                    if (graphs.back().uniform_edge_weights) {
+
+                        offspring = backbone_based_crossover<true>(
+                            graphs.back(),
+                            parent_ids,
+                            partitions,
+                            k,
+                            lmax,
+                            mem_stacks[partition_stack],
+                            config.leftover_strategy,
+                            config.alpha,
+                            config.extent,
+                            exec_spaces[0]
+                        );
+                    }else{
+
+                        offspring = backbone_based_crossover<false>(
+                            graphs.back(),
+                            parent_ids,
+                            partitions,
+                            k,
+                            lmax,
+                            mem_stacks[partition_stack],
+                            config.leftover_strategy,
+                            config.alpha,
+                            config.extent,
+                            exec_spaces[0]
+                        );
+                    }
+
+                    assert_state_after_partition(graphs.back(), offspring, config.k, exec_spaces[0]);
                 }
                 //! for experiments:
                 // - num overweight blocks

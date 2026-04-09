@@ -233,7 +233,8 @@ cd build
 cmake .. -DCMAKE_BUILD_TYPE=Release \
          -DCMAKE_PREFIX_PATH="${ROOT}/extern/local/kokkos;${ROOT}/extern/local/kokkos-kernels" \
          -DCMAKE_CXX_STANDARD=20 \
-         -DCMAKE_CXX_EXTENSIONS=OFF
+         -DCMAKE_CXX_EXTENSIONS=OFF \
+         -DASSERT_ENABLED=ON 
 cmake --build . --parallel "$JOBS" --target GPU-HeiPa-memetic
-cmake --build . --parallel "$JOBS" --target GPU-HeiPa
+#cmake --build . --parallel "$JOBS" --target GPU-HeiPa
 #cmake --build . --parallel "$JOBS" --target GPU-HeiProMap

@@ -70,6 +70,7 @@ namespace GPU_HeiPa {
     //! -------------------------------------------------------------------------------------------------
 
 
+    template<bool uniform_vw>
     inline Partition backbone_based_crossover(
         const Graph &graph,
         const std::vector<int> &parent_ids,
@@ -82,10 +83,11 @@ namespace GPU_HeiPa {
         partition_t extent,
         DeviceExecutionSpace &exec_space
     ) {
+        
         Partition child;
         child = initialize_partition(graph.n, k, lmax, mem_stack, exec_space);
 
-
+        
         //setup: get the vectors onto the GPU
         auto parent_ids_device = Kokkos::View<int *, Kokkos::MemoryTraits<Kokkos::Unmanaged> >(
             (int *) get_chunk_back(mem_stack, sizeof(int) * parent_ids.size()),
@@ -96,8 +98,9 @@ namespace GPU_HeiPa {
             population.size()
         );
 
-        Kokkos::deep_copy(exec_space, parent_ids_device, Kokkos::View<const int *>(parent_ids.data(), parent_ids.size()));
-        Kokkos::deep_copy(exec_space, population_device, Kokkos::View<const Partition *>(population.data(), population.size()));
+        Kokkos::deep_copy(parent_ids_device, Kokkos::View<const int *>(parent_ids.data(), parent_ids.size()));
+        Kokkos::deep_copy(population_device, Kokkos::View<const Partition *>(population.data(), population.size()));
+        
 
         partition_t k_prime = next_power_of_two(k);
         u32 num_bits = bits_needed(k_prime);
@@ -107,7 +110,7 @@ namespace GPU_HeiPa {
         auto buckets = Kokkos::View<KeyTuple *, Kokkos::MemoryTraits<Kokkos::Unmanaged> >(
             (KeyTuple *) get_chunk_back(mem_stack, sizeof(KeyTuple) * num_buckets), num_buckets
         );
-
+        
 
         Kokkos::parallel_for(
             "init buckets", Kokkos::RangePolicy<DeviceExecutionSpace>(exec_space, 0, num_buckets),
@@ -116,6 +119,7 @@ namespace GPU_HeiPa {
                 buckets(index).key = index;
             }
         );
+        exec_space.fence();
 
         Kokkos::parallel_for(
             "fill buckets", Kokkos::RangePolicy<DeviceExecutionSpace>(exec_space, 0, graph.n),
@@ -124,7 +128,8 @@ namespace GPU_HeiPa {
                 Kokkos::atomic_fetch_add(&buckets(key).key_count, 1);
             }
         );
-
+        exec_space.fence();
+        
         // sort descending based on key_count
         // after sorting, the k most frequent keys will be at the top
         // and you can query them via .key
@@ -133,6 +138,8 @@ namespace GPU_HeiPa {
         });
 
 
+        exec_space.fence();
+        
         partition_t local_extent = std::min(extent, k);
         if (local_extent < 1) {
             local_extent = 1;
@@ -145,34 +152,39 @@ namespace GPU_HeiPa {
                 partition_t id;
                 bool in_backbone = false;
                 u64 key = determine_key(u, parent_ids_device, population_device, num_bits);
-
-                for (partition_t j = 0; (j <= local_extent) && (!in_backbone); ++j) {
+                for (partition_t j = 0; (j < local_extent) && (!in_backbone); ++j) {
                     for (partition_t i = 0; i < k; ++i) {
                         if (key == buckets(i + (j * k)).key) {
                             if (j == 0)
                                 id = i;
                             else
                                 id = k - i - 1; //! "reverse assignment" from full buckets to underloaded partitions
-
-                            Kokkos::atomic_fetch_add(&child.bweights(id), graph.weights(u));
+                         
+                            Kokkos::atomic_add(&child.bweights(id), uniform_vw ? 1 : graph.weights(u));
                             in_backbone = true;
                             break;
                         }
                     }
                 }
-
-
                 if (!in_backbone) {
                     id = 5 * k; //! mark as not assigned 
                 }
 
                 child.map(u) = id;
-            }
+        }
         );
-
-
+        
+        exec_space.fence();
+        
+    
         if (leftover_strategy == "random") {
-            assign_leftovers_fullyRandom(graph, child, k, exec_space);
+            if(uniform_vw) {
+
+                assign_leftovers_fullyRandom<true>(graph, child, k, exec_space);
+            }else{
+                assign_leftovers_fullyRandom<false>(graph, child, k, exec_space);
+            }
+
         } else if (leftover_strategy == "balanced") {
             assign_leftovers_favorUnderloadedBlocks(graph, child, k, lmax, mem_stack, exec_space);
         } else if (leftover_strategy == "gain") {
@@ -180,11 +192,13 @@ namespace GPU_HeiPa {
         } else {
             assign_leftovers_gain_and_weight(graph, child, k, lmax, mem_stack, alpha, exec_space);
         }
-
+            
+        exec_space.fence();
+        
         pop_back(mem_stack); //rm buckets
         pop_back(mem_stack); //rm population
         pop_back(mem_stack); //rm parent_ids
-
+        
 
         return child;
     }

@@ -61,6 +61,13 @@ target_link_libraries(GPU-HeiPa-memetic
         OpenMP::OpenMP_CXX
 )
 
+# Apply ASSERT_ENABLED flag to all targets
+if(ASSERT_ENABLED)
+    target_compile_definitions(GPU-HeiPa PRIVATE ASSERT_ENABLED=1)
+    target_compile_definitions(GPU-HeiProMap PRIVATE ASSERT_ENABLED=1)
+    target_compile_definitions(GPU-HeiPa-memetic PRIVATE ASSERT_ENABLED=1)
+endif()
+
 #target_link_libraries(shrinking
 #        PRIVATE
 #        ${KAHIP_LIBRARY}
