@@ -68,6 +68,12 @@ if(ASSERT_ENABLED)
     target_compile_definitions(GPU-HeiPa-memetic PRIVATE ASSERT_ENABLED=1)
 endif()
 
+if(ENABLE_PROFILER)
+    target_compile_definitions(GPU-HeiPa PRIVATE ENABLE_PROFILER=1)
+    target_compile_definitions(GPU-HeiProMap PRIVATE ENABLE_PROFILER=1)
+    target_compile_definitions(GPU-HeiPa-memetic PRIVATE ENABLE_PROFILER=1)
+endif()
+
 #target_link_libraries(shrinking
 #        PRIVATE
 #        ${KAHIP_LIBRARY}
