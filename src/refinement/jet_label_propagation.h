@@ -297,7 +297,7 @@ namespace GPU_HeiPa {
             using team_policy = Kokkos::TeamPolicy<DeviceExecutionSpace>;
             using member_type = team_policy::member_type;
 
-            Kokkos::parallel_for("afterburner heuristic", team_policy(num_pos, Kokkos::AUTO()), KOKKOS_LAMBDA(const member_type &team) {
+            Kokkos::parallel_for("afterburner heuristic", team_policy(exec_space, num_pos, Kokkos::AUTO()), KOKKOS_LAMBDA(const member_type &team) {
                 u32 i = team.league_rank();
 
                 vertex_t u = lp.vtx1(i);
