@@ -41,7 +41,8 @@
 #include "partition.h"
 #include "../coarsening/two_hop_matching.h"
 #include "../refinement/jet_label_propagation.h"
-#include "../refinement/memetic_refinementShrinking.h"
+#include "../refinement/memetic_refinement.h"
+#include "../refinement/distance_computations_shrinking.h"
 #include "../initial_partitioning/kway_partitioner/kway_core.h"
 #include "../utility/definitions.h"
 #include "../utility/memetic_configuration.h"
@@ -793,29 +794,33 @@ namespace GPU_HeiPa {
 
             f64 up_ms = 0;
 
-            graphs.emplace_back(from_HostGraph(host_g, mem_stacks[orga_stack], up_ms, exec_spaces[0]));
+            DeviceExecutionSpace exec_space = DeviceExecutionSpace();
+            graphs.emplace_back(from_HostGraph(host_g, mem_stacks[orga_stack], up_ms, exec_space));
 
-            dummy = initialize_partition(n, k, lmax, mem_stacks[orga_stack], exec_spaces[0]);
+            dummy = initialize_partition(n, k, lmax, mem_stacks[orga_stack], exec_space);
 
 
             misc_ms += get_milli_seconds(p, get_time_point());
             misc_ms -= up_ms;
             down_up_load_ms += up_ms;
 
-            assert_state_pre_partition(graphs.back(), exec_spaces[0]);
+            assert_state_pre_partition(graphs.back(), exec_space);
         }
 
         void coarsening(u32 level, KokkosMemoryStack &mem_stack) {
             auto p = get_time_point();
 
+            DeviceExecutionSpace exec_space = DeviceExecutionSpace();
+
+
             if (graphs.back().uniform_vertex_weights && graphs.back().uniform_edge_weights) {
-                mappings.emplace_back(two_hop_matcher_get_mapping<true, true>(graphs.back(), dummy, lmax, mem_stack, exec_spaces[0]));
+                mappings.emplace_back(two_hop_matcher_get_mapping<true, true>(graphs.back(), dummy, lmax, mem_stack, exec_space));
             } else if (graphs.back().uniform_vertex_weights) {
-                mappings.emplace_back(two_hop_matcher_get_mapping<true, false>(graphs.back(), dummy, lmax, mem_stack, exec_spaces[0]));
+                mappings.emplace_back(two_hop_matcher_get_mapping<true, false>(graphs.back(), dummy, lmax, mem_stack, exec_space));
             } else if (graphs.back().uniform_edge_weights) {
-                mappings.emplace_back(two_hop_matcher_get_mapping<false, true>(graphs.back(), dummy, lmax, mem_stack, exec_spaces[0]));
+                mappings.emplace_back(two_hop_matcher_get_mapping<false, true>(graphs.back(), dummy, lmax, mem_stack, exec_space));
             } else {
-                mappings.emplace_back(two_hop_matcher_get_mapping<false, false>(graphs.back(), dummy, lmax, mem_stack, exec_spaces[0]));
+                mappings.emplace_back(two_hop_matcher_get_mapping<false, false>(graphs.back(), dummy, lmax, mem_stack, exec_space));
             }
 
 
@@ -829,7 +834,7 @@ namespace GPU_HeiPa {
             level_infos[level].t_coarsening = get_milli_seconds(p, get_time_point());
             #endif
 
-            assert_state_pre_partition(graphs.back(), exec_spaces[0]);
+            assert_state_pre_partition(graphs.back(), exec_space);
         }
 
         void contraction(u32 level, KokkosMemoryStack &mem_stack) {
@@ -837,15 +842,17 @@ namespace GPU_HeiPa {
 
             // graphs.emplace_back(from_Graph_Mapping(graphs.back(), mappings.back(), mem_stack));
 
+            DeviceExecutionSpace exec_space = DeviceExecutionSpace();
+
             const Graph &cur = graphs.back();
             if (cur.uniform_vertex_weights && cur.uniform_edge_weights) {
-                graphs.emplace_back(from_Graph_Mapping<true, true>(cur, mappings.back(), mem_stack, exec_spaces[0]));
+                graphs.emplace_back(from_Graph_Mapping<true, true>(cur, mappings.back(), mem_stack, exec_space));
             } else if (cur.uniform_vertex_weights) {
-                graphs.emplace_back(from_Graph_Mapping<true, false>(cur, mappings.back(), mem_stack, exec_spaces[0]));
+                graphs.emplace_back(from_Graph_Mapping<true, false>(cur, mappings.back(), mem_stack, exec_space));
             } else if (cur.uniform_edge_weights) {
-                graphs.emplace_back(from_Graph_Mapping<false, true>(cur, mappings.back(), mem_stack, exec_spaces[0]));
+                graphs.emplace_back(from_Graph_Mapping<false, true>(cur, mappings.back(), mem_stack, exec_space));
             } else {
-                graphs.emplace_back(from_Graph_Mapping<false, false>(cur, mappings.back(), mem_stack, exec_spaces[0]));
+                graphs.emplace_back(from_Graph_Mapping<false, false>(cur, mappings.back(), mem_stack, exec_space));
             }
 
             Kokkos::fence();
@@ -855,7 +862,7 @@ namespace GPU_HeiPa {
             level_infos[level].t_contraction = get_milli_seconds(p, get_time_point());
             #endif
 
-            assert_state_pre_partition(graphs.back(), exec_spaces[0]);
+            assert_state_pre_partition(graphs.back(), exec_space);
         }
 
 

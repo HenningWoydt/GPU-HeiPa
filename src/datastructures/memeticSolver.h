@@ -42,6 +42,7 @@
 #include "../coarsening/two_hop_matching.h"
 #include "../refinement/jet_label_propagation.h"
 #include "../refinement/memetic_refinement.h"
+#include "../refinement/distance_computations_steady.h"
 #include "../initial_partitioning/kway_partitioner/kway_core.h"
 #include "../utility/definitions.h"
 #include "../utility/memetic_configuration.h"
@@ -844,13 +845,14 @@ namespace GPU_HeiPa {
                     }
                 }
 
-                Partition offspring;
+                Partition offspring = initialize_partition(graphs.back().n, k, lmax, mem_stacks[partition_stack], exec_spaces[0]);
                 {
                     ScopedTimer _t("memetic", "memetic_refinement", "create offspring");
 
                     if (graphs.back().uniform_edge_weights) {
 
-                        offspring = backbone_based_crossover<true>(
+                        backbone_based_crossover<true>(
+                            offspring,
                             graphs.back(),
                             parent_ids,
                             partitions,
@@ -864,7 +866,8 @@ namespace GPU_HeiPa {
                         );
                     }else{
 
-                        offspring = backbone_based_crossover<false>(
+                        backbone_based_crossover<false>(
+                            offspring,
                             graphs.back(),
                             parent_ids,
                             partitions,
