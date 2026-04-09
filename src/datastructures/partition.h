@@ -63,6 +63,7 @@ namespace GPU_HeiPa {
 
         Kokkos::deep_copy(exec_space, partition.map, 0);
         Kokkos::deep_copy(exec_space, partition.bweights, 0);
+        exec_space.fence();
 
         return partition;
     }

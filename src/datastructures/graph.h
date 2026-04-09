@@ -165,6 +165,7 @@ namespace GPU_HeiPa {
             ScopedTimer _t{"contraction", "from_Graph_Mapping", "initialize_set_0"};
 
             Kokkos::deep_copy(exec_space, coarse_g.weights, 0);
+            Kokkos::deep_copy(exec_space, degrees, 0);
             Kokkos::deep_copy(exec_space, sum_degrees, 0);
             Kokkos::deep_copy(exec_space, hash_offsets, 0);
             Kokkos::deep_copy(exec_space, hash_keys, coarse_g.n);

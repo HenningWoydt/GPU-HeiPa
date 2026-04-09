@@ -1583,8 +1583,8 @@ namespace GPU_HeiPa {
         kway_partition(host_g, k, imbalance, seed, host_partition);
 
         auto device_subview = Kokkos::subview(partition.map, std::pair<size_t, size_t>(0, host_partition.extent(0)));
-        Kokkos::deep_copy(device_subview, host_partition);
-        Kokkos::fence();
+        Kokkos::deep_copy(exec_space, device_subview, host_partition);
+        exec_space.fence();
     }
 }
 
