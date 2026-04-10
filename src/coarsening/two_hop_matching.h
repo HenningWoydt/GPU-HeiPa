@@ -101,6 +101,7 @@ namespace GPU_HeiPa {
 
     template<bool is_initial, bool is_uniform>
     inline void pick_neighbor_flat(const Graph &g,
+                                   const Partition& partition,
                                    const UnmanagedDeviceVertex &vcmap,
                                    const UnmanagedDeviceVertex &hn,
                                    u32 seed,
@@ -119,6 +120,9 @@ namespace GPU_HeiPa {
 
             for (u32 j = g.neighborhood(u); j < g.neighborhood(u + 1); j++) {
                 vertex_t v = g.edges_v(j);
+
+                if( partition.map(u) != partition.map(v) ) { continue;}
+
                 if (is_initial || vcmap(v) == SENTINEL) {
                     if constexpr (!is_uniform) {
                         if (max_ewt < g.edges_w(j)) {
@@ -142,6 +146,7 @@ namespace GPU_HeiPa {
 
     template<bool is_initial, bool is_uniform>
     inline void pick_neighbor_team(const Graph &g,
+                                   const Partition& partition,
                                    const UnmanagedDeviceVertex &vcmap,
                                    const UnmanagedDeviceVertex &hn,
                                    u32 seed,
@@ -158,9 +163,9 @@ namespace GPU_HeiPa {
             u32 r = xorshiftHash(u ^ seed);
 
             weight_t max_ewt = 0;
-            if constexpr (!is_uniform) {
+            if (!is_uniform) {
                 Kokkos::parallel_reduce(Kokkos::TeamThreadRange(thread, start, end), [=](const u32 j, weight_t &update) {
-                    if (!is_initial && vcmap(g.edges_v(j)) != SENTINEL) return;
+                    if ((!is_initial && vcmap(g.edges_v(j)) != SENTINEL) || ( partition.map(u) != partition.map( g.edges_v(j)) )  ) return;
                     if (g.edges_w(j) > update) update = g.edges_w(j);
                 }, Kokkos::Max<weight_t, DeviceMemorySpace>(max_ewt));
             }
@@ -168,7 +173,7 @@ namespace GPU_HeiPa {
 
             argmax_t argmax{0, end};
             Kokkos::parallel_reduce(Kokkos::TeamThreadRange(thread, start, end), [=](const u32 j, argmax_t &local) {
-                if (!is_initial && vcmap(g.edges_v(j)) != SENTINEL) return;
+                if ((!is_initial && vcmap(g.edges_v(j)) != SENTINEL) || ( partition.map(u) != partition.map( g.edges_v(j)) ) ) return;
                 if constexpr (!is_uniform) {
                     if (g.edges_w(j) != max_ewt) return;
                 }
@@ -202,8 +207,10 @@ namespace GPU_HeiPa {
         }
     }
 
+
     template<typename hash_t>
-    inline void matchHash(const UnmanagedDeviceVertex &unmappedVtx,
+    inline void matchHash(const Partition& partition,
+                          const UnmanagedDeviceVertex &unmappedVtx,
                           const Kokkos::View<hash_t *, DeviceMemorySpace, Kokkos::MemoryTraits<Kokkos::Unmanaged> > &hashes,
                           const hash_t nullkey,
                           UnmanagedDeviceVertex &vcmap,
@@ -239,9 +246,19 @@ namespace GPU_HeiPa {
                     if (Kokkos::atomic_compare_exchange(&twins(key), twin, i) == twin) found = true;
                 } else {
                     if (Kokkos::atomic_compare_exchange(&twins(key), twin, SENTINEL) == twin) {
-                        vertex_t cv = twin < i ? twin : i;
-                        vcmap(twin) = cv;
-                        vcmap(i) = cv;
+
+                        //! korrekt ?
+                        if( partition.map(i) == partition.map(twin)) {
+                            vertex_t cv = twin < i ? twin : i;
+                            vcmap(twin) = cv;
+                            vcmap(i) = cv;
+                        } else {
+                            // könnte man auch weglassen i think
+                            vcmap(twin) = twin;
+                            vcmap(i) = i;
+                        }
+
+
                         found = true;
                     }
                 }
@@ -270,6 +287,7 @@ namespace GPU_HeiPa {
 
     template<bool uniform_v_weights, bool uniform_e_weights>
     inline void heavy_edge_matching(const Graph &g,
+                                    const Partition &partition,
                                     TwoHopMatcher &thm,
                                     u32 seed,
                                     DeviceExecutionSpace &exec_space) {
@@ -280,7 +298,12 @@ namespace GPU_HeiPa {
                 u32 adj_size = g.neighborhood(i + 1) - g.neighborhood(i);
                 if (adj_size == 0) return;
                 u32 offset = g.neighborhood(i) + (xorshiftHash(i ^ seed) % adj_size);
-                thm.hn(i) = g.edges_v(offset);
+                
+                vertex_t dst = g.edges_v(offset);
+
+                if( partition.map(i) == partition.map(dst) )
+                    thm.hn(i) = dst;
+                
             });
 
             KOKKOS_PROFILE_FENCE(exec_space);
@@ -288,13 +311,13 @@ namespace GPU_HeiPa {
             if (g.m / g.n > 32) {
                 ScopedTimer _t("coarsening", "coarsen_match", "initial_pick_team");
 
-                pick_neighbor_team<true, uniform_e_weights>(g, thm.vcmap, thm.hn, seed, thm.vertex_list, g.n, exec_space);
+                pick_neighbor_team<true, uniform_e_weights>(g, partition, thm.vcmap, thm.hn, seed, thm.vertex_list, g.n, exec_space);
 
                 KOKKOS_PROFILE_FENCE(exec_space);
             } else {
                 ScopedTimer _t("coarsening", "coarsen_match", "initial_pick_flat");
 
-                pick_neighbor_flat<true, uniform_e_weights>(g, thm.vcmap, thm.hn, seed, thm.vertex_list, g.n, exec_space);
+                pick_neighbor_flat<true, uniform_e_weights>(g, partition, thm.vcmap, thm.hn, seed, thm.vertex_list, g.n, exec_space);
 
                 KOKKOS_PROFILE_FENCE(exec_space);
             }
@@ -303,7 +326,9 @@ namespace GPU_HeiPa {
         // ---- Main matching loop ----
         vertex_t perm_length = g.n;
         u32 round = 0;
+        u32 stalled_rounds = 0;
         while (perm_length > 0) {
+            const vertex_t prev_perm_length = perm_length;
             u32 round_seed = seed ^ (round * 0x9e3779b1u);
             // 4 sub-rounds of commit
             {
@@ -342,13 +367,13 @@ namespace GPU_HeiPa {
                     if (g.m / g.n > 32) {
                         ScopedTimer _t("coarsening", "coarsen_match", "repick_uniform_team");
 
-                        pick_neighbor_team<false, uniform_e_weights>(g, thm.vcmap, thm.hn, round_seed, thm.vertex_list, perm_length, exec_space);
+                        pick_neighbor_team<false, uniform_e_weights>(g, partition, thm.vcmap, thm.hn, round_seed, thm.vertex_list, perm_length, exec_space);
 
                         KOKKOS_PROFILE_FENCE(exec_space);
                     } else {
                         ScopedTimer _t("coarsening", "coarsen_match", "repick_uniform_flat");
 
-                        pick_neighbor_flat<false, uniform_e_weights>(g, thm.vcmap, thm.hn, round_seed, thm.vertex_list, perm_length, exec_space);
+                        pick_neighbor_flat<false, uniform_e_weights>(g, partition, thm.vcmap, thm.hn, round_seed, thm.vertex_list, perm_length, exec_space);
 
                         KOKKOS_PROFILE_FENCE(exec_space);
                     }
@@ -356,13 +381,13 @@ namespace GPU_HeiPa {
                     if (g.m / g.n > 32) {
                         ScopedTimer _t("coarsening", "coarsen_match", "repick_team");
 
-                        pick_neighbor_team<false, uniform_e_weights>(g, thm.vcmap, thm.hn, round_seed, thm.vertex_list, perm_length, exec_space);
+                        pick_neighbor_team<false, uniform_e_weights>(g, partition, thm.vcmap, thm.hn, round_seed, thm.vertex_list, perm_length, exec_space);
 
                         KOKKOS_PROFILE_FENCE(exec_space);
                     } else {
                         ScopedTimer _t("coarsening", "coarsen_match", "repick_flat");
 
-                        pick_neighbor_flat<false, uniform_e_weights>(g, thm.vcmap, thm.hn, round_seed, thm.vertex_list, perm_length, exec_space);
+                        pick_neighbor_flat<false, uniform_e_weights>(g, partition, thm.vcmap, thm.hn, round_seed, thm.vertex_list, perm_length, exec_space);
 
                         KOKKOS_PROFILE_FENCE(exec_space);
                     }
@@ -388,11 +413,22 @@ namespace GPU_HeiPa {
 
                 KOKKOS_PROFILE_FENCE(exec_space);
             }
+
+            if (perm_length == prev_perm_length) {
+                stalled_rounds++;
+            } else {
+                stalled_rounds = 0;
+            }
+
+            if (stalled_rounds > 8) {
+                break;
+            }
             round++;
         }
     }
 
     inline void leaf_matching(const Graph &g,
+                              const Partition& partition,
                               TwoHopMatcher &thm,
                               vertex_t unmapped,
                               KokkosMemoryStack &mem_stack,
@@ -415,7 +451,7 @@ namespace GPU_HeiPa {
         }, mappable);
 
         if (mappable > 0) {
-            matchHash<vertex_t>(unmappedVtx, hashes, SENTINEL, thm.vcmap, mappable, mem_stack, exec_space);
+            matchHash<vertex_t>(partition, unmappedVtx, hashes, SENTINEL, thm.vcmap, mappable, mem_stack, exec_space);
         }
 
         pop_back(mem_stack); // hashes
@@ -425,6 +461,7 @@ namespace GPU_HeiPa {
     }
 
     inline void twin_matching(const Graph &g,
+                              const Partition &partition,
                               TwoHopMatcher &thm,
                               vertex_t unmapped,
                               KokkosMemoryStack &mem_stack,
@@ -473,9 +510,9 @@ namespace GPU_HeiPa {
         {
             ScopedTimer _t("coarsening", "twin_matching", "reset_htable");
 
-            Kokkos::deep_copy(htable, 0);
-            Kokkos::deep_copy(twins, SENTINEL);
-
+            Kokkos::deep_copy(exec_space, htable, 0);
+            Kokkos::deep_copy(exec_space, twins, SENTINEL);
+            exec_space.fence();
             KOKKOS_PROFILE_FENCE(exec_space);
         }
         //
@@ -505,9 +542,16 @@ namespace GPU_HeiPa {
                         if (Kokkos::atomic_compare_exchange(&twins(key), twin, u) == twin) found = true;
                     } else {
                         if (Kokkos::atomic_compare_exchange(&twins(key), twin, SENTINEL) == twin) {
-                            vertex_t cv = twin < u ? twin : u;
-                            thm.vcmap(twin) = cv;
-                            thm.vcmap(u) = cv;
+                            //! korrekt ?
+                            if( partition.map(u) == partition.map(twin)) {
+
+                                vertex_t cv = twin < u ? twin : u;
+                                thm.vcmap(twin) = cv;
+                                thm.vcmap(u) = cv;
+                            } else {
+                                thm.vcmap(twin) = twin;
+                                thm.vcmap(u) = u;
+                            }
                             found = true;
                         }
                     }
@@ -525,6 +569,7 @@ namespace GPU_HeiPa {
 
     template<bool uniform_e_weights>
     inline void relative_matching(const Graph &g,
+                                  const Partition& partition,
                                   TwoHopMatcher &thm,
                                   vertex_t unmapped,
                                   KokkosMemoryStack &mem_stack,
@@ -562,7 +607,7 @@ namespace GPU_HeiPa {
             hashes(i) = h;
         });
 
-        matchHash<vertex_t>(unmappedVtx, hashes, SENTINEL, thm.vcmap, mappable, mem_stack, exec_space);
+        matchHash<vertex_t>(partition, unmappedVtx, hashes, SENTINEL, thm.vcmap, mappable, mem_stack, exec_space);
 
         pop_back(mem_stack); // hashes
         pop_back(mem_stack); // unmappedVtx
@@ -578,34 +623,45 @@ namespace GPU_HeiPa {
                                                DeviceExecutionSpace &exec_space) {
         TwoHopMatcher thm = initialize_two_hop_matcher(g.n, g.m, partition.k, lmax, mem_stack);
 
+        /*
+        ! I need to change all kernel-calls in this file to actually use the execution space!
+        ! Else, the cpu parallelism will fail again and multiple cpu-threads
+        ! commiting to the same stream will cause seg faults and stuff! 
+        
+        */
+
+
         {
             ScopedTimer _t("coarsening", "coarsen_match", "reset");
 
-            Kokkos::deep_copy(thm.vcmap, SENTINEL);
-            Kokkos::deep_copy(thm.hn, SENTINEL);
-
+            Kokkos::deep_copy(exec_space, thm.vcmap, SENTINEL);
+            Kokkos::deep_copy(exec_space, thm.hn, SENTINEL);
+            exec_space.fence();
             KOKKOS_PROFILE_FENCE(exec_space);
         }
-
-        heavy_edge_matching<uniform_v_weights, uniform_e_weights>(g, thm, 12345u, exec_space);
+        
+        heavy_edge_matching<uniform_v_weights, uniform_e_weights>(g, partition, thm, 12345u, exec_space);
 
         vertex_t unmapped = count_unmapped(g, thm, exec_space);
         if ((f64) unmapped / (f64) g.n > 0.25) {
-            leaf_matching(g, thm, unmapped, mem_stack, exec_space);
+            
+            leaf_matching(g, partition, thm, unmapped, mem_stack, exec_space);
 
             unmapped = count_unmapped(g, thm, exec_space);
         }
 
         // Twin matches
         if ((f64) unmapped / (f64) g.n > 0.25) {
-            twin_matching(g, thm, unmapped, mem_stack, exec_space);
+            
+            twin_matching(g, partition, thm, unmapped, mem_stack, exec_space);
 
             unmapped = count_unmapped(g, thm, exec_space);
         }
 
         // Relative matches
         if ((f64) unmapped / (f64) g.n > 0.25) {
-            relative_matching<uniform_e_weights>(g, thm, unmapped, mem_stack, exec_space);
+            
+            relative_matching<uniform_e_weights>(g, partition, thm, unmapped, mem_stack, exec_space);
         }
         //
         Mapping mapping;
@@ -617,6 +673,20 @@ namespace GPU_HeiPa {
                 if (thm.vcmap(i) == SENTINEL) thm.vcmap(i) = i;
             });
 
+            vertex_t count;
+            Kokkos::parallel_reduce("count wrong matchings", g.n,
+                KOKKOS_LAMBDA(vertex_t u, vertex_t count_tmp) {
+                    if( partition.map(u) != partition.map( thm.vcmap(u)) )
+                        count_tmp++;
+                }, count
+            );
+            if( count != 0) {
+
+                std::cout << "--- inside matching ---" << std::endl;
+                std::cout << "counted " << count << " wrongly matched vertices" << std::endl;
+                std::cout << "-----------------------" << std::endl;
+                
+            }
             vertex_t nc = 0;
             Kokkos::parallel_scan("set_coarse_ids", g.n, KOKKOS_LAMBDA(const vertex_t i, vertex_t &update, const bool final) {
                 if (thm.vcmap(i) == i) {

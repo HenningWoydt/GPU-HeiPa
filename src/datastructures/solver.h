@@ -245,6 +245,146 @@ namespace GPU_HeiPa {
             free_partition(partition, dev_mem_stack);
         }
 
+
+        /*
+        
+        ! solver which takes in an input partition
+        ! -> for mutation
+
+        */
+
+        Solver(Graph &dev_g,
+               partition_t t_k,
+               f64 imbalance,
+               u64 seed,
+               bool t_use_ultra,
+               Partition &in_partition,
+               KokkosMemoryStack &dev_mem_stack,
+               DeviceExecutionSpace &exec_space) {
+            // Main stack: Graph + coarsening overhead
+            ScopedTimer t_init{"hm", "solver", "initialize"};
+
+            n = dev_g.n;
+            m = dev_g.m;
+            k = t_k;
+            lmax = (weight_t) std::ceil((1.0 + imbalance) * ((f64) dev_g.g_weight / (f64) k));
+
+            config.imbalance = imbalance;
+            config.k = k;
+            config.seed = seed;
+            config.verbose_level = 0; // or whatever you want
+            use_ultra = t_use_ultra;
+
+            graphs.emplace_back(dev_g);
+
+            partition = initialize_partition(n, k, lmax, dev_mem_stack, exec_space);
+            Kokkos::deep_copy(exec_space, partition.map, in_partition.map);
+            Kokkos::deep_copy(exec_space, partition.bweights, in_partition.bweights);
+            exec_space.fence();
+
+            assert_state_pre_partition(graphs.back(), exec_space);
+
+            t_init.stop();
+
+            const partition_t c = 8;
+            const partition_t max_n = c * k;
+            u32 level = 0;
+            while (graphs.back().n > max_n) {
+                #if ENABLE_PROFILER
+                ScopedTimer t_profiler{"hm", "solver", "profiling"};
+                level_infos.emplace_back();
+                level_infos[level].level = level;
+                level_infos[level].n = graphs.back().n;
+                level_infos[level].m = graphs.back().m;
+                t_profiler.stop();
+                #endif
+                coarsening(level, dev_mem_stack);
+                contraction(level, dev_mem_stack);
+
+                level += 1;
+            }
+
+            #if ENABLE_PROFILER
+            ScopedTimer t_profiler{"hm", "solver", "profiling"};
+            level_infos.emplace_back();
+            level_infos[level].level = level;
+            level_infos[level].n = graphs.back().n;
+            level_infos[level].m = graphs.back().m;
+            t_profiler.stop();
+            #endif
+
+            //! i can verify my approach here by checking if any cut edges from the input partition
+            //! are contracted or sth like that
+
+            //! just use the existing partition! dont repartition
+            // initial_partitioning(dev_mem_stack);
+            {
+
+                auto p = get_time_point();
+
+
+                recalculate_weights<false>(partition, graphs.back(), exec_space);
+
+                ScopedTimer _t("initial_partitioning", "Partition", "first_stats");
+
+                initial_edge_cut = edge_cut<false>(graphs.back(), partition, exec_space);
+                curr_edge_cut = initial_edge_cut;
+                initial_max_block_weight = max_weight(partition);
+                curr_max_block_weight = initial_max_block_weight;
+
+                Kokkos::fence();
+                initial_partitioning_ms += get_milli_seconds(p, get_time_point());
+
+                assert_state_after_partition(graphs.back(), partition, config.k, exec_space);
+
+            }
+
+            #if ENABLE_PROFILER
+            ScopedTimer t_profiler2{"hm", "solver", "profiling"};
+            level_infos[level].max_b_weight = max_weight(partition);
+            level_infos[level].imb = (f64) level_infos[level].max_b_weight / ((f64) dev_g.g_weight / (f64) config.k);
+            if (graphs.back().uniform_edge_weights) {
+                level_infos[level].edge_cut = edge_cut<true>(graphs.back(), partition, exec_space);
+            } else {
+                level_infos[level].edge_cut = edge_cut<false>(graphs.back(), partition, exec_space);
+            }
+            level_infos[level].empty_partitions = n_empty_blocks(partition);
+            level_infos[level].oload_partitions = n_oload_blocks(partition);
+            level_infos[level].sum_oload_weights = sum_oload_weight(partition);
+            t_profiler2.stop();
+            #endif
+
+            while (!mappings.empty()) {
+                level -= 1;
+
+                uncontraction(level, dev_mem_stack);
+                refinement(level, dev_mem_stack);
+
+                #if ENABLE_PROFILER
+                ScopedTimer t_profiler3{"hm", "solver", "profiling"};
+                level_infos[level].max_b_weight = max_weight(partition);
+                level_infos[level].imb = (f64) level_infos[level].max_b_weight / ((f64) dev_g.g_weight / (f64) config.k);
+                if (graphs.back().uniform_edge_weights) {
+                    level_infos[level].edge_cut = edge_cut<true>(graphs.back(), partition, exec_space);
+                } else {
+                    level_infos[level].edge_cut = edge_cut<false>(graphs.back(), partition, exec_space);
+                }
+                level_infos[level].empty_partitions = n_empty_blocks(partition);
+                level_infos[level].oload_partitions = n_oload_blocks(partition);
+                level_infos[level].sum_oload_weights = sum_oload_weight(partition);
+                t_profiler3.stop();
+                #endif
+            }
+
+            ScopedTimer t{"hm", "solver", "copy_res"};
+        
+            Kokkos::deep_copy(exec_space, in_partition.map,  partition.map);
+            Kokkos::deep_copy(exec_space, in_partition.bweights,  partition.bweights);
+            exec_space.fence();
+
+            free_partition(partition, dev_mem_stack);
+        }
+
         HostPartition solve(HostGraph &host_g) {
             auto sp = get_time_point();
 

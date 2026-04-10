@@ -42,6 +42,7 @@
 #include "../coarsening/two_hop_matching.h"
 #include "../refinement/jet_label_propagation.h"
 #include "../refinement/memetic_refinement.h"
+#include "../refinement/mutation.h"
 #include "../refinement/distance_computations_shrinking.h"
 #include "../initial_partitioning/kway_partitioner/kway_core.h"
 #include "../utility/definitions.h"
@@ -82,6 +83,9 @@ namespace GPU_HeiPa {
         u32 num_crossovers = 1;
         u32 num_parents = 2;
         u32 tournament_size = 2;
+
+        // probability for mutation: generate random number in [0,1], mutate if HIGHER than mutation_rate
+        f32 mutation_rate = 0.5;
 
         PopulationManagement pop_management = PopulationManagement::shrinking;
         size_t reduction_factor = 1;
@@ -755,6 +759,17 @@ namespace GPU_HeiPa {
                 control_size(level);
 
 
+                {
+                   if( ( static_cast<f32>(level) / static_cast<f32>(max_level) ) < inactive_percentile  ) {
+
+                    mutate(level, mem_stacks);
+
+                    }
+
+
+                }
+
+
                 #if ENABLE_PROFILER
                 //! übergangslösung
                 level_infos[level].max_b_weight = max_weight(solutions[level % 2][0]);
@@ -1081,6 +1096,62 @@ namespace GPU_HeiPa {
 
             return;
         }
+
+
+
+        void mutate(u32 level,  std::vector<KokkosMemoryStack> &mem_stacks) {
+
+            std::cout << "this is level: " << level << std::endl;
+
+            // select individuals for mutation
+            std::vector<size_t> candidates;
+
+            for (size_t i = 0; i < active_b.size(); ++i) {
+                if (active_b[i]) {
+
+                    f32 probability = static_cast<f32>(rand() % 101) / 100.0f;
+                    if(probability >= mutation_rate) {
+                        candidates.push_back(i);
+                        std::cout << "picked " << i << " for mutation " << std::endl;
+                    }
+
+                }
+            }
+
+            //! level 0 doesnt work, rest works nicely! :)
+            // perform V-Cycle on these individuals
+            //#pragma omp parallel for num_threads(num_cpu_threads)
+            for(size_t i = 0; i < candidates.size(); ++i) {
+                size_t id = candidates[i];
+                size_t tid = 0;// static_cast<size_t>(omp_get_thread_num());
+
+                mutate_individual(
+                    solutions[level % 2][id],
+                    graphs.back(),
+                    k,
+                    config.imbalance,
+                    config.seed,
+                    true,
+                    mem_stacks[tid],
+                    exec_spaces[tid]
+                );
+
+                if (graphs.back().uniform_edge_weights) {
+                    curr_edge_cut[ id ] = edge_cut<true>(graphs.back(), solutions[level % 2][ id ], exec_spaces[tid]);
+                } else {
+                    curr_edge_cut[ id ] = edge_cut<false>(graphs.back(), solutions[level % 2][ id ], exec_spaces[tid]);
+                }
+
+                curr_max_block_weight[ id ] = max_weight(solutions[level % 2][ id ], exec_spaces[tid]);
+
+
+
+
+            }
+            return;
+        }
+
+
 
 
         void UpdatePopulation(
