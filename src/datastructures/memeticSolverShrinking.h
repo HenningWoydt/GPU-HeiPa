@@ -75,6 +75,7 @@ namespace GPU_HeiPa {
 
         u32 max_level = 0;
         f32 inactive_percentile = 0.1; // in this percentile of levels, the crossover will not be performed
+        f32 mutation_percentile = 0.1; // start performing mutations after this threshold
 
         // configurable via MemeticConfiguration
         size_t num_cpu_threads = 4;
@@ -123,6 +124,7 @@ namespace GPU_HeiPa {
         f64 uncontraction_ms = 0.0;
         f64 refinement_ms = 0.0;
         f64 memetic_ms = 0.0;
+        f64 mutation_ms = 0.0;
 
         struct level_info {
             u32 level;
@@ -141,6 +143,7 @@ namespace GPU_HeiPa {
             f64 t_uncontraction;
             f64 t_refinement;
             f64 t_memetic;
+            f64 t_mutation;
         };
 
         #if ENABLE_PROFILER
@@ -198,6 +201,8 @@ namespace GPU_HeiPa {
             tournament_size = config.tournament_size;
             reduction_factor = config.reduction_factor;
             inactive_percentile = config.inactive_percentile;
+            mutation_percentile = config.mutation_percentile;
+            mutation_rate = config.mutation_rate;
 
             if (config.population_management == "steadystate") {
                 pop_management = PopulationManagement::steadystate;
@@ -353,10 +358,10 @@ namespace GPU_HeiPa {
                                           10 * (size_t) host_g.m * sizeof(vertex_t);
 
             size_t bytes_for_a_partition_stack = (3) * (reduction_factor / 2) * (size_t) host_g.n * sizeof(vertex_t) +
-                                                 8 * (size_t) host_g.m * sizeof(vertex_t);
+                                                 (8 + (num_crossovers / 2) )  * (size_t) host_g.m * sizeof(vertex_t);
 
-            size_t bytes_for_a_cpu_thread_stack = 8 * (size_t) host_g.n * sizeof(vertex_t) +
-                                                  8 * (size_t) host_g.m * sizeof(vertex_t);
+            size_t bytes_for_a_cpu_thread_stack = 12 * (size_t) host_g.n * sizeof(vertex_t) +
+                                                  12 * (size_t) host_g.m * sizeof(vertex_t);
 
 
             //! use this for the coarsening and mapping and stuff
@@ -488,6 +493,8 @@ namespace GPU_HeiPa {
                 std::cout << "distance mode     : " << config.distance << std::endl;
                 std::cout << "population mgmt   : " << config.population_management << std::endl;
                 std::cout << "inactive percentile: " << inactive_percentile << std::endl;
+                std::cout << "mutation percentile: " << mutation_percentile << std::endl;
+                std::cout << "mutation rate      : " << mutation_rate << std::endl;
                 std::cout << "leftover strategy : " << config.leftover_strategy << std::endl;
                 std::cout << "alpha             : " << config.alpha << std::endl;
                 std::cout << "extent            : " << config.extent << std::endl;
@@ -511,6 +518,7 @@ namespace GPU_HeiPa {
                 std::cout << "Uncontraction     : " << uncontraction_ms << std::endl;
                 std::cout << "Refinement        : " << refinement_ms << std::endl;
                 std::cout << "Memetic stuff     : " << memetic_ms << std::endl;
+                std::cout << "Mutations         : " << mutation_ms << std::endl;
                 std::cout << "Down/Upload       : " << down_up_load_ms << std::endl;
                 std::cout << "Misc              : " << misc_ms << std::endl;
                 std::cout << "ALL               : " << coarsening_ms + contraction_ms + initial_partitioning_ms + uncontraction_ms + refinement_ms + memetic_ms + down_up_load_ms + misc_ms << std::endl;
@@ -616,6 +624,7 @@ namespace GPU_HeiPa {
                     active_b.push_back(true);
                 }
 
+                //std::cout << "init part: " << std::endl;
                 #pragma omp parallel for num_threads(num_cpu_threads)
                 for (size_t i = 0; i < num_individuals; ++i) {
                     size_t tid = static_cast<size_t>(omp_get_thread_num());
@@ -645,7 +654,7 @@ namespace GPU_HeiPa {
             while (!mappings.empty()) {
                 level -= 1;
 
-
+               // std::cout << "level: " << level << std::endl;
                 {
                     // scope for uncontraction
                     auto p = get_time_point();
@@ -676,7 +685,7 @@ namespace GPU_HeiPa {
                         solutions[level % 2].push_back(initialize_partition(curr_partition_size, k, lmax, mem_stacks[stack_ids[level % 2]], exec_spaces[0]));
                     }
 
-
+                    //std::cout << "uncontract: " << std::endl;
                     #pragma omp parallel for num_threads(num_cpu_threads)
                     for (size_t i = 0; i < count_active; ++i) {
                         size_t tid = static_cast<size_t>(omp_get_thread_num());
@@ -718,6 +727,7 @@ namespace GPU_HeiPa {
                 {
                     //scope for refinement
                     auto p = get_time_point();
+                    //std::cout << "refine: " << std::endl;
 
                     #pragma omp parallel for num_threads(num_cpu_threads)
                     for (size_t i = 0; i < count_active; ++i) {
@@ -742,6 +752,7 @@ namespace GPU_HeiPa {
 
                 {
                     auto p = get_time_point();
+                    //std::cout << "memetic: " << std::endl;
                     if (
                         (parents_curr >= tournament_size) && 
                         ( ( static_cast<f32>(level) / static_cast<f32>(max_level) ) >= inactive_percentile  )) {
@@ -758,17 +769,24 @@ namespace GPU_HeiPa {
 
                 control_size(level);
 
-
+                // mutate comes after control size right now, because 
+                // i dont want to recompute distances!
                 {
-                   if( ( static_cast<f32>(level) / static_cast<f32>(max_level) ) < inactive_percentile  ) {
+                    //std::cout << "mutation: " << std::endl;
+                   auto p = get_time_point();
+                   if( ( static_cast<f32>(level) / static_cast<f32>(max_level) ) < mutation_percentile  ) {
 
-                    mutate(level, mem_stacks);
+                        mutate(level, mem_stacks);
 
                     }
-
+                    mutation_ms +=  get_milli_seconds(p, get_time_point());
+                    
+                    #if ENABLE_PROFILER
+                    level_infos[level].t_mutation = get_milli_seconds(p, get_time_point());
+                    #endif
 
                 }
-
+                //std::cout << "" << std::endl;
 
                 #if ENABLE_PROFILER
                 //! übergangslösung
@@ -1101,7 +1119,7 @@ namespace GPU_HeiPa {
 
         void mutate(u32 level,  std::vector<KokkosMemoryStack> &mem_stacks) {
 
-            std::cout << "this is level: " << level << std::endl;
+            // std::cout << "this is level: " << level << std::endl;
 
             // select individuals for mutation
             std::vector<size_t> candidates;
@@ -1112,7 +1130,7 @@ namespace GPU_HeiPa {
                     f32 probability = static_cast<f32>(rand() % 101) / 100.0f;
                     if(probability >= mutation_rate) {
                         candidates.push_back(i);
-                        std::cout << "picked " << i << " for mutation " << std::endl;
+                        // std::cout << "picked " << i << " for mutation " << std::endl;
                     }
 
                 }

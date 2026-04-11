@@ -70,6 +70,8 @@ namespace GPU_HeiPa {
             {"--num-parents", "", "Number of parents for crossover.", "2", "", false},
             {"--tournament-size", "", "Tournament size for selection.", "2", "", false},
             {"--inactive-percentile", "", "Disable crossover below this normalized level percentile in range [0, 1].", "0.1", "", false},
+            {"--mutation-percentile", "", "Enable mutation below this normalized level percentile in range [0, 1].", "0.1", "", false},
+            {"--mutation-rate", "", "Mutation probability threshold in range [0, 1].", "0.5", "", false},
         };
 
     public:
@@ -100,6 +102,8 @@ namespace GPU_HeiPa {
         u32 num_parents = 2;
         u32 tournament_size = 2;
         f32 inactive_percentile = 0.1f;
+        f32 mutation_percentile = 0.1f;
+        f32 mutation_rate = 0.5f;
 
         MemeticConfiguration() = default;
 
@@ -172,6 +176,12 @@ namespace GPU_HeiPa {
             }
             if (is_set("--inactive-percentile")) {
                 inactive_percentile = (f32) std::stof(get("--inactive-percentile"));
+            }
+            if (is_set("--mutation-percentile")) {
+                mutation_percentile = (f32) std::stof(get("--mutation-percentile"));
+            }
+            if (is_set("--mutation-rate")) {
+                mutation_rate = (f32) std::stof(get("--mutation-rate"));
             }
 
             validate_memetic_parameters();
@@ -309,6 +319,18 @@ namespace GPU_HeiPa {
                 inactive_percentile = 0.1f;
             }
 
+            if (mutation_percentile < 0.0f || mutation_percentile > 1.0f) {
+                std::cerr << "Warning: mutation_percentile (" << mutation_percentile
+                        << ") is outside [0, 1], setting to 0.1." << std::endl;
+                mutation_percentile = 0.1f;
+            }
+
+            if (mutation_rate < 0.0f || mutation_rate > 1.0f) {
+                std::cerr << "Warning: mutation_rate (" << mutation_rate
+                        << ") is outside [0, 1], setting to 0.5." << std::endl;
+                mutation_rate = 0.5f;
+            }
+
             if (extent < 1) {
                 std::cerr << "Warning: extent is < 1, setting to 1." << std::endl;
                 extent = 1;
@@ -346,6 +368,8 @@ namespace GPU_HeiPa {
             s += tabs + to_JSON_MACRO(num_parents);
             s += tabs + to_JSON_MACRO(tournament_size);
             s += tabs + to_JSON_MACRO(inactive_percentile);
+            s += tabs + to_JSON_MACRO(mutation_percentile);
+            s += tabs + to_JSON_MACRO(mutation_rate);
 
             s.pop_back();
             s.pop_back();
