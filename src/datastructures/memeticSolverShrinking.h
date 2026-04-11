@@ -975,7 +975,7 @@ namespace GPU_HeiPa {
         }
 
         f64 determine_goodness_score(size_t id, u32 level) {
-            if ( ( static_cast<f32>(level) / static_cast<f32>(max_level) ) >= inactive_percentile  ) {
+            if ( (parents_curr >= tournament_size) && (( static_cast<f32>(level) / static_cast<f32>(max_level) ) >= inactive_percentile )  ) {
                 f64 BETA = 0.08 * graphs.back().n;
                 return (curr_edge_cut[id] + BETA / min_distances[id]);
             } else {
@@ -1128,7 +1128,7 @@ namespace GPU_HeiPa {
                 if (active_b[i]) {
 
                     f32 probability = static_cast<f32>(rand() % 101) / 100.0f;
-                    if(probability >= mutation_rate) {
+                    if(probability <= mutation_rate) {
                         candidates.push_back(i);
                         // std::cout << "picked " << i << " for mutation " << std::endl;
                     }
