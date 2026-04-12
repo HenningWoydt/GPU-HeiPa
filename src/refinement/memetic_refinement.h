@@ -660,7 +660,7 @@ namespace GPU_HeiPa {
 
         Kokkos::deep_copy(exec_space, parent_ids_device, Kokkos::View<const int *>(parent_ids.data(), parent_ids.size()));
         Kokkos::deep_copy(exec_space, population_device, Kokkos::View<const Partition *>(population.data(), population.size()));
-        
+        exec_space.fence();        
 
         partition_t k_prime = next_power_of_two(k);
         u32 num_bits = bits_needed(k_prime);

@@ -1087,13 +1087,13 @@ namespace GPU_HeiPa {
                 Graph &cur = graphs.back();
                 std::pair<weight_t, weight_t> pair;
                 if (cur.uniform_vertex_weights && cur.uniform_edge_weights) {
-                    pair = jet_refine<true, true>(cur, solutions[level % 2][parents_curr + i], k, lmax, use_ultra, level,                                       curr_edge_cut[parents_curr + i], curr_max_block_weight[parents_curr + i], mem_stacks[tid], exec_spaces[tid]);
+                    pair = jet_refine<true, true>(cur, solutions[level % 2][parents_curr + i], k, lmax, use_ultra, level, curr_edge_cut[parents_curr + i], curr_max_block_weight[parents_curr + i], mem_stacks[tid], exec_spaces[tid]);
                 } else if (cur.uniform_vertex_weights) {
-                    pair = jet_refine<true, false>(cur, solutions[level % 2][parents_curr + i], k, lmax, use_ultra, level,                                       curr_edge_cut[parents_curr + i], curr_max_block_weight[parents_curr + i], mem_stacks[tid], exec_spaces[tid]);
+                    pair = jet_refine<true, false>(cur, solutions[level % 2][parents_curr + i], k, lmax, use_ultra, level,curr_edge_cut[parents_curr + i], curr_max_block_weight[parents_curr + i], mem_stacks[tid], exec_spaces[tid]);
                 } else if (cur.uniform_edge_weights) {
-                    pair = jet_refine<false, true>(cur, solutions[level % 2][parents_curr + i], k, lmax, use_ultra, level,                                       curr_edge_cut[parents_curr + i], curr_max_block_weight[parents_curr + i], mem_stacks[tid], exec_spaces[tid]);
+                    pair = jet_refine<false, true>(cur, solutions[level % 2][parents_curr + i], k, lmax, use_ultra, level,curr_edge_cut[parents_curr + i], curr_max_block_weight[parents_curr + i], mem_stacks[tid], exec_spaces[tid]);
                 } else {
-                    pair = jet_refine<false, false>(cur,solutions[level % 2][parents_curr + i], k, lmax, use_ultra, level,                                       curr_edge_cut[parents_curr + i], curr_max_block_weight[parents_curr + i], mem_stacks[tid], exec_spaces[tid]);
+                    pair = jet_refine<false, false>(cur,solutions[level % 2][parents_curr + i], k, lmax, use_ultra, level,curr_edge_cut[parents_curr + i], curr_max_block_weight[parents_curr + i], mem_stacks[tid], exec_spaces[tid]);
                 }
 
                 //auto pair = jet_refine(graphs.back(), solutions[level % 2][parents_curr + i], k, lmax, use_ultra, level,                                       curr_edge_cut[parents_curr + i], curr_max_block_weight[parents_curr + i], mem_stacks[tid], exec_spaces[tid]);

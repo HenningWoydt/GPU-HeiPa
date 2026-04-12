@@ -100,6 +100,7 @@ namespace GPU_HeiPa {
             bc.weights = UnmanagedDeviceWeight((weight_t *) get_chunk_back(mem_stack, sizeof(weight_t) * bc.size), bc.size);
             Kokkos::deep_copy(exec_space, bc.ids, NULL_PART);
             Kokkos::deep_copy(exec_space, bc.weights, 0);
+            exec_space.fence();
 
             KOKKOS_PROFILE_FENCE(exec_space);
         }
@@ -217,7 +218,7 @@ namespace GPU_HeiPa {
 
             round += 1;
             u32 total_moves = (u32) moves.extent(0);
-            Kokkos::parallel_for("mark", Kokkos::TeamPolicy((int) total_moves, Kokkos::AUTO), KOKKOS_LAMBDA(const Kokkos::TeamPolicy<>::member_type &t) {
+            Kokkos::parallel_for("mark", Kokkos::TeamPolicy(exec_space, (int) total_moves, Kokkos::AUTO), KOKKOS_LAMBDA(const Kokkos::TeamPolicy<>::member_type &t) {
                 u32 i = (u32) t.league_rank();
                 vertex_t u = moves(i);
                 moved_round(u) = round;
@@ -230,7 +231,7 @@ namespace GPU_HeiPa {
         {
             ScopedTimer _t("refinement", "JetLabelPropagation", "update_large_rebuild");
 
-            Kokkos::parallel_for("rebuild", Kokkos::TeamPolicy<DeviceExecutionSpace>((int) g.n, Kokkos::AUTO).set_scratch_size(0, Kokkos::PerTeam(partition.k * sizeof(weight_t) + partition.k * sizeof(partition_t) + 4 * sizeof(partition_t))), KOKKOS_LAMBDA(const Kokkos::TeamPolicy<DeviceExecutionSpace>::member_type &t) {
+            Kokkos::parallel_for("rebuild", Kokkos::TeamPolicy<DeviceExecutionSpace>(exec_space, (int) g.n, Kokkos::AUTO).set_scratch_size(0, Kokkos::PerTeam(partition.k * sizeof(weight_t) + partition.k * sizeof(partition_t) + 4 * sizeof(partition_t))), KOKKOS_LAMBDA(const Kokkos::TeamPolicy<DeviceExecutionSpace>::member_type &t) {
                 vertex_t u = (vertex_t) t.league_rank();
 
                 bool needs_update = false;
