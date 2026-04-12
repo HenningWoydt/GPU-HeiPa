@@ -491,6 +491,7 @@ namespace GPU_HeiPa {
                 std::cout << "imbalance         : " << config.imbalance << std::endl;
                 std::cout << "Lmax              : " << lmax << std::endl;
                 std::cout << "distance mode     : " << config.distance << std::endl;
+                std::cout << "crossover mode    : " << config.crossover_mode << std::endl;
                 std::cout << "population mgmt   : " << config.population_management << std::endl;
                 std::cout << "inactive percentile: " << inactive_percentile << std::endl;
                 std::cout << "mutation percentile: " << mutation_percentile << std::endl;
@@ -1014,34 +1015,60 @@ namespace GPU_HeiPa {
                 }
 
                  if (graphs.back().uniform_edge_weights) {
-                    backbone_based_crossover<true>(
-                         solutions[level % 2][parents_curr + i],
-                         graphs.back(),
-                         parent_ids,
-                         solutions[level % 2],
-                         k,
-                         lmax,
-                         mem_stacks[tid],
-                         config.leftover_strategy,
-                         config.alpha,
-                         config.extent,
-                         exec_spaces[tid]
+                    if (config.crossover_mode == "paper") {
+                        const u64 local_seed = config.seed ^ (static_cast<u64>(level) << 32) ^ static_cast<u64>(i + 1);
+                        backbone_based_crossover_paper_cpu<true>(
+                            solutions[level % 2][parents_curr + i],
+                            graphs.back(),
+                            parent_ids,
+                            solutions[level % 2],
+                            k,
+                            exec_spaces[tid],
+                            local_seed
                         );
+                    } else {
+                        backbone_based_crossover<true>(
+                             solutions[level % 2][parents_curr + i],
+                             graphs.back(),
+                             parent_ids,
+                             solutions[level % 2],
+                             k,
+                             lmax,
+                             mem_stacks[tid],
+                             config.leftover_strategy,
+                             config.alpha,
+                             config.extent,
+                             exec_spaces[tid]
+                            );
+                    }
                         
                 }else{
-                     backbone_based_crossover<false>(
-                         solutions[level % 2][parents_curr + i],
-                         graphs.back(),
-                         parent_ids,
-                         solutions[level % 2],
-                         k,
-                         lmax,
-                         mem_stacks[tid],
-                         config.leftover_strategy,
-                         config.alpha,
-                         config.extent,
-                         exec_spaces[tid]
+                    if (config.crossover_mode == "paper") {
+                        const u64 local_seed = config.seed ^ (static_cast<u64>(level) << 32) ^ static_cast<u64>(i + 1);
+                        backbone_based_crossover_paper_cpu<false>(
+                            solutions[level % 2][parents_curr + i],
+                            graphs.back(),
+                            parent_ids,
+                            solutions[level % 2],
+                            k,
+                            exec_spaces[tid],
+                            local_seed
                         );
+                    } else {
+                        backbone_based_crossover<false>(
+                             solutions[level % 2][parents_curr + i],
+                             graphs.back(),
+                             parent_ids,
+                             solutions[level % 2],
+                             k,
+                             lmax,
+                             mem_stacks[tid],
+                             config.leftover_strategy,
+                             config.alpha,
+                             config.extent,
+                             exec_spaces[tid]
+                            );
+                    }
                     
 
                 }

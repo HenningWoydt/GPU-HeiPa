@@ -428,6 +428,7 @@ namespace GPU_HeiPa {
                 std::cout << "imbalance         : " << config.imbalance << std::endl;
                 std::cout << "Lmax              : " << lmax << std::endl;
                 std::cout << "distance mode     : " << config.distance << std::endl;
+                std::cout << "crossover mode    : " << config.crossover_mode << std::endl;
                 std::cout << "population mgmt   : " << config.population_management << std::endl;
                 std::cout << "leftover strategy : " << config.leftover_strategy << std::endl;
                 std::cout << "alpha             : " << config.alpha << std::endl;
@@ -850,35 +851,59 @@ namespace GPU_HeiPa {
                     ScopedTimer _t("memetic", "memetic_refinement", "create offspring");
 
                     if (graphs.back().uniform_edge_weights) {
-
-                        backbone_based_crossover<true>(
-                            offspring,
-                            graphs.back(),
-                            parent_ids,
-                            partitions,
-                            k,
-                            lmax,
-                            mem_stacks[partition_stack],
-                            config.leftover_strategy,
-                            config.alpha,
-                            config.extent,
-                            exec_spaces[0]
-                        );
+                        if (config.crossover_mode == "paper") {
+                            const u64 local_seed = config.seed ^ (static_cast<u64>(level) << 32) ^ static_cast<u64>(i + 1);
+                            backbone_based_crossover_paper_cpu<true>(
+                                offspring,
+                                graphs.back(),
+                                parent_ids,
+                                partitions,
+                                k,
+                                exec_spaces[0],
+                                local_seed
+                            );
+                        } else {
+                            backbone_based_crossover<true>(
+                                offspring,
+                                graphs.back(),
+                                parent_ids,
+                                partitions,
+                                k,
+                                lmax,
+                                mem_stacks[partition_stack],
+                                config.leftover_strategy,
+                                config.alpha,
+                                config.extent,
+                                exec_spaces[0]
+                            );
+                        }
                     }else{
-
-                        backbone_based_crossover<false>(
-                            offspring,
-                            graphs.back(),
-                            parent_ids,
-                            partitions,
-                            k,
-                            lmax,
-                            mem_stacks[partition_stack],
-                            config.leftover_strategy,
-                            config.alpha,
-                            config.extent,
-                            exec_spaces[0]
-                        );
+                        if (config.crossover_mode == "paper") {
+                            const u64 local_seed = config.seed ^ (static_cast<u64>(level) << 32) ^ static_cast<u64>(i + 1);
+                            backbone_based_crossover_paper_cpu<false>(
+                                offspring,
+                                graphs.back(),
+                                parent_ids,
+                                partitions,
+                                k,
+                                exec_spaces[0],
+                                local_seed
+                            );
+                        } else {
+                            backbone_based_crossover<false>(
+                                offspring,
+                                graphs.back(),
+                                parent_ids,
+                                partitions,
+                                k,
+                                lmax,
+                                mem_stacks[partition_stack],
+                                config.leftover_strategy,
+                                config.alpha,
+                                config.extent,
+                                exec_spaces[0]
+                            );
+                        }
                     }
 
                     assert_state_after_partition(graphs.back(), offspring, config.k, exec_spaces[0]);

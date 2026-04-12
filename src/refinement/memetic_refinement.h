@@ -8,6 +8,8 @@
 #include <random>
 #include <vector>
 #include <algorithm>
+#include <limits>
+#include <cmath>
 #include <Kokkos_Random.hpp>
 
 #include "../utility/definitions.h"
@@ -394,6 +396,241 @@ namespace GPU_HeiPa {
     //! -------------------------------------------------------------------------------------------------
     //! --------------------------- crossover: ----------------------------------------------------------
     //! -------------------------------------------------------------------------------------------------
+
+    template<bool uniform_vw>
+    inline void backbone_based_crossover_paper_cpu(
+        Partition &child,
+        const Graph &graph,
+        const std::vector<int> &parent_ids,
+        const std::vector<Partition> &population,
+        partition_t k,
+        DeviceExecutionSpace &exec_space,
+        u64 seed = 0
+    ) {
+        const size_t p = parent_ids.size();
+        if (p == 0 || k == 0 || graph.n == 0) {
+            return;
+        }
+
+        const partition_t REMOVED = NO_BLOCK_ID;
+        const weight_t total_weight = uniform_vw ? static_cast<weight_t>(graph.n) : graph.g_weight;
+        const weight_t w_opt = static_cast<weight_t>(std::ceil(static_cast<f64>(total_weight) / static_cast<f64>(k)));
+        const u32 max_picks_per_parent = static_cast<u32>((k + static_cast<partition_t>(p) - 1) / static_cast<partition_t>(p));
+
+        std::mt19937_64 rng(seed == 0 ? std::random_device{}() : seed);
+        std::uniform_real_distribution<f64> uni01(0.0, 1.0);
+
+        std::vector<HostPartition> parent_maps;
+        parent_maps.reserve(p);
+        for (size_t pi = 0; pi < p; ++pi) {
+            HostPartition hp("paper_bbc_parent_map", graph.n);
+            Kokkos::deep_copy(exec_space, hp, population[parent_ids[pi]].map);
+            parent_maps.push_back(hp);
+        }
+
+        HostWeight host_vertex_weights;
+        if (!uniform_vw) {
+            host_vertex_weights = HostWeight("paper_bbc_vertex_weights", graph.n);
+            Kokkos::deep_copy(exec_space, host_vertex_weights, graph.weights);
+        }
+        exec_space.fence();
+
+        auto vw = [&](vertex_t v) -> weight_t {
+            return uniform_vw ? 1 : host_vertex_weights(v);
+        };
+
+        std::vector<std::vector<partition_t> > labels(p, std::vector<partition_t>(graph.n, REMOVED));
+        std::vector<std::vector<weight_t> > subset_weights(p, std::vector<weight_t>(k, 0));
+        std::vector<u32> picked_count(p, 0);
+
+        for (size_t pi = 0; pi < p; ++pi) {
+            for (vertex_t v = 0; v < graph.n; ++v) {
+                partition_t b = parent_maps[pi](v);
+                labels[pi][v] = b;
+                if (b < k) {
+                    subset_weights[pi][b] += vw(v);
+                }
+            }
+        }
+
+        std::vector<partition_t> child_map(graph.n, REMOVED);
+        std::vector<weight_t> child_bweights(k, 0);
+
+        //! ---------- setup done ------------
+
+        for (partition_t mu = 0; mu < k; ++mu) {
+            // ! ----------- start step 1 ------------
+            weight_t best_w = std::numeric_limits<weight_t>::lowest();
+            size_t best_parent = 0;
+            partition_t best_subset = 0;
+            bool found = false;
+
+            // understandable have a good day
+            for (size_t pi = 0; pi < p; ++pi) {
+                if (picked_count[pi] >= max_picks_per_parent) {
+                    continue;
+                }
+                for (partition_t b = 0; b < k; ++b) {
+                    if (subset_weights[pi][b] > best_w) {
+                        best_w = subset_weights[pi][b]; //! richtig initialisiert?
+                        best_parent = pi;
+                        best_subset = b;
+                        found = true;
+                    }
+                }
+            }
+
+            if (!found || best_w <= 0) {
+                break;
+            }
+
+            std::vector<vertex_t> selected_vertices; //! this is S_i,j from the paper
+            selected_vertices.reserve(graph.n);
+            for (vertex_t v = 0; v < graph.n; ++v) {
+                if (labels[best_parent][v] == best_subset) {
+                    selected_vertices.push_back(v);
+                }
+            }
+
+            // ! ----------- finished step 1 ------------
+
+            std::vector<partition_t> best_match_subset(p, REMOVED);
+            for (size_t pt = 0; pt < p; ++pt) {
+                if (pt == best_parent) {
+                    continue;
+                }
+
+                // count where the vertices lie in the other parent
+                // basically create intersection-sizes for all subsets of pt with the selected subset S_i,j
+                std::vector<u32> overlap(k, 0);
+                for (vertex_t v: selected_vertices) {
+                    partition_t b = labels[pt][v];
+                    if (b < k) {
+                        overlap[b] += 1; //? should this be 1 or the vertex-weight?
+                    }
+                }
+
+                // determine maximum
+                u32 best_overlap = 0;
+                partition_t best_b = 0;
+                for (partition_t b = 0; b < k; ++b) {
+                    if (overlap[b] > best_overlap) {
+                        best_overlap = overlap[b];
+                        best_b = b;
+                    }
+                }
+                // save the best intersecting subset
+                best_match_subset[pt] = best_b;
+            }
+
+            std::vector<u8> in_intersection(graph.n, 0);
+            std::vector<vertex_t> s_mu;
+            s_mu.reserve(selected_vertices.size());
+
+            for (vertex_t v: selected_vertices) {
+                bool inside = true;
+                for (size_t pt = 0; pt < p; ++pt) {
+                    if (pt == best_parent) {
+                        continue;
+                    }
+                    if (labels[pt][v] != best_match_subset[pt]) {
+                        inside = false;
+                        break;
+                    }
+                }
+
+                if (inside) {
+                    in_intersection[v] = 1;
+                    s_mu.push_back(v);
+                }
+            }
+
+            //! ------------ finished step 2 important stuff -----------------
+
+            for (vertex_t v: selected_vertices) {
+                if (in_intersection[v]) {
+                    continue;
+                }
+
+                u32 occur = 0;
+                for (size_t pt = 0; pt < p; ++pt) {
+                    if (pt == best_parent) {
+                        continue;
+                    }
+                    if (labels[pt][v] == best_match_subset[pt]) {
+                        occur += 1;
+                    }
+                }
+
+                const f64 acceptance = (p > 1) ? (static_cast<f64>(occur) / static_cast<f64>(p - 1)) : 1.0;
+                if (acceptance >= uni01(rng)) {
+                    s_mu.push_back(v);
+                }
+            }
+            //! ------------ finished step 2 random assignment -----------------
+
+            for (vertex_t v: s_mu) {
+                child_map[v] = mu;
+                child_bweights[mu] += vw(v);
+            }
+
+            picked_count[best_parent] += 1;
+
+            for (vertex_t v: s_mu) {
+                for (size_t pi = 0; pi < p; ++pi) {
+                    partition_t old_b = labels[pi][v];
+                    if (old_b < k) {
+                        subset_weights[pi][old_b] -= vw(v);
+                        labels[pi][v] = REMOVED;
+                    }
+                }
+            }
+        }
+
+        for (vertex_t v = 0; v < graph.n; ++v) {
+            if (child_map[v] != REMOVED) {
+                continue;
+            }
+
+            const weight_t w = vw(v);
+            std::vector<partition_t> feasible;
+            feasible.reserve(k);
+            for (partition_t b = 0; b < k; ++b) {
+                if (child_bweights[b] + w <= w_opt) {
+                    feasible.push_back(b);
+                }
+            }
+
+            partition_t target = 0;
+            if (!feasible.empty()) {
+                std::uniform_int_distribution<size_t> dis(0, feasible.size() - 1);
+                target = feasible[dis(rng)];
+            } else {
+                for (partition_t b = 1; b < k; ++b) {
+                    if (child_bweights[b] < child_bweights[target]) {
+                        target = b;
+                    }
+                }
+            }
+
+            child_map[v] = target;
+            child_bweights[target] += w;
+        }
+
+        HostPartition host_child_map("paper_bbc_child_map", graph.n);
+        HostWeight host_child_bweights("paper_bbc_child_bweights", k);
+
+        for (vertex_t v = 0; v < graph.n; ++v) {
+            host_child_map(v) = child_map[v];
+        }
+        for (partition_t b = 0; b < k; ++b) {
+            host_child_bweights(b) = child_bweights[b];
+        }
+
+        Kokkos::deep_copy(exec_space, child.map, host_child_map);
+        Kokkos::deep_copy(exec_space, child.bweights, host_child_bweights);
+        exec_space.fence();
+    }
 
 
     template<bool uniform_vw>

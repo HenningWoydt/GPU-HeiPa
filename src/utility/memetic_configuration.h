@@ -56,6 +56,7 @@ namespace GPU_HeiPa {
             {"--imbalance", "-e", "Allowed imbalance (for example 0.03).", "0.03", "", false},
             {"--config", "-c", "Broad Config.", "", "", false},
             {"--distance", "", "Distance computation mode: exact or sampled.", "exact", "", false},
+            {"--crossover-mode", "", "Crossover mode: signature (current) or paper (BBC from paper).", "signature", "", false},
             {"--leftover-strategy", "", "Leftover distribution strategy: random, balanced, gain, mixed.", "mixed", "", false},
             {"--alpha", "", "Alpha parameter for mixed leftover strategy.", "100.0", "", false},
             {"--extent", "", "Extent parameter for backbone crossover in range [1, k].", "1", "", false},
@@ -84,6 +85,7 @@ namespace GPU_HeiPa {
 
         std::string config;
         std::string distance = "exact";
+        std::string crossover_mode = "signature";
         std::string leftover_strategy = "mixed";
         f64 alpha = 100.0;
         partition_t extent = 1;
@@ -136,6 +138,7 @@ namespace GPU_HeiPa {
             imbalance = std::stod(get("--imbalance"));
             config = get("--config");
             distance = get("--distance");
+            crossover_mode = get("--crossover-mode");
             leftover_strategy = get("--leftover-strategy");
             alpha = std::stod(get("--alpha"));
             extent = (partition_t) std::stoul(get("--extent"));
@@ -231,6 +234,18 @@ namespace GPU_HeiPa {
                 std::cerr << "Warning: distance mode \"" << distance
                         << "\" is invalid. Falling back to \"exact\"." << std::endl;
                 distance = "exact";
+            }
+
+            for (char &c: crossover_mode) {
+                c = (char) std::tolower((unsigned char) c);
+            }
+            if (crossover_mode == "paper_bbc" || crossover_mode == "paperbbc") {
+                crossover_mode = "paper";
+            }
+            if (crossover_mode != "signature" && crossover_mode != "paper") {
+                std::cerr << "Warning: crossover mode \"" << crossover_mode
+                        << "\" is invalid. Falling back to \"signature\"." << std::endl;
+                crossover_mode = "signature";
             }
 
             for (char &c: leftover_strategy) {
