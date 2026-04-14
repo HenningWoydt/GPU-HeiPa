@@ -231,7 +231,7 @@ namespace GPU_HeiPa {
         {
             ScopedTimer _t("refinement", "JetLabelPropagation", "update_large_rebuild");
 
-            Kokkos::parallel_for("rebuild", Kokkos::TeamPolicy<DeviceExecutionSpace>(exec_space, (int) g.n, Kokkos::AUTO).set_scratch_size(0, Kokkos::PerTeam(partition.k * sizeof(weight_t) + partition.k * sizeof(partition_t) + 4 * sizeof(partition_t))), KOKKOS_LAMBDA(const Kokkos::TeamPolicy<DeviceExecutionSpace>::member_type &t) {
+            
             Kokkos::parallel_for("rebuild", Kokkos::TeamPolicy<DeviceExecutionSpace>(exec_space, (int) g.n, Kokkos::AUTO).set_scratch_size(0, Kokkos::PerTeam(partition.k * sizeof(weight_t) + partition.k * sizeof(partition_t) + 4 * sizeof(partition_t))), KOKKOS_LAMBDA(const Kokkos::TeamPolicy<DeviceExecutionSpace>::member_type &t) {
                 vertex_t u = (vertex_t) t.league_rank();
 
@@ -419,8 +419,9 @@ namespace GPU_HeiPa {
             KOKKOS_PROFILE_FENCE(exec_space);
         }
         */
-    }
+        }
 
+    
     template<bool uniform_e_weights>
     inline void update_small(const Graph &g,
                              Partition &partition,
