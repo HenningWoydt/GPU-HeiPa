@@ -261,10 +261,12 @@ namespace GPU_HeiPa {
                bool t_use_ultra,
                Partition &in_partition,
                KokkosMemoryStack &dev_mem_stack,
-               DeviceExecutionSpace &exec_space) {
+               DeviceExecutionSpace &in_exec_space) {
             // Main stack: Graph + coarsening overhead
             ScopedTimer t_init{"hm", "solver", "initialize"};
 
+            this->exec_space = in_exec_space;
+            
             n = dev_g.n;
             m = dev_g.m;
             k = t_k;

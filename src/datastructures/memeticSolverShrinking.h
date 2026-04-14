@@ -1187,12 +1187,12 @@ namespace GPU_HeiPa {
                 }
             }
 
-            //! level 0 doesnt work, rest works nicely! :)
+
             // perform V-Cycle on these individuals
-            //#pragma omp parallel for num_threads(num_cpu_threads)
+            #pragma omp parallel for num_threads(num_cpu_threads)
             for(size_t i = 0; i < candidates.size(); ++i) {
                 size_t id = candidates[i];
-                size_t tid = 0;// static_cast<size_t>(omp_get_thread_num());
+                size_t tid = static_cast<size_t>(omp_get_thread_num());
 
                 mutate_individual(
                     solutions[level % 2][id],
