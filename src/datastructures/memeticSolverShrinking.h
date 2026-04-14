@@ -203,6 +203,7 @@ namespace GPU_HeiPa {
             inactive_percentile = config.inactive_percentile;
             mutation_percentile = config.mutation_percentile;
             mutation_rate = config.mutation_rate;
+            parents_curr = config.num_individuals;
 
             if (config.population_management == "steadystate") {
                 pop_management = PopulationManagement::steadystate;
@@ -633,6 +634,29 @@ namespace GPU_HeiPa {
                 }
 
                 ScopedTimer _t("initial_partitioning", "Partition", "first_stats");
+
+                //!gucken wieviele gleiche partitions es gibt:
+               // determine_min_distances_population(
+               //         graphs.back(),
+               //         solutions[level % 2],
+               //         parents_curr,
+               //         min_distances,
+               //         k,
+               //         mem_stacks,
+               //         exec_spaces,
+               //         num_cpu_threads
+               //     );
+               // 
+               // std::cout << "pop distances: " ;
+               // int zeros = 0;
+               // for(partition_t distance : min_distances) {
+               //     std::cout << distance << " ";
+               //     if ( distance == 0)
+               //         zeros++;
+               // }
+               // std::cout << std::endl;
+               // std::cout << "found " << zeros << " identical solutions " << std::endl;
+
 
                 initial_partitioning_ms += get_milli_seconds(p, get_time_point());
             }
