@@ -50,6 +50,7 @@ namespace GPU_HeiPa {
     class ProMapSolver {
     public:
         ProMapConfiguration config;
+        DeviceExecutionSpace exec_space;
 
         vertex_t n = 0;
         vertex_t m = 0;
@@ -146,7 +147,6 @@ namespace GPU_HeiPa {
         HostPartition solve(HostGraph &host_g) {
             auto sp = get_time_point();
 
-            DeviceExecutionSpace exec_space = DeviceExecutionSpace();
 
             internal_solve(host_g);
 
@@ -156,7 +156,8 @@ namespace GPU_HeiPa {
             {
                 ScopedTimer _t("up/download", "Solver", "download_partition");
                 host_partition = HostPartition(Kokkos::view_alloc(Kokkos::WithoutInitializing, "host_partition"), graphs.back().n);
-                Kokkos::deep_copy(host_partition, partition.map);
+                Kokkos::deep_copy(exec_space, host_partition, partition.map);
+                exec_space.fence("deep_copy host_partition");
             }
             down_upload_ms += get_milli_seconds(p, get_time_point());
 
@@ -247,7 +248,6 @@ namespace GPU_HeiPa {
             const partition_t c = 8;
             const partition_t max_n = c * k;
 
-            DeviceExecutionSpace exec_space = DeviceExecutionSpace();
 
             u32 level = 0;
             while (graphs.back().n > max_n) {
@@ -311,7 +311,6 @@ namespace GPU_HeiPa {
         void initialize(HostGraph &host_g) {
             auto p = get_time_point();
 
-            DeviceExecutionSpace exec_space = DeviceExecutionSpace();
 
             // Main stack: Graph + coarsening overhead
             mem_stack = initialize_kokkos_memory_stack(
@@ -349,7 +348,6 @@ namespace GPU_HeiPa {
         void coarsening(u32 level) {
             auto p = get_time_point();
 
-            DeviceExecutionSpace exec_space = DeviceExecutionSpace();
 
             if (graphs.back().uniform_vertex_weights && graphs.back().uniform_edge_weights) {
                 mappings.emplace_back(two_hop_matcher_get_mapping<true, true>(graphs.back(), partition, lmax, mem_stack, exec_space));
@@ -361,7 +359,7 @@ namespace GPU_HeiPa {
                 mappings.emplace_back(two_hop_matcher_get_mapping<false, false>(graphs.back(), partition, lmax, mem_stack, exec_space));
             }
 
-            Kokkos::fence();
+            exec_space.fence();
             coarsening_ms += get_milli_seconds(p, get_time_point());
 
             #if ENABLE_PROFILER
@@ -374,7 +372,6 @@ namespace GPU_HeiPa {
         void contraction(u32 level) {
             auto p = get_time_point();
 
-            DeviceExecutionSpace exec_space = DeviceExecutionSpace();
 
             const Graph &cur = graphs.back();
             if (cur.uniform_vertex_weights && cur.uniform_edge_weights) {
@@ -388,7 +385,7 @@ namespace GPU_HeiPa {
             }
             contract(partition, mappings.back(), exec_space);
 
-            Kokkos::fence();
+            exec_space.fence();
             contraction_ms += get_milli_seconds(p, get_time_point());
 
             #if ENABLE_PROFILER
@@ -401,7 +398,6 @@ namespace GPU_HeiPa {
         void initial_partitioning() {
             auto p = get_time_point();
 
-            DeviceExecutionSpace exec_space = DeviceExecutionSpace();
 
             global_multisection(graphs.back(), config.hierarchy, k, config.imbalance, config.seed, partition, exec_space);
 
@@ -412,7 +408,7 @@ namespace GPU_HeiPa {
             initial_max_block_weight = max_weight(partition);
             curr_max_block_weight = initial_max_block_weight;
 
-            Kokkos::fence();
+            exec_space.fence();
             initial_partitioning_ms += get_milli_seconds(p, get_time_point());
 
             assert_state_after_partition(graphs.back(), partition, config.k, exec_space);
@@ -421,13 +417,27 @@ namespace GPU_HeiPa {
         void refinement(u32 level) {
             auto p = get_time_point();
 
-            DeviceExecutionSpace exec_space = DeviceExecutionSpace();
 
-            auto pair = ProMap_jet_refine<false, false>(graphs.back(), partition, d_oracle, k, lmax, level, curr_comm_cost, curr_max_block_weight, mem_stack, exec_space);
-            curr_comm_cost = pair.first;
-            curr_max_block_weight = pair.second;
+            Graph &cur = graphs.back();
+            if (cur.uniform_vertex_weights && cur.uniform_edge_weights) {
+                auto pair = ProMap_jet_refine<true, true>(cur, partition, d_oracle, k, lmax, level, curr_comm_cost, curr_max_block_weight, mem_stack, exec_space);
+                curr_comm_cost = pair.first;
+                curr_max_block_weight = pair.second;
+            } else if (cur.uniform_vertex_weights) {
+                auto pair = ProMap_jet_refine<true, false>(cur, partition, d_oracle, k, lmax, level, curr_comm_cost, curr_max_block_weight, mem_stack, exec_space);
+                curr_comm_cost = pair.first;
+                curr_max_block_weight = pair.second;
+            } else if (cur.uniform_edge_weights) {
+                auto pair = ProMap_jet_refine<false, true>(cur, partition, d_oracle, k, lmax, level, curr_comm_cost, curr_max_block_weight, mem_stack, exec_space);
+                curr_comm_cost = pair.first;
+                curr_max_block_weight = pair.second;
+            } else {
+                auto pair = ProMap_jet_refine<false, false>(cur, partition, d_oracle, k, lmax, level, curr_comm_cost, curr_max_block_weight, mem_stack, exec_space);
+                curr_comm_cost = pair.first;
+                curr_max_block_weight = pair.second;
+            }
 
-            Kokkos::fence();
+            exec_space.fence();
             refinement_ms += get_milli_seconds(p, get_time_point());
 
             #if ENABLE_PROFILER
@@ -440,7 +450,6 @@ namespace GPU_HeiPa {
         void uncontraction(u32 level) {
             auto p = get_time_point();
 
-            DeviceExecutionSpace exec_space = DeviceExecutionSpace();
 
             uncontract(partition, mappings.back(), exec_space);
 
@@ -450,7 +459,7 @@ namespace GPU_HeiPa {
             free_mapping(mappings.back(), mem_stack);
             mappings.pop_back();
 
-            Kokkos::fence();
+            exec_space.fence();
             uncontraction_ms += get_milli_seconds(p, get_time_point());
 
             #if ENABLE_PROFILER

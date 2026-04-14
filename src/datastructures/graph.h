@@ -327,7 +327,8 @@ namespace GPU_HeiPa {
                 running += degrees(i);
             });
             u32 temp;
-            Kokkos::deep_copy(temp, Kokkos::subview(coarse_g.neighborhood, coarse_g.n)); // copy final number of edges m
+            Kokkos::deep_copy(exec_space, temp, Kokkos::subview(coarse_g.neighborhood, coarse_g.n)); // copy final number of edges m
+            exec_space.fence();
             coarse_g.m = temp;
 
             KOKKOS_PROFILE_FENCE(exec_space);
