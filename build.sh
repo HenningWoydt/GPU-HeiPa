@@ -2,9 +2,11 @@
 set -euo pipefail
 
 # Parse arguments
-DOWNLOAD_KOKKOS=ON
-MAX_THREADS=""
+# AUTO means: download/build Kokkos only if missing.
+DOWNLOAD_KOKKOS=AUTO
+MAX_THREADS="1"
 KOKKOS_ARCH=""
+DEPS_ONLY=OFF
 
 for arg in "$@"; do
   case "$arg" in
@@ -17,13 +19,26 @@ for arg in "$@"; do
     --kokkos-arch=*)
       KOKKOS_ARCH="${arg#*=}"
       ;;
+    --deps-only=*)
+      DEPS_ONLY="${arg#*=}"
+      ;;
     *)
       echo "Unknown argument: $arg"
-      echo "Usage: $0 [--download-kokkos=ON|OFF] [--max-threads=N] [--kokkos-arch=ARCH]"
+      echo "Usage: $0 [--download-kokkos=AUTO|ON|OFF] [--max-threads=N] [--kokkos-arch=ARCH] [--deps-only=ON|OFF]"
       exit 1
       ;;
   esac
 done
+
+if [[ "$DOWNLOAD_KOKKOS" != "AUTO" && "$DOWNLOAD_KOKKOS" != "ON" && "$DOWNLOAD_KOKKOS" != "OFF" ]]; then
+  echo "Error: --download-kokkos must be AUTO, ON, or OFF"
+  exit 1
+fi
+
+if [[ "$DEPS_ONLY" != "ON" && "$DEPS_ONLY" != "OFF" ]]; then
+  echo "Error: --deps-only must be ON or OFF"
+  exit 1
+fi
 
 BACKEND="Cuda"
 BACKEND_LOWER="$(echo "$BACKEND" | tr '[:upper:]' '[:lower:]')"
@@ -40,6 +55,7 @@ esac
 
 echo "==> Building with backend: ${BACKEND}"
 echo "==> Download Kokkos: ${DOWNLOAD_KOKKOS}"
+echo "==> Dependencies only: ${DEPS_ONLY}"
 
 # ---- detect GPU arch and map to Kokkos flag ----
 detect_kokkos_arch() {
@@ -83,7 +99,7 @@ calc_jobs() {
         || getconf _NPROCESSORS_ONLN 2>/dev/null \
         || sysctl -n hw.ncpu 2>/dev/null \
         || echo 4 )
-  local j=$(( cores - 2 ))
+  local j=$(( 1 ))
   if [ "$j" -lt 1 ]; then j=1; fi
   echo "$j"
 }
@@ -96,11 +112,39 @@ else
 fi
 echo "Building with $JOBS parallel jobs."
 
-ROOT=${PWD}
+SCRIPT_DIR="$(cd "$(dirname "${BASH_SOURCE[0]}")" && pwd)"
+ROOT="${SCRIPT_DIR}"
+cd "${ROOT}"
 GCC=$(which gcc || true)
 
 echo "Root            : ${ROOT}"
 echo "Using C compiler: ${GCC:-<system default>}"
+
+KOKKOS_CONFIG="${ROOT}/extern/local/kokkos/lib/cmake/Kokkos/KokkosConfig.cmake"
+KOKKOS_KERNELS_CONFIG="${ROOT}/extern/local/kokkos-kernels/lib/cmake/KokkosKernels/KokkosKernelsConfig.cmake"
+
+kokkos_installed() {
+  [[ -f "$KOKKOS_CONFIG" && -f "$KOKKOS_KERNELS_CONFIG" ]]
+}
+
+if [[ "$DOWNLOAD_KOKKOS" == "AUTO" ]]; then
+  if kokkos_installed; then
+    DOWNLOAD_KOKKOS=OFF
+    echo "Detected existing Kokkos install under extern/local, reusing it."
+  else
+    DOWNLOAD_KOKKOS=ON
+    echo "No local Kokkos install found, will download and build it now."
+  fi
+fi
+
+if [[ "$DOWNLOAD_KOKKOS" == "OFF" ]] && ! kokkos_installed; then
+  echo "Error: --download-kokkos=OFF but no local Kokkos installation was found."
+  echo "Expected:"
+  echo "  ${KOKKOS_CONFIG}"
+  echo "  ${KOKKOS_KERNELS_CONFIG}"
+  echo "Run once with --download-kokkos=ON (or AUTO) first."
+  exit 1
+fi
 
 if [ "$DOWNLOAD_KOKKOS" = "ON" ]; then
   # ---- Download and build Kokkos dependencies ----
@@ -221,6 +265,11 @@ if [ "$DOWNLOAD_KOKKOS" = "ON" ]; then
   cd "${ROOT}"
 else
   echo "Skipping Kokkos download and build (using existing installation)."
+fi
+
+if [ "$DEPS_ONLY" = "ON" ]; then
+  echo "Dependency setup completed. Skipping GPU-HeiPa target build (--deps-only=ON)."
+  exit 0
 fi
 
 # --- build GPU-HeiPa ---
