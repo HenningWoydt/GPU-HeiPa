@@ -96,15 +96,15 @@ namespace GPU_HeiPa {
 
         std::string device_space;
 
-        size_t num_cpu_threads = 4;
+        size_t num_cpu_threads = 1;
         size_t num_individuals = 20;
         std::string population_management = "shrinking";
-        size_t reduction_factor = 1;
+        size_t reduction_factor = 5;
         u32 num_crossovers = 1;
         u32 num_parents = 2;
         u32 tournament_size = 2;
-        f32 inactive_percentile = 0.1f;
-        f32 mutation_percentile = 0.1f;
+        f32 inactive_percentile = 0.0f;
+        f32 mutation_percentile = 0.2f;
         f32 mutation_rate = 0.5f;
 
         MemeticConfiguration() = default;

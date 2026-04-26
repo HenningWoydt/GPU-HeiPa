@@ -287,7 +287,7 @@ namespace GPU_HeiPa {
         KTStat agg;
     };
 
-    void Profiler::print_table(std::ostream &os,
+    inline void Profiler::print_table(std::ostream &os,
                                int max_funcs_per_group,
                                int max_kernels_per_func,
                                unsigned int name_width,
