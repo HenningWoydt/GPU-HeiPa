@@ -358,8 +358,8 @@ namespace GPU_HeiPa {
             size_t bytes_for_orga_stack = 10 * (size_t) host_g.n * sizeof(vertex_t) +
                                           10 * (size_t) host_g.m * sizeof(vertex_t);
 
-            size_t bytes_for_a_partition_stack = (3) * (reduction_factor / 2) * (size_t) host_g.n * sizeof(vertex_t) +
-                                                 (8 + (num_crossovers / 2) )  * (size_t) host_g.m * sizeof(vertex_t);
+            size_t bytes_for_a_partition_stack = (6) * (reduction_factor / 2) * (size_t) host_g.n * sizeof(vertex_t) +
+                                                 (9 + (num_crossovers / 2) )  * (size_t) host_g.m * sizeof(vertex_t);
 
             size_t bytes_for_a_cpu_thread_stack = 12 * (size_t) host_g.n * sizeof(vertex_t) +
                                                   12 * (size_t) host_g.m * sizeof(vertex_t);
@@ -636,27 +636,38 @@ namespace GPU_HeiPa {
                 ScopedTimer _t("initial_partitioning", "Partition", "first_stats");
 
                 //!gucken wieviele gleiche partitions es gibt:
-               // determine_min_distances_population(
-               //         graphs.back(),
-               //         solutions[level % 2],
-               //         parents_curr,
-               //         min_distances,
-               //         k,
-               //         mem_stacks,
-               //         exec_spaces,
-               //         num_cpu_threads
-               //     );
-               // 
-               // std::cout << "pop distances: " ;
-               // int zeros = 0;
-               // for(partition_t distance : min_distances) {
-               //     std::cout << distance << " ";
-               //     if ( distance == 0)
-               //         zeros++;
-               // }
-               // std::cout << std::endl;
-               // std::cout << "found " << zeros << " identical solutions " << std::endl;
-
+                determine_min_distances_population(
+                        graphs.back(),
+                        solutions[level % 2],
+                        parents_curr,
+                        min_distances,
+                        k,
+                        mem_stacks,
+                        exec_spaces,
+                        num_cpu_threads,
+                        
+                        active_b
+                    );
+               
+            
+                    // 
+                //std::cout << "pop distances: " ;
+                //int zeros = 0;
+                //for(partition_t distance : min_distances) {
+                //    std::cout << distance << " ";
+                //    if ( distance == 0)
+                //        zeros++;
+                //}
+                //std::cout << std::endl;
+                //std::cout << "found " << zeros << " identical solutions " << std::endl;
+//
+                //std::cout << "active individuals: ";
+                //for(size_t i = 0; i < num_individuals; ++i) {
+                //    if(active_b[i]) {
+                //        std::cout << i << " ";
+                //    }
+                //}
+                //std::cout << std::endl;
 
                 initial_partitioning_ms += get_milli_seconds(p, get_time_point());
             }
@@ -1002,7 +1013,11 @@ namespace GPU_HeiPa {
         f64 determine_goodness_score(size_t id, u32 level) {
             if ( (parents_curr >= tournament_size) && (( static_cast<f32>(level) / static_cast<f32>(max_level) ) >= inactive_percentile )  ) {
                 f64 BETA = 0.08 * graphs.back().n;
-                return (curr_edge_cut[id] + BETA / min_distances[id]);
+                const double eps = 1e-9;
+                // (static_cast<f32>(level) / static_cast<f32>(max_level)) * 
+                // add a factor which makes distances less important based on the level?
+                return curr_edge_cut[id] +  ( BETA / (min_distances[id] + eps) );
+                //return (curr_edge_cut[id] + BETA / (min_distances[id] + eps));
             } else {
                 return static_cast<f64>(curr_edge_cut[id]);
             }
@@ -1141,7 +1156,30 @@ namespace GPU_HeiPa {
         // deactivate some bad individuals
         void control_size(u32 level) {
             // fine tune
-            size_t desired_count = (level + 1) * reduction_factor;
+            
+            // Idee 1 um pop size anzupassen
+            // hier wird die population in jedem level um reduction_factor reduziert
+            //size_t desired_count = (level + 1) * reduction_factor;
+
+
+            // Idee 2: prozentual vom level abhängig machen wieviele individuen es gibt
+            // reduction factor sagt hier aus wieviele am Ende überleben sollen
+            // population wird auf diese zahl reduziert
+            //size_t desired_count = ( static_cast<f32>(level) / static_cast<f32>(max_level) ) * ( config.num_individuals - reduction_factor ) + reduction_factor;
+
+
+            // Idee 3: schnellerer abfall
+             size_t desired_count = (  pow(static_cast<f32>(level) / static_cast<f32>(max_level), 2)   * ( config.num_individuals - reduction_factor ) + reduction_factor);
+
+
+            // Idee 4: exponentieller Abfall
+           // size_t desired_count;
+           // if ( count_active / 2 > reduction_factor ) {
+           //     desired_count = count_active / 2;
+           // }else {
+           //     desired_count = reduction_factor;
+           // }
+
 
             while (count_active > desired_count) {
                 size_t worst_id;

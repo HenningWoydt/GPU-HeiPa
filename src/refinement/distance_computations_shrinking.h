@@ -106,6 +106,62 @@ namespace GPU_HeiPa {
         return;
     }
 
+
+    inline void determine_min_distances_population(
+        const Graph &graph,
+        const std::vector<Partition> &population,
+        size_t parents_curr, // amount of non-offspring individuals in the population
+        std::vector<u32> &min_distances,
+        partition_t k,
+        std::vector<KokkosMemoryStack> &mem_stacks,
+        std::vector<DeviceExecutionSpace> &exec_spaces,
+        size_t num_cpu_threads,
+        std::vector<bool> &active_b
+
+    ) {
+        //size_t pop_size = population.size();
+
+        std::vector<u32> all_distances(parents_curr * parents_curr, std::numeric_limits<u32>::max());
+
+        //! this can be trivially parallelized via
+        //! #pragma omp parallel collapse
+        #pragma omp parallel for collapse(2) num_threads(static_cast<int>(num_cpu_threads))
+        for (size_t i = 0; i < parents_curr; ++i) {
+            for (size_t j = i + 1; j < parents_curr; ++j) {
+                size_t tid = static_cast<size_t>(omp_get_thread_num());
+                u32 dis = determine_distance(
+                    graph,
+                    population[i],
+                    population[j],
+                    k,
+                    mem_stacks[tid],
+                    exec_spaces[tid]
+                );
+
+                all_distances[i * parents_curr + j] = dis;
+                all_distances[j * parents_curr + i] = dis;
+            }
+        }
+
+        for (u32 i = 0; i < parents_curr; ++i) {
+            if( !active_b[i] ) {continue;}
+
+            u32 min_val = std::numeric_limits<u32>::max();
+            for (u32 j = 0; j < parents_curr; ++j) {
+                
+                if( all_distances[i * parents_curr + j] == 0) {
+                    active_b[j] = false; // deactivate duplicate
+                    continue;
+                }
+
+                min_val = std::min(min_val, all_distances[i * parents_curr + j]);
+            }
+            min_distances[i] = min_val;
+        }
+
+        return;
+    }
+
     //! -------------------------------------------------------------------------------------------------
     //! ----------------------- SAMPLED distance computation (faster alternative) -----------------------
     //! -------------------------------------------------------------------------------------------------
