@@ -301,7 +301,13 @@ namespace GPU_HeiPa {
                 level_infos[level].m = graphs.back().m;
                 t_profiler.stop();
                 #endif
-                coarsening(level, dev_mem_stack);
+                
+                bool can_contract = false;
+                coarsening(level, dev_mem_stack, can_contract);
+                if (!can_contract) {
+                    break;
+                }
+                
                 contraction(level, dev_mem_stack);
 
                 level += 1;
@@ -579,6 +585,35 @@ namespace GPU_HeiPa {
                 mappings.emplace_back(two_hop_matcher_get_mapping<false, true>(graphs.back(), partition, lmax, mem_stack, exec_space));
             } else {
                 mappings.emplace_back(two_hop_matcher_get_mapping<false, false>(graphs.back(), partition, lmax, mem_stack, exec_space));
+            }
+
+            exec_space.fence();
+            coarsening_ms += get_milli_seconds(p, get_time_point());
+
+            #if ENABLE_PROFILER
+            level_infos[level].t_coarsening = get_milli_seconds(p, get_time_point());
+            #endif
+
+            assert_state_pre_partition(graphs.back(), exec_space);
+        }
+
+        void coarsening(u32 level, KokkosMemoryStack &mem_stack, bool &can_contract) {
+            auto p = get_time_point();
+
+
+            Mapping mapping;
+            if (graphs.back().uniform_vertex_weights && graphs.back().uniform_edge_weights) {
+                mapping = two_hop_matcher_get_mapping<true, true>(graphs.back(), partition, lmax, can_contract, mem_stack, exec_space);
+            } else if (graphs.back().uniform_vertex_weights) {
+                mapping = two_hop_matcher_get_mapping<true, false>(graphs.back(), partition, lmax, can_contract, mem_stack, exec_space);
+            } else if (graphs.back().uniform_edge_weights) {
+                mapping = two_hop_matcher_get_mapping<false, true>(graphs.back(), partition, lmax, can_contract, mem_stack, exec_space);
+            } else {
+                mapping = two_hop_matcher_get_mapping<false, false>(graphs.back(), partition, lmax, can_contract, mem_stack, exec_space);
+            }
+
+            if (can_contract) {
+                mappings.emplace_back(std::move(mapping));
             }
 
             exec_space.fence();

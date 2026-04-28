@@ -621,6 +621,17 @@ namespace GPU_HeiPa {
                                                const weight_t &lmax,
                                                KokkosMemoryStack &mem_stack,
                                                DeviceExecutionSpace &exec_space) {
+        bool dummy_progress = false;
+        return two_hop_matcher_get_mapping<uniform_v_weights, uniform_e_weights>(g, partition, lmax, dummy_progress, mem_stack, exec_space);
+    }
+
+    template<bool uniform_v_weights, bool uniform_e_weights>
+    inline Mapping two_hop_matcher_get_mapping(const Graph &g,
+                                               const Partition &partition,
+                                               const weight_t &lmax,
+                                               bool &made_progress,
+                                               KokkosMemoryStack &mem_stack,
+                                               DeviceExecutionSpace &exec_space) {
         TwoHopMatcher thm = initialize_two_hop_matcher(g.n, g.m, partition.k, lmax, mem_stack);
 
         /*
@@ -708,6 +719,8 @@ namespace GPU_HeiPa {
             });
 
             KOKKOS_PROFILE_FENCE(exec_space);
+
+            made_progress = (mapping.coarse_n < mapping.old_n);
         }
 
         {
