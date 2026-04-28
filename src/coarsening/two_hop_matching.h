@@ -194,6 +194,7 @@ namespace GPU_HeiPa {
 
     template<bool is_initial, bool is_uniform>
     inline void pick_neighbor(const Graph &g,
+                              const Partition& partition,
                               const UnmanagedDeviceVertex &vcmap,
                               const UnmanagedDeviceVertex &hn,
                               u32 seed,
@@ -201,9 +202,9 @@ namespace GPU_HeiPa {
                               vertex_t perm_length,
                               DeviceExecutionSpace &exec_space) {
         if (g.m / g.n > 32) {
-            pick_neighbor_team<is_initial, is_uniform>(g, vcmap, hn, seed, vperm, perm_length, exec_space);
+            pick_neighbor_team<is_initial, is_uniform>(g, partition, vcmap, hn, seed, vperm, perm_length, exec_space);
         } else {
-            pick_neighbor_flat<is_initial, is_uniform>(g, vcmap, hn, seed, vperm, perm_length, exec_space);
+            pick_neighbor_flat<is_initial, is_uniform>(g, partition, vcmap, hn, seed, vperm, perm_length, exec_space);
         }
     }
 
@@ -684,9 +685,9 @@ namespace GPU_HeiPa {
                 if (thm.vcmap(i) == SENTINEL) thm.vcmap(i) = i;
             });
 
-            vertex_t count;
-            Kokkos::parallel_reduce("count wrong matchings", g.n,
-                KOKKOS_LAMBDA(vertex_t u, vertex_t count_tmp) {
+            vertex_t count = 0;
+            Kokkos::parallel_reduce("count wrong matchings", Kokkos::RangePolicy<DeviceExecutionSpace>(exec_space, 0, g.n),
+                KOKKOS_LAMBDA(const vertex_t u, vertex_t &count_tmp) {
                     if( partition.map(u) != partition.map( thm.vcmap(u)) )
                         count_tmp++;
                 }, count
