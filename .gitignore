@@ -9,6 +9,10 @@ build/
 
 data/
 
+benchmark.py
+benchmark_baseline.csv
+stats.csv
+
 extern/
 tests/
 res/
