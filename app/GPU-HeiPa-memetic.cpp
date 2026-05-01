@@ -120,6 +120,22 @@ int main(int argc, char *argv[]) {
 
         
         Kokkos::fence();
+        /*
+        
+        int * map = new int[host_g.n];
+        for(int i = 0; i < host_g.n ; ++i) {
+            map[i] = static_cast<int>(host_partition(i));
+        }
+
+        if (config.population_management == "shrinking") {
+            host_partition = memeticSolverShrinking(config).solve(host_g, map);
+        }else{
+            host_partition = memeticSolver(config).solve(host_g);
+        }
+
+        Kokkos::fence();
+        */
+
 
         if (verbose_level >= 1) {
             std::cout << "Solved in         : " << get_milli_seconds(sp_solver, get_time_point()) << std::endl;

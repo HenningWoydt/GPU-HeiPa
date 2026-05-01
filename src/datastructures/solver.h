@@ -696,6 +696,8 @@ namespace GPU_HeiPa {
             exec_space.fence();
             refinement_ms += get_milli_seconds(p, get_time_point());
 
+                        DeviceExecutionSpace execution_space = DeviceExecutionSpace();
+
             if (graphs.back().uniform_edge_weights) {
                 ASSERT(curr_edge_cut == edge_cut<true>(graphs.back(), partition, execution_space));
             } else {

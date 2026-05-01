@@ -449,9 +449,22 @@ namespace GPU_HeiPa {
 
                     // find correct idx
                     partition_t idx = old_u_id % size;
-                    while (bc.ids(r_beg + idx) != old_u_id) {
+                    bool found = false;
+                    for (u32 probe = 0; probe < size; ++probe) {
+                        partition_t id = bc.ids(r_beg + idx);
+                        if (id == old_u_id) {
+                            found = true;
+                            break;
+                        }
+                        if (id == NULL_PART) {
+                            break;
+                        }
                         idx += 1;
                         if (idx == size) { idx = 0; }
+                    }
+
+                    if (!found) {
+                        return;
                     }
 
                     // remove weight
@@ -517,8 +530,10 @@ namespace GPU_HeiPa {
                     }
 
                     if (!success) {
-                        idx = size;
-                        while (true) {
+                        u32 r_end = bc.row(v + 1);
+                        u32 capacity = r_end - r_beg;
+                        for (u32 probe = 0; probe < capacity; ++probe) {
+                            idx = (size + probe) % capacity;
                             partition_t id = bc.ids(r_beg + idx);
 
                             if (id == new_u_id) {
@@ -528,15 +543,18 @@ namespace GPU_HeiPa {
 
                             if (id == NULL_PART || id == HASH_RECLAIM) {
                                 partition_t found_id = Kokkos::atomic_compare_exchange(&bc.ids(r_beg + idx), id, new_u_id);
-                                if (found_id == id) {
-                                    Kokkos::atomic_add(&bc.sizes(v), 1);
+                                if (found_id == id || found_id == new_u_id) {
+                                    if (idx >= size) {
+                                        Kokkos::atomic_max(&bc.sizes(v), idx + 1);
+                                    }
+                                    success = true;
                                     break;
                                 }
-                                if (found_id == new_u_id) { break; }
                             }
-
-                            idx++;
                         }
+                    }
+                    if (!success) {
+                        return;
                     }
                     Kokkos::atomic_add(&bc.weights(r_beg + idx), w);
                 });

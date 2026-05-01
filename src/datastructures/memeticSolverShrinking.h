@@ -355,8 +355,8 @@ namespace GPU_HeiPa {
 
             size_t bytes_needed = 0;
 
-            size_t bytes_for_orga_stack = 10 * (size_t) host_g.n * sizeof(vertex_t) +
-                                          10 * (size_t) host_g.m * sizeof(vertex_t);
+            size_t bytes_for_orga_stack = 20 * (size_t) host_g.n * sizeof(vertex_t) +
+                                          20 * (size_t) host_g.m * sizeof(vertex_t);
 
             size_t bytes_for_a_partition_stack = (6) * (reduction_factor / 2) * (size_t) host_g.n * sizeof(vertex_t) +
                                                  (9 + (num_crossovers / 2) )  * (size_t) host_g.m * sizeof(vertex_t);
@@ -661,21 +661,21 @@ namespace GPU_HeiPa {
                 ScopedTimer _t("initial_partitioning", "Partition", "first_stats");
 
                 //!gucken wieviele gleiche partitions es gibt:
-                determine_min_distances_population(
-                        graphs.back(),
-                        solutions[level % 2],
-                        parents_curr,
-                        min_distances,
-                        k,
-                        mem_stacks,
-                        exec_spaces,
-                        num_cpu_threads,
-                        
-                        active_b
-                    );
-               
-            
-
+                //determine_min_distances_population(
+                //        graphs.back(),
+                //        solutions[level % 2],
+                //        parents_curr,
+                //        min_distances,
+                //        k,
+                //        mem_stacks,
+                //        exec_spaces,
+                //        num_cpu_threads,
+                //        
+                //        active_b
+                //    );
+               //
+            //
+//
                 initial_partitioning_ms += get_milli_seconds(p, get_time_point());
             }
 
@@ -898,6 +898,14 @@ namespace GPU_HeiPa {
 
                 Kokkos::deep_copy(exec_space, dummy.map , tmp_partition);
 
+                const Graph &cur = graphs.back();
+                if (cur.uniform_vertex_weights ) {
+                    recalculate_weights<true>(dummy, graphs.back(), exec_space);
+                }else{
+                    recalculate_weights<false>(dummy, graphs.back(), exec_space);
+                }
+
+
                 //! init bweights ?
 
 
@@ -984,6 +992,8 @@ namespace GPU_HeiPa {
             } else {
                 graphs.emplace_back(from_Graph_Mapping<false, false>(cur, mappings.back(), mem_stack, exec_space));
             }
+
+            contract(dummy, mappings.back(), exec_space);
 
             Kokkos::fence();
             contraction_ms += get_milli_seconds(p, get_time_point());
