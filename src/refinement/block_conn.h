@@ -446,7 +446,7 @@ namespace GPU_HeiPa {
 
                     // find correct idx
                     partition_t idx = old_u_id % size;
-                    while (bc.ids(r_beg + idx) != old_u_id) {
+                    while (Kokkos::atomic_load(&bc.ids(r_beg + idx)) != old_u_id) {
                         idx += 1;
                         if (idx == size) { idx = 0; }
                     }
@@ -484,7 +484,7 @@ namespace GPU_HeiPa {
                     bool success = false;
                     for (u32 j = 0; j < size; j++) {
                         idx = (new_u_id + j) % size;
-                        partition_t id = bc.ids(r_beg + idx);
+                        partition_t id = Kokkos::atomic_load(&bc.ids(r_beg + idx));
 
                         if (id == new_u_id) {
                             success = true;
@@ -496,7 +496,7 @@ namespace GPU_HeiPa {
                     if (!success) {
                         for (u32 j = 0; j < size; j++) {
                             idx = (new_u_id + j) % size;
-                            partition_t id = bc.ids(r_beg + idx);
+                            partition_t id = Kokkos::atomic_load(&bc.ids(r_beg + idx));
 
                             if (id == new_u_id) {
                                 success = true;
@@ -516,7 +516,7 @@ namespace GPU_HeiPa {
                     if (!success) {
                         idx = size;
                         while (true) {
-                            partition_t id = bc.ids(r_beg + idx);
+                            partition_t id = Kokkos::atomic_load(&bc.ids(r_beg + idx));
 
                             if (id == new_u_id) {
                                 success = true;
