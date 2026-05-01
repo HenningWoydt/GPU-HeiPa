@@ -3,11 +3,19 @@ set -euo pipefail
 
 # Parse arguments
 DOWNLOAD_KOKKOS=ON
+ENABLE_PROFILER=OFF
+ASSERT_ENABLED=OFF
 MAX_THREADS=""
 KOKKOS_ARCH=""
 
 for arg in "$@"; do
   case "$arg" in
+    --enable-profiler=*) 
+      ENABLE_PROFILER="${arg#*=}" 
+      ;; 
+    --assert-enabled=*) 
+      ASSERT_ENABLED="${arg#*=}" 
+      ;;
     --download-kokkos=*)
       DOWNLOAD_KOKKOS="${arg#*=}"
       ;;
@@ -183,6 +191,8 @@ if [ "$DOWNLOAD_KOKKOS" = "ON" ]; then
       ${KOKKOS_BACKEND} \
       -DCMAKE_CXX_STANDARD=20 \
       -DCMAKE_CXX_EXTENSIONS=OFF \
+         -DENABLE_PROFILER=${ENABLE_PROFILER} \
+         -DASSERT_ENABLED=${ASSERT_ENABLED} \
       -DCMAKE_CXX_FLAGS_RELEASE="${CXX_RELEASE_FLAGS}" \
       -DCMAKE_CXX_FLAGS="-w" \
       ${ARCH_FLAG:+-D${ARCH_FLAG}} \
@@ -204,6 +214,8 @@ if [ "$DOWNLOAD_KOKKOS" = "ON" ]; then
       -DCMAKE_BUILD_TYPE=Release \
       -DCMAKE_CXX_STANDARD=20 \
       -DCMAKE_CXX_EXTENSIONS=OFF \
+         -DENABLE_PROFILER=${ENABLE_PROFILER} \
+         -DASSERT_ENABLED=${ASSERT_ENABLED} \
       -DKokkosKernels_ENABLE_TESTS=OFF \
       -DKokkosKernels_ENABLE_EXAMPLES=OFF \
       -DKokkosKernels_ENABLE_PERFTESTS=OFF \
@@ -233,6 +245,8 @@ cd build
 cmake .. -DCMAKE_BUILD_TYPE=Release \
          -DCMAKE_PREFIX_PATH="${ROOT}/extern/local/kokkos;${ROOT}/extern/local/kokkos-kernels" \
          -DCMAKE_CXX_STANDARD=20 \
-         -DCMAKE_CXX_EXTENSIONS=OFF
+         -DCMAKE_CXX_EXTENSIONS=OFF \
+         -DENABLE_PROFILER=${ENABLE_PROFILER} \
+         -DASSERT_ENABLED=${ASSERT_ENABLED}
 cmake --build . --parallel "$JOBS" --target GPU-HeiPa
 cmake --build . --parallel "$JOBS" --target GPU-HeiProMap

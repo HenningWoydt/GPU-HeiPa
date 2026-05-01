@@ -643,8 +643,6 @@ namespace GPU_HeiPa {
 
                 if (u_id != best_id) {
                     vertex_t gain_type = ProMap_gain_bucket(gain, (uniform_v_weights ? 1 : g.weights(u)));
-                    Kokkos::atomic_add(&lp.histogram(gain_type), 1);
-
                     vertex_t g_id = (MAX_BUCKETS * u_id + gain_type) * sections + (u % sections);
                     lp.temp_gain(u) = Kokkos::atomic_fetch_add(&lp.gain1(g_id), (uniform_v_weights ? 1 : g.weights(u)));
                     lp.vtx2(u) = g_id;

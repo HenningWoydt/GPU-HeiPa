@@ -44,6 +44,7 @@ namespace GPU_HeiPa {
             {"--imbalance", "-e", "Allowed imbalance (for example 0.03).", "0.03", "", false},
             {"--config", "-c", "Algorithm Config {IM, HM, HM-ultra}.", "", "", false},
             {"--verbose-level", "", "Whether to print.", "1", "", false},
+            {"--n-bytes-requested", "", "Total bytes requested from device.", "8589934592", "", false},
         };
 
     public:
@@ -125,6 +126,10 @@ namespace GPU_HeiPa {
 
             if (is_set("--verbose-level")) {
                 verbose_level = std::stoi(get("--verbose-level"));
+            }
+
+            if (is_set("--n-bytes-requested")) {
+                n_bytes_requested = std::stoull(get("--n-bytes-requested"));
             }
 
             // distance_oracle_string = get("--distance-oracle");

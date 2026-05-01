@@ -520,9 +520,9 @@ namespace GPU_HeiPa {
             refinement_ms += get_milli_seconds(p, get_time_point());
 
             if (graphs.back().uniform_edge_weights) {
-                ASSERT(curr_edge_cut == edge_cut<true>(graphs.back(), partition));
+                ASSERT(curr_edge_cut == edge_cut<true>(graphs.back(), partition, exec_space));
             } else {
-                ASSERT(curr_edge_cut == edge_cut<false>(graphs.back(), partition));
+                ASSERT(curr_edge_cut == edge_cut<false>(graphs.back(), partition, exec_space));
             }
             ASSERT(curr_max_block_weight == max_weight(partition));
 

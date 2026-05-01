@@ -31,7 +31,7 @@
 
 namespace GPU_HeiPa {
     #ifndef ENABLE_PROFILER
-    #define ENABLE_PROFILER true
+    #define ENABLE_PROFILER false
     #endif
 
     #ifndef ASSERT_ENABLED
