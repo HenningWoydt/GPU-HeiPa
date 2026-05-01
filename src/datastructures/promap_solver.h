@@ -199,6 +199,7 @@ namespace GPU_HeiPa {
 
             if (config.verbose_level >= 1) {
                 std::cout << "------- Info -------" << std::endl;
+                std::cout << "Graph             : " << config.graph_in << std::endl;
                 std::cout << "Total solve time  : " << duration << std::endl;
                 std::cout << "#Vertices         : " << n << std::endl;
                 std::cout << "#Edges            : " << m << std::endl;
@@ -313,11 +314,7 @@ namespace GPU_HeiPa {
 
 
             // Main stack: Graph + coarsening overhead
-            mem_stack = initialize_kokkos_memory_stack(
-                30 * host_g.n * sizeof(vertex_t) + // 20% buffer for vertices
-                10 * host_g.m * sizeof(vertex_t), // Graph + coarsening overhead
-                "Stack"
-            );
+            mem_stack = initialize_kokkos_memory_stack(config.n_bytes_requested, "Stack");
 
             n = host_g.n;
             m = host_g.m;
