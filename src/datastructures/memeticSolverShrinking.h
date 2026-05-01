@@ -325,7 +325,7 @@ namespace GPU_HeiPa {
         }
         */
 
-        HostPartition solve(HostGraph &host_g) {
+        HostPartition solve(HostGraph &host_g, const int * in_partition = nullptr) {
             auto sp = get_time_point();
 
             size_t intended_num_cpu_threads = num_cpu_threads;
@@ -414,7 +414,7 @@ namespace GPU_HeiPa {
             std::cout << "allocated " << bytes_needed / (1024.0 * 1024.0 * 1024.0) << " GB in total " << std::endl;
 
 
-            internal_solve(host_g, mem_stacks);
+            internal_solve(host_g, mem_stacks, in_partition);
 
             auto p = get_time_point();
 
@@ -583,9 +583,9 @@ namespace GPU_HeiPa {
         };
 
     private:
-        void internal_solve(HostGraph &host_g, std::vector<KokkosMemoryStack> &mem_stacks) {
+        void internal_solve(HostGraph &host_g, std::vector<KokkosMemoryStack> &mem_stacks, const int * in_partition = nullptr) {
             init_streams();
-            initialize(host_g, mem_stacks);
+            initialize(host_g, mem_stacks, in_partition);
 
 
             const partition_t c = 8;
@@ -600,7 +600,11 @@ namespace GPU_HeiPa {
                 level_infos[level].m = graphs.back().m;
                 #endif
 
-                coarsening(level, mem_stacks[orga_stack]);
+                bool can_contract = false;
+                coarsening(level, mem_stacks[orga_stack], can_contract);
+                if(!can_contract) {
+                    break;
+                }
                 contraction(level, mem_stacks[orga_stack]);
 
                 level += 1;
@@ -626,9 +630,30 @@ namespace GPU_HeiPa {
                     active_b.push_back(true);
                 }
 
+                //! dummy übernehmen und noch andere partitionen suchen
+                size_t start_index = 0;
+                if( in_partition != nullptr) {
+                    start_index = 1;
+                    
+                    deep_copy(exec_spaces[0], Kokkos::subview(solutions[level % 2][0].map, graphs.back().n) , Kokkos::subview(dummy.map, graphs.back().n) );
+
+                    recalculate_weights<false>(solutions[level % 2][0], graphs.back(), exec_spaces[0]);
+
+                    initial_edge_cut[0] = edge_cut<false>(graphs.back(), solutions[level % 2][0], exec_spaces[0]);
+                    curr_edge_cut[0] = initial_edge_cut[0];
+
+                    initial_max_block_weight[0] = max_weight(solutions[level % 2][0], exec_spaces[0]);
+                    curr_max_block_weight[0] = initial_max_block_weight[0];
+
+                    exec_spaces[0].fence();
+
+                    assert_state_after_partition(graphs.back(), solutions[level % 2][0], config.k, exec_spaces[0]);
+
+                }
+
                 //std::cout << "init part: " << std::endl;
                 #pragma omp parallel for num_threads(num_cpu_threads)
-                for (size_t i = 0; i < num_individuals; ++i) {
+                for (size_t i = start_index; i < num_individuals; ++i) {
                     size_t tid = static_cast<size_t>(omp_get_thread_num());
                     initial_partitioning(i, tid, level);
                 }
@@ -650,24 +675,6 @@ namespace GPU_HeiPa {
                     );
                
             
-                    // 
-                //std::cout << "pop distances: " ;
-                //int zeros = 0;
-                //for(partition_t distance : min_distances) {
-                //    std::cout << distance << " ";
-                //    if ( distance == 0)
-                //        zeros++;
-                //}
-                //std::cout << std::endl;
-                //std::cout << "found " << zeros << " identical solutions " << std::endl;
-//
-                //std::cout << "active individuals: ";
-                //for(size_t i = 0; i < num_individuals; ++i) {
-                //    if(active_b[i]) {
-                //        std::cout << i << " ";
-                //    }
-                //}
-                //std::cout << std::endl;
 
                 initial_partitioning_ms += get_milli_seconds(p, get_time_point());
             }
@@ -686,6 +693,7 @@ namespace GPU_HeiPa {
             level_infos[level].oload_partitions = n_oload_blocks(solutions[level % 2][0]);
             level_infos[level].sum_oload_weights = sum_oload_weight(solutions[level % 2][0]);
             #endif
+
 
             while (!mappings.empty()) {
                 level -= 1;
@@ -857,7 +865,7 @@ namespace GPU_HeiPa {
             }
         }
 
-        void initialize(HostGraph &host_g, std::vector<KokkosMemoryStack> &mem_stacks) {
+        void initialize(HostGraph &host_g, std::vector<KokkosMemoryStack> &mem_stacks, const int * in_partition = nullptr) {
             auto p = get_time_point();
 
             n = host_g.n;
@@ -876,6 +884,24 @@ namespace GPU_HeiPa {
             graphs.emplace_back(from_HostGraph(host_g, mem_stacks[orga_stack], up_ms, exec_space));
 
             dummy = initialize_partition(n, k, lmax, mem_stacks[orga_stack], exec_space);
+
+            if( in_partition != nullptr ) {
+                std::cout << " i am using the input partition "<< std::endl;
+                //! init the dummy:
+
+                HostPartition tmp_partition = HostPartition(Kokkos::view_alloc(Kokkos::WithoutInitializing, "tmp_partition"),n);
+                exec_space.fence();
+
+                for(int i= 0; i < n; ++i) {
+                    tmp_partition(i) = static_cast<partition_t>( in_partition[i] );
+                }
+
+                Kokkos::deep_copy(exec_space, dummy.map , tmp_partition);
+
+                //! init bweights ?
+
+
+            }
 
 
             misc_ms += get_milli_seconds(p, get_time_point());
@@ -901,11 +927,37 @@ namespace GPU_HeiPa {
                 mappings.emplace_back(two_hop_matcher_get_mapping<false, false>(graphs.back(), dummy, lmax, mem_stack, exec_space));
             }
 
+            exec_space.fence();
+            coarsening_ms += get_milli_seconds(p, get_time_point());
 
-            //TODO: pass dummy mapping / remove entirely
-            //mappings.emplace_back(two_hop_matcher_get_mapping(graphs.back(), dummy, lmax, mem_stack));
+            #if ENABLE_PROFILER
+            level_infos[level].t_coarsening = get_milli_seconds(p, get_time_point());
+            #endif
 
-            Kokkos::fence();
+            assert_state_pre_partition(graphs.back(), exec_space);
+        }
+
+        void coarsening(u32 level, KokkosMemoryStack &mem_stack, bool &can_contract) {
+            auto p = get_time_point();
+
+            DeviceExecutionSpace exec_space = DeviceExecutionSpace();
+
+            Mapping mapping;
+            if (graphs.back().uniform_vertex_weights && graphs.back().uniform_edge_weights) {
+                mapping = two_hop_matcher_get_mapping<true, true>(graphs.back(), dummy, lmax, can_contract, mem_stack, exec_space);
+            } else if (graphs.back().uniform_vertex_weights) {
+                mapping = two_hop_matcher_get_mapping<true, false>(graphs.back(), dummy, lmax, can_contract, mem_stack, exec_space);
+            } else if (graphs.back().uniform_edge_weights) {
+                mapping = two_hop_matcher_get_mapping<false, true>(graphs.back(), dummy, lmax, can_contract, mem_stack, exec_space);
+            } else {
+                mapping = two_hop_matcher_get_mapping<false, false>(graphs.back(), dummy, lmax, can_contract, mem_stack, exec_space);
+            }
+
+            if (can_contract) {
+                mappings.emplace_back(std::move(mapping));
+            }
+
+            exec_space.fence();
             coarsening_ms += get_milli_seconds(p, get_time_point());
 
             #if ENABLE_PROFILER
