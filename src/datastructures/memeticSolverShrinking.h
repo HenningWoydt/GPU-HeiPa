@@ -635,7 +635,11 @@ namespace GPU_HeiPa {
                 if( in_partition != nullptr) {
                     start_index = 1;
                     
-                    deep_copy(exec_spaces[0], Kokkos::subview(solutions[level % 2][0].map, graphs.back().n) , Kokkos::subview(dummy.map, graphs.back().n) );
+                    auto src = Kokkos::subview(dummy.map, std::pair<size_t, size_t>(0, graphs.back().n));
+                    Kokkos::deep_copy(exec_spaces[0], solutions[level % 2][0].map, src);
+                    
+                    //deep_copy(exec_spaces[0], Kokkos::subview(solutions[level % 2][0].map, graphs.back().n) , Kokkos::subview(dummy.map, graphs.back().n) );
+                    Kokkos::fence();
 
                     recalculate_weights<false>(solutions[level % 2][0], graphs.back(), exec_spaces[0]);
 
