@@ -217,8 +217,22 @@ namespace GPU_HeiPa {
 
         host_partition.map = HostPartition("partition", partition.n);
         host_partition.bweights = HostWeight("b_weights", partition.k);
-        Kokkos::deep_copy(exec_space, host_partition.map, partition.map);
-        Kokkos::deep_copy(exec_space, host_partition.bweights, partition.bweights);
+
+        const auto n_to_copy = std::min((size_t)partition.n, (size_t)partition.map.extent(0));
+        const auto k_to_copy = std::min((size_t)partition.k, (size_t)partition.bweights.extent(0));
+
+        if (n_to_copy > 0) {
+            Kokkos::deep_copy(exec_space, 
+                Kokkos::subview(host_partition.map, std::make_pair((size_t)0, n_to_copy)), 
+                Kokkos::subview(partition.map, std::make_pair((size_t)0, n_to_copy)));
+        }
+
+        if (k_to_copy > 0) {
+            Kokkos::deep_copy(exec_space, 
+                Kokkos::subview(host_partition.bweights, std::make_pair((size_t)0, k_to_copy)), 
+                Kokkos::subview(partition.bweights, std::make_pair((size_t)0, k_to_copy)));
+        }
+
         exec_space.fence();
 
         return host_partition;

@@ -97,6 +97,25 @@ namespace GPU_HeiPa {
     weight_t get(const DistanceOracleMatrix &d_oracle, const partition_t u_id, const partition_t v_id) {
         return d_oracle.w_mtx(u_id * d_oracle.k + v_id);
     }
+    struct HostDistanceOracleMatrix {
+        partition_t k = 0;
+        partition_t l = 0;
+        HostWeight w_mtx;
+    };
+
+    inline HostDistanceOracleMatrix to_host_distance_oracle_matrix(const DistanceOracleMatrix &device_do, DeviceExecutionSpace &exec_space) {
+        HostDistanceOracleMatrix host_do;
+
+        host_do.k = device_do.k;
+        host_do.l = device_do.l;
+
+        host_do.w_mtx = HostWeight(Kokkos::view_alloc(Kokkos::WithoutInitializing, "w_mtx"), device_do.k * device_do.k);
+
+        Kokkos::deep_copy(exec_space, host_do.w_mtx, device_do.w_mtx);
+        exec_space.fence();
+
+        return host_do;
+    }
 }
 
 #endif //GPU_HEIPA_DISTANCE_ORACLE_MATRIX_H

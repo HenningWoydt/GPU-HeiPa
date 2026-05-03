@@ -553,6 +553,36 @@ namespace GPU_HeiPa {
         }
         return 0;
     }
+    struct HostBlockConn {
+        vertex_t n = 0;
+        u32 size = 0;
+
+        HostU32 row;
+        HostU32 sizes;
+
+        HostPartition ids;
+        HostWeight weights;
+    };
+
+    inline HostBlockConn to_host_block_conn(const BlockConn &device_bc, DeviceExecutionSpace &exec_space) {
+        HostBlockConn host_bc;
+
+        host_bc.n = device_bc.n;
+        host_bc.size = device_bc.size;
+
+        host_bc.row = HostU32(Kokkos::view_alloc(Kokkos::WithoutInitializing, "row"), device_bc.n + 1);
+        host_bc.sizes = HostU32(Kokkos::view_alloc(Kokkos::WithoutInitializing, "sizes"), device_bc.n);
+        host_bc.ids = HostPartition(Kokkos::view_alloc(Kokkos::WithoutInitializing, "ids"), device_bc.size);
+        host_bc.weights = HostWeight(Kokkos::view_alloc(Kokkos::WithoutInitializing, "weights"), device_bc.size);
+
+        Kokkos::deep_copy(exec_space, host_bc.row, device_bc.row);
+        Kokkos::deep_copy(exec_space, host_bc.sizes, device_bc.sizes);
+        Kokkos::deep_copy(exec_space, host_bc.ids, device_bc.ids);
+        Kokkos::deep_copy(exec_space, host_bc.weights, device_bc.weights);
+        exec_space.fence();
+
+        return host_bc;
+    }
 }
 
 #endif //GPU_HEIPA_BLOCK_CONN_H
