@@ -295,6 +295,8 @@ namespace GPU_HeiPa {
                             bc.ids(i) = NULL_PART;
                         });
 
+                        t.team_barrier();
+
                         bc.sizes(u) = new_size;
                         Kokkos::parallel_for(Kokkos::TeamThreadRange(t, 0, r_len), [&](const u32 &i) {
                             partition_t id = s_ids[i];
@@ -435,7 +437,7 @@ namespace GPU_HeiPa {
         //
         {
             ScopedTimer _t("refinement", "JetLabelPropagation", "update_small_remove_weight");
-
+            
             Kokkos::parallel_for("remove_weight", Kokkos::TeamPolicy<DeviceExecutionSpace>(exec_space, (int) total_moves, Kokkos::AUTO), KOKKOS_LAMBDA(const Kokkos::TeamPolicy<DeviceExecutionSpace>::member_type &t) {
                 vertex_t u = moves((u32) t.league_rank());
                 partition_t old_u_id = dest_part(u);
@@ -448,6 +450,8 @@ namespace GPU_HeiPa {
                     u32 size = bc.sizes(v);
 
                     // find correct idx
+                    /*
+                    
                     partition_t idx = old_u_id % size;
                     bool found = false;
                     for (u32 probe = 0; probe < size; ++probe) {
@@ -456,9 +460,7 @@ namespace GPU_HeiPa {
                             found = true;
                             break;
                         }
-                        if (id == NULL_PART) {
-                            break;
-                        }
+
                         idx += 1;
                         if (idx == size) { idx = 0; }
                     }
@@ -469,11 +471,25 @@ namespace GPU_HeiPa {
 
                     // remove weight
                     weight_t id_w = Kokkos::atomic_fetch_add(&bc.weights(r_beg + idx), -w);
+                        */
+
+                    /*
+*/
+                    
+                    
+                    partition_t idx = old_u_id % size;
+                    while (bc.ids(r_beg + idx) != old_u_id) {
+                        idx += 1;
+                        if (idx == size) { idx = 0; }
+                    }
+
+                    // remove weight
+                    weight_t id_w = Kokkos::atomic_fetch_add(&bc.weights(r_beg + idx), -w);
 
                     if (size != partition.k && id_w == w) { bc.ids(r_beg + idx) = HASH_RECLAIM; }
                 });
             });
-
+            
             KOKKOS_PROFILE_FENCE(exec_space);
         }
 
@@ -530,6 +546,8 @@ namespace GPU_HeiPa {
                     }
 
                     if (!success) {
+                        /*
+                        
                         u32 r_end = bc.row(v + 1);
                         u32 capacity = r_end - r_beg;
                         for (u32 probe = 0; probe < capacity; ++probe) {
@@ -556,6 +574,31 @@ namespace GPU_HeiPa {
                     if (!success) {
                         return;
                     }
+                    */
+
+                    /*
+                    */
+                   //! this is actually okay:
+                   idx = size;
+                        while (true) {
+                            partition_t id = bc.ids(r_beg + idx);
+
+                            if (id == new_u_id) {
+                                success = true;
+                                break;
+                            }
+
+                            if (id == NULL_PART || id == HASH_RECLAIM) {
+                                partition_t found_id = Kokkos::atomic_compare_exchange(&bc.ids(r_beg + idx), id, new_u_id);
+                                if (found_id == id) {
+                                    Kokkos::atomic_add(&bc.sizes(v), 1);
+                                    break;
+                                }
+                                if (found_id == new_u_id) { break; }
+                            }
+
+                            idx++;
+                        }}
                     Kokkos::atomic_add(&bc.weights(r_beg + idx), w);
                 });
             });
