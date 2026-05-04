@@ -46,7 +46,7 @@ case "$BACKEND_LOWER" in
     ;;
 esac
 
-ROOT=${PWD}
+ROOT="$(cd "$(dirname "${BASH_SOURCE[0]}")" && pwd)"
 GCC=$(which gcc || true)
 
 echo "Root            : ${ROOT}"
@@ -59,9 +59,29 @@ if [ "$DOWNLOAD_KOKKOS" = "ON" ]; then
 elif [ "$DOWNLOAD_KOKKOS" = "AUTO" ]; then
   KOKKOS_LOCAL_DIR="${ROOT}/extern/local/kokkos"
   KOKKOS_KERNELS_LOCAL_DIR="${ROOT}/extern/local/kokkos-kernels"
+
+  # Debugging output for AUTO mode check
+  echo "Checking for Kokkos installation at: ${KOKKOS_LOCAL_DIR}/lib/cmake/Kokkos"
+  echo "Checking for KokkosKernels installation at: ${KOKKOS_KERNELS_LOCAL_DIR}/lib/cmake/KokkosKernels"
   
   # Check for existence of the Kokkos installation directory
-  if [ -d "${KOKKOS_LOCAL_DIR}/lib/cmake/Kokkos" ] && [ -d "${KOKKOS_KERNELS_LOCAL_DIR}/lib/cmake/KokkosKernels" ]; then
+  if [ -d "${KOKKOS_LOCAL_DIR}/lib/cmake/Kokkos" ]; then
+    echo "Found Kokkos directory: ${KOKKOS_LOCAL_DIR}/lib/cmake/Kokkos"
+    KOKKOS_FOUND="true"
+  else
+    echo "Kokkos directory NOT found at: ${KOKKOS_LOCAL_DIR}/lib/cmake/Kokkos"
+    KOKKOS_FOUND="false"
+  fi
+
+  if [ -d "${KOKKOS_KERNELS_LOCAL_DIR}/lib/cmake/KokkosKernels" ]; then
+    echo "Found KokkosKernels directory: ${KOKKOS_KERNELS_LOCAL_DIR}/lib/cmake/KokkosKernels"
+    KOKKOS_KERNELS_FOUND="true"
+  else
+    echo "KokkosKernels directory NOT found at: ${KOKKOS_KERNELS_LOCAL_DIR}/lib/cmake/KokkosKernels"
+    KOKKOS_KERNELS_FOUND="false"
+  fi
+
+  if [ "$KOKKOS_FOUND" = "true" ] && [ "$KOKKOS_KERNELS_FOUND" = "true" ]; then
     echo "Existing Kokkos installation detected (AUTO mode). Skipping download and build."
     SHOULD_DOWNLOAD_KOKKOS="false"
   else
@@ -80,13 +100,19 @@ echo "==> Download Kokkos: ${DOWNLOAD_KOKKOS} (Effective: $SHOULD_DOWNLOAD_KOKKO
 detect_kokkos_arch() {
   # Use command-line argument if provided
   if [ -n "${KOKKOS_ARCH}" ]; then
-    echo "${KOKKOS_ARCH}=ON"
+    if [[ "${KOKKOS_ARCH}" == Kokkos_ARCH_* ]]; then
+      echo "${KOKKOS_ARCH}=ON"
+    else
+      echo "Kokkos_ARCH_${KOKKOS_ARCH}=ON"
+    fi
     return 0
   fi
 
   # Try nvidia-smi compute capability
   if command -v nvidia-smi >/dev/null 2>&1; then
-    cc=$(nvidia-smi --query-gpu=compute_cap --format=csv,noheader 2>/dev/null | awk -F. '{printf "%d%d\\n", $1, $2}' | sort -nr | head -n1)
+    cc=$(nvidia-smi --query-gpu=compute_cap --format=csv,noheader 2>/dev/null | tr -d '.' | sort -nr | head -n1)
+    if [ -z "$cc" ]; then return 0; fi
+    
     case "$cc" in
       120) echo "Kokkos_ARCH_BLACKWELL120=ON" ;;
       90)  echo "Kokkos_ARCH_HOPPER90=ON" ;;
@@ -96,7 +122,7 @@ detect_kokkos_arch() {
       75)  echo "Kokkos_ARCH_TURING75=ON" ;;
       70)  echo "Kokkos_ARCH_VOLTA70=ON" ;;
       *)
-        echo ""
+        return 0
         ;;
     esac
     return 0
@@ -107,7 +133,11 @@ detect_kokkos_arch() {
 }
 
 ARCH_FLAG="$(detect_kokkos_arch)"
-echo "Auto-detected Kokkos arch flag: ${ARCH_FLAG:-<autodetect>}"
+if [ -n "${ARCH_FLAG}" ]; then
+  echo "==> GPU architecture detected! Kokkos flag: ${ARCH_FLAG}"
+else
+  echo "==> GPU architecture NOT detected. Kokkos will attempt auto-detection during build."
+fi
 
 # ----- pick a reasonable parallelism (leave 2 cores free) -----
 calc_jobs() {
@@ -211,10 +241,10 @@ echo "Building GPU-HeiPa..."
 if [ "$SHOULD_DOWNLOAD_KOKKOS" = "true" ]; then
   # Only clean build directory if we are doing a full rebuild of Kokkos.
   # Otherwise, we want to reuse the existing build directory which might link to an existing Kokkos installation.
-  rm -rf build
+  rm -rf "${ROOT}/build"
 fi
-mkdir -p build
-cd build
+mkdir -p "${ROOT}/build"
+cd "${ROOT}/build"
 cmake .. -DCMAKE_BUILD_TYPE=Release -DCMAKE_PREFIX_PATH="${ROOT}/extern/local/kokkos;${ROOT}/extern/local/kokkos-kernels" -DCMAKE_CXX_STANDARD=20 -DCMAKE_CXX_EXTENSIONS=OFF -DENABLE_PROFILER=${ENABLE_PROFILER} -DASSERT_ENABLED=${ASSERT_ENABLED}
 cmake --build . --parallel "$JOBS" --target GPU-HeiPa
 cmake --build . --parallel "$JOBS" --target GPU-HeiProMap
