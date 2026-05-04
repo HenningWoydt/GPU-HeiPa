@@ -293,6 +293,8 @@ namespace GPU_HeiPa {
                             bc.ids(i) = NULL_PART;
                         });
 
+                        t.team_barrier();
+
                         bc.sizes(u) = new_size;
                         Kokkos::parallel_for(Kokkos::TeamThreadRange(t, 0, r_len), [&](const u32 &i) {
                             partition_t id = s_ids[i];
