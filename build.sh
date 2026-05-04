@@ -2,9 +2,9 @@
 set -euo pipefail
 
 # Parse arguments
-DOWNLOAD_KOKKOS=ON
-ENABLE_PROFILER=OFF
-ASSERT_ENABLED=OFF
+DOWNLOAD_KOKKOS="ON" # Default to ON, can be overridden by AUTO or OFF
+ENABLE_PROFILER="OFF"
+ASSERT_ENABLED="OFF"
 MAX_THREADS=""
 KOKKOS_ARCH=""
 
@@ -27,7 +27,7 @@ for arg in "$@"; do
       ;;
     *)
       echo "Unknown argument: $arg"
-      echo "Usage: $0 [--download-kokkos=ON|OFF] [--max-threads=N] [--kokkos-arch=ARCH]"
+      echo "Usage: $0 [--download-kokkos=ON|OFF|AUTO] [--max-threads=N] [--kokkos-arch=ARCH]"
       exit 1
       ;;
   esac
@@ -46,9 +46,36 @@ case "$BACKEND_LOWER" in
     ;;
 esac
 
-echo "==> Building with backend: ${BACKEND}"
-echo "==> Download Kokkos: ${DOWNLOAD_KOKKOS}"
+ROOT=${PWD}
+GCC=$(which gcc || true)
 
+echo "Root            : ${ROOT}"
+echo "Using C compiler: ${GCC:-<system default>}"
+
+SHOULD_DOWNLOAD_KOKKOS="false"
+
+if [ "$DOWNLOAD_KOKKOS" = "ON" ]; then
+  SHOULD_DOWNLOAD_KOKKOS="true"
+elif [ "$DOWNLOAD_KOKKOS" = "AUTO" ]; then
+  KOKKOS_LOCAL_DIR="${ROOT}/extern/local/kokkos"
+  KOKKOS_KERNELS_LOCAL_DIR="${ROOT}/extern/local/kokkos-kernels"
+  
+  # Check for existence of the Kokkos installation directory
+  if [ -d "${KOKKOS_LOCAL_DIR}/lib/cmake/Kokkos" ] && [ -d "${KOKKOS_KERNELS_LOCAL_DIR}/lib/cmake/KokkosKernels" ]; then
+    echo "Existing Kokkos installation detected (AUTO mode). Skipping download and build."
+    SHOULD_DOWNLOAD_KOKKOS="false"
+  else
+    echo "Existing Kokkos installation not detected (AUTO mode). Proceeding with download and build."
+    SHOULD_DOWNLOAD_KOKKOS="true"
+  fi
+elif [ "$DOWNLOAD_KOKKOS" = "OFF" ]; then
+  SHOULD_DOWNLOAD_KOKKOS="false"
+else
+  echo "Error: Invalid value for --download-kokkos. Must be ON, OFF, or AUTO." >&2
+  exit 1
+fi
+
+echo "==> Download Kokkos: ${DOWNLOAD_KOKKOS} (Effective: $SHOULD_DOWNLOAD_KOKKOS)"
 # ---- detect GPU arch and map to Kokkos flag ----
 detect_kokkos_arch() {
   # Use command-line argument if provided
@@ -59,9 +86,7 @@ detect_kokkos_arch() {
 
   # Try nvidia-smi compute capability
   if command -v nvidia-smi >/dev/null 2>&1; then
-    cc=$(nvidia-smi --query-gpu=compute_cap --format=csv,noheader 2>/dev/null \
-         | awk -F. '{printf "%d%d\n", $1, $2}' \
-         | sort -nr | head -n1)
+    cc=$(nvidia-smi --query-gpu=compute_cap --format=csv,noheader 2>/dev/null | awk -F. '{printf "%d%d\\n", $1, $2}' | sort -nr | head -n1)
     case "$cc" in
       120) echo "Kokkos_ARCH_BLACKWELL120=ON" ;;
       90)  echo "Kokkos_ARCH_HOPPER90=ON" ;;
@@ -87,10 +112,7 @@ echo "Auto-detected Kokkos arch flag: ${ARCH_FLAG:-<autodetect>}"
 # ----- pick a reasonable parallelism (leave 2 cores free) -----
 calc_jobs() {
   local cores
-  cores=$( nproc 2>/dev/null \
-        || getconf _NPROCESSORS_ONLN 2>/dev/null \
-        || sysctl -n hw.ncpu 2>/dev/null \
-        || echo 4 )
+  cores=$(nproc 2>/dev/null || getconf _NPROCESSORS_ONLN 2>/dev/null || sysctl -n hw.ncpu 2>/dev/null || echo 4)
   local j=$(( cores - 2 ))
   if [ "$j" -lt 1 ]; then j=1; fi
   echo "$j"
@@ -104,13 +126,8 @@ else
 fi
 echo "Building with $JOBS parallel jobs."
 
-ROOT=${PWD}
-GCC=$(which gcc || true)
 
-echo "Root            : ${ROOT}"
-echo "Using C compiler: ${GCC:-<system default>}"
-
-if [ "$DOWNLOAD_KOKKOS" = "ON" ]; then
+if [ "$SHOULD_DOWNLOAD_KOKKOS" = "true" ]; then
   # ---- Download and build Kokkos dependencies ----
   
   # clean previous externals
@@ -124,14 +141,7 @@ if [ "$DOWNLOAD_KOKKOS" = "ON" ]; then
 
   # --- Download Kokkos-Kernels 5.0.0 ---
   echo "Downloading Kokkos-Kernels 5.0.0..."
-  if (
-    cd extern \
-    && rm -f kokkos-kernels-5.0.0.tar.gz \
-    && rm -rf kokkos-kernels-5.0.0 \
-    && wget -q https://github.com/kokkos/kokkos-kernels/releases/download/5.0.0/kokkos-kernels-5.0.0.tar.gz \
-    && tar -xzf kokkos-kernels-5.0.0.tar.gz \
-    && rm -f kokkos-kernels-5.0.0.tar.gz
-  ); then
+  if (cd extern && rm -f kokkos-kernels-5.0.0.tar.gz && rm -rf kokkos-kernels-5.0.0 && wget -q https://github.com/kokkos/kokkos-kernels/releases/download/5.0.0/kokkos-kernels-5.0.0.tar.gz && tar -xzf kokkos-kernels-5.0.0.tar.gz && rm -f kokkos-kernels-5.0.0.tar.gz); then
     echo "Kokkos-Kernels 5.0.0 downloaded and extracted successfully."
   else
     echo "Failed to download Kokkos-Kernels!" >&2
@@ -140,14 +150,7 @@ if [ "$DOWNLOAD_KOKKOS" = "ON" ]; then
 
   # --- Download Kokkos 5.0.0 ---
   echo "Downloading Kokkos 5.0.0..."
-  if (
-    cd extern \
-    && rm -f kokkos-5.0.0.tar.gz \
-    && rm -rf kokkos-5.0.0 \
-    && wget -q https://github.com/kokkos/kokkos/releases/download/5.0.0/kokkos-5.0.0.tar.gz \
-    && tar -xzf kokkos-5.0.0.tar.gz \
-    && rm -f kokkos-5.0.0.tar.gz
-  ); then
+  if (cd extern && rm -f kokkos-5.0.0.tar.gz && rm -rf kokkos-5.0.0 && wget -q https://github.com/kokkos/kokkos/releases/download/5.0.0/kokkos-5.0.0.tar.gz && tar -xzf kokkos-5.0.0.tar.gz && rm -f kokkos-5.0.0.tar.gz); then
     echo "Kokkos 5.0.0 downloaded and extracted successfully."
   else
     echo "Failed to download Kokkos!" >&2
@@ -169,11 +172,11 @@ if [ "$DOWNLOAD_KOKKOS" = "ON" ]; then
   echo "Using C++ compiler: ${CXX}"
 
   # ---- backend-specific flags ----
-  KOKKOS_COMMON="-DCMAKE_INSTALL_PREFIX=${ROOT}/extern/local/kokkos \
-                 -DKokkos_ENABLE_SERIAL=ON \
-                 -DCMAKE_BUILD_TYPE=Release \
-                 -DKokkos_ENABLE_DEBUG=OFF \
-                 -DKokkos_ENABLE_DEBUG_BOUNDS_CHECK=OFF \
+  KOKKOS_COMMON="-DCMAKE_INSTALL_PREFIX=${ROOT}/extern/local/kokkos 
+                 -DKokkos_ENABLE_SERIAL=ON 
+                 -DCMAKE_BUILD_TYPE=Release 
+                 -DKokkos_ENABLE_DEBUG=OFF 
+                 -DKokkos_ENABLE_DEBUG_BOUNDS_CHECK=OFF 
                  -DKokkos_ENABLE_TUNING=ON"
 
   KOKKOS_BACKEND="-DKokkos_ENABLE_CUDA=ON -DKokkos_ENABLE_OPENMP=OFF -DKokkos_ENABLE_CUDA_LAMBDA=ON"
@@ -183,21 +186,7 @@ if [ "$DOWNLOAD_KOKKOS" = "ON" ]; then
 
   # --- build kokkos ---
   echo "Building Kokkos 5.0.0..."
-  if (
-    cd "${ROOT}/extern/kokkos-5.0.0" \
-    && mkdir -p build && cd build \
-    && cmake .. \
-      ${KOKKOS_COMMON} \
-      ${KOKKOS_BACKEND} \
-      -DCMAKE_CXX_STANDARD=20 \
-      -DCMAKE_CXX_EXTENSIONS=OFF \
-         -DENABLE_PROFILER=${ENABLE_PROFILER} \
-         -DASSERT_ENABLED=${ASSERT_ENABLED} \
-      -DCMAKE_CXX_FLAGS_RELEASE="${CXX_RELEASE_FLAGS}" \
-      -DCMAKE_CXX_FLAGS="-w" \
-      ${ARCH_FLAG:+-D${ARCH_FLAG}} \
-    && make install -j "$JOBS"
-  ); then
+  if (cd "${ROOT}/extern/kokkos-5.0.0" && mkdir -p build && cd build && cmake .. ${KOKKOS_COMMON} ${KOKKOS_BACKEND} -DCMAKE_CXX_STANDARD=20 -DCMAKE_CXX_EXTENSIONS=OFF -DENABLE_PROFILER=${ENABLE_PROFILER} -DASSERT_ENABLED=${ASSERT_ENABLED} -DCMAKE_CXX_FLAGS_RELEASE="${CXX_RELEASE_FLAGS}" -DCMAKE_CXX_FLAGS="-w" ${ARCH_FLAG:+-D${ARCH_FLAG}} && make install -j "$JOBS"); then
     echo "Kokkos 5.0.0 build completed successfully."
   else
     echo "Kokkos 5.0.0 build failed!" >&2
@@ -205,25 +194,7 @@ if [ "$DOWNLOAD_KOKKOS" = "ON" ]; then
   fi
 
   echo "Building Kokkos-Kernels 5.0.0..."
-  if (
-    cd "${ROOT}/extern/kokkos-kernels-5.0.0" \
-    && mkdir -p build && cd build \
-    && cmake .. \
-      -DCMAKE_INSTALL_PREFIX="${ROOT}/extern/local/kokkos-kernels" \
-      -DCMAKE_PREFIX_PATH="${ROOT}/extern/local/kokkos" \
-      -DCMAKE_BUILD_TYPE=Release \
-      -DCMAKE_CXX_STANDARD=20 \
-      -DCMAKE_CXX_EXTENSIONS=OFF \
-         -DENABLE_PROFILER=${ENABLE_PROFILER} \
-         -DASSERT_ENABLED=${ASSERT_ENABLED} \
-      -DKokkosKernels_ENABLE_TESTS=OFF \
-      -DKokkosKernels_ENABLE_EXAMPLES=OFF \
-      -DKokkosKernels_ENABLE_PERFTESTS=OFF \
-      -DCMAKE_CXX_FLAGS_RELEASE="${CXX_RELEASE_FLAGS}" \
-      -DCMAKE_CXX_FLAGS="-w" \
-      ${KOKKOS_BACKEND} \
-    && make install -j "$JOBS"
-  ); then
+  if (cd "${ROOT}/extern/kokkos-kernels-5.0.0" && mkdir -p build && cd build && cmake .. -DCMAKE_INSTALL_PREFIX="${ROOT}/extern/local/kokkos-kernels" -DCMAKE_PREFIX_PATH="${ROOT}/extern/local/kokkos" -DCMAKE_BUILD_TYPE=Release -DCMAKE_CXX_STANDARD=20 -DCMAKE_CXX_EXTENSIONS=OFF -DENABLE_PROFILER=${ENABLE_PROFILER} -DASSERT_ENABLED=${ASSERT_ENABLED} -DKokkosKernels_ENABLE_TESTS=OFF -DKokkosKernels_ENABLE_EXAMPLES=OFF -DKokkosKernels_ENABLE_PERFTESTS=OFF -DCMAKE_CXX_FLAGS_RELEASE="${CXX_RELEASE_FLAGS}" -DCMAKE_CXX_FLAGS="-w" ${KOKKOS_BACKEND} && make install -j "$JOBS"); then
     echo "Kokkos-Kernels 5.0.0 build completed successfully."
   else
     echo "Kokkos-Kernels 5.0.0 build failed!" >&2
@@ -237,16 +208,13 @@ fi
 
 # --- build GPU-HeiPa ---
 echo "Building GPU-HeiPa..."
-if [ "$DOWNLOAD_KOKKOS" = "ON" ]; then
+if [ "$SHOULD_DOWNLOAD_KOKKOS" = "true" ]; then
+  # Only clean build directory if we are doing a full rebuild of Kokkos.
+  # Otherwise, we want to reuse the existing build directory which might link to an existing Kokkos installation.
   rm -rf build
 fi
 mkdir -p build
 cd build
-cmake .. -DCMAKE_BUILD_TYPE=Release \
-         -DCMAKE_PREFIX_PATH="${ROOT}/extern/local/kokkos;${ROOT}/extern/local/kokkos-kernels" \
-         -DCMAKE_CXX_STANDARD=20 \
-         -DCMAKE_CXX_EXTENSIONS=OFF \
-         -DENABLE_PROFILER=${ENABLE_PROFILER} \
-         -DASSERT_ENABLED=${ASSERT_ENABLED}
+cmake .. -DCMAKE_BUILD_TYPE=Release -DCMAKE_PREFIX_PATH="${ROOT}/extern/local/kokkos;${ROOT}/extern/local/kokkos-kernels" -DCMAKE_CXX_STANDARD=20 -DCMAKE_CXX_EXTENSIONS=OFF -DENABLE_PROFILER=${ENABLE_PROFILER} -DASSERT_ENABLED=${ASSERT_ENABLED}
 cmake --build . --parallel "$JOBS" --target GPU-HeiPa
 cmake --build . --parallel "$JOBS" --target GPU-HeiProMap

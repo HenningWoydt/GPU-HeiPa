@@ -217,6 +217,21 @@ namespace GPU_HeiPa {
 
         std::cout << "]\n";
     }
+
+    inline void print(const UnmanagedDevicePartition &dev_vec, const std::string &name = "") {
+        auto host_vec =
+                Kokkos::create_mirror_view_and_copy(Kokkos::HostSpace(), dev_vec);
+
+        if (!name.empty()) std::cout << name << " = ";
+        std::cout << "[";
+
+        for (size_t i = 0; i < host_vec.extent(0); ++i) {
+            std::cout << host_vec(i);
+            if (i + 1 != host_vec.extent(0)) std::cout << ", ";
+        }
+
+        std::cout << "]\n";
+    }
 }
 
 #endif //GPU_HEIPA_KOKKOS_UTIL_H

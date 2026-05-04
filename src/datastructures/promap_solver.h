@@ -36,6 +36,7 @@
 #include "partition.h"
 #include "../coarsening/two_hop_matching.h"
 #include "../initial_partitioning/global_multisection.h"
+#include "../initial_partitioning/gpu_initial_partition.h"
 #include "../utility/definitions.h"
 #include "../utility/promap_configuration.h"
 #include "../utility/profiler.h"
@@ -345,7 +346,6 @@ namespace GPU_HeiPa {
         void coarsening(u32 level) {
             auto p = get_time_point();
 
-
             if (graphs.back().uniform_vertex_weights && graphs.back().uniform_edge_weights) {
                 mappings.emplace_back(two_hop_matcher_get_mapping<true, true>(graphs.back(), partition, lmax, mem_stack, exec_space));
             } else if (graphs.back().uniform_vertex_weights) {
@@ -395,8 +395,8 @@ namespace GPU_HeiPa {
         void initial_partitioning() {
             auto p = get_time_point();
 
-
             global_multisection(graphs.back(), config.hierarchy, k, config.imbalance, config.seed, partition, exec_space);
+            // gpu_initial_partition(graphs.back(), config.hierarchy, k, config.imbalance, config.seed, partition, mem_stack, exec_space);
 
             recalculate_weights<false>(partition, graphs.back(), exec_space);
 

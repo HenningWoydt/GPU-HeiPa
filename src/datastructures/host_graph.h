@@ -317,6 +317,19 @@ namespace GPU_HeiPa {
 
         return g;
     }
+
+    inline void save_host_graph(const HostGraph &g, const std::string &filename) {
+        std::ofstream f(filename);
+        if (!f.is_open()) return;
+        f << g.n << " " << g.m / 2 << " 011\n";
+        for (vertex_t u = 0; u < g.n; ++u) {
+            f << (g.uniform_vertex_weights ? 1 : g.weights(u));
+            for (u32 i = g.neighborhood(u); i < g.neighborhood(u + 1); ++i) {
+                f << " " << g.edges_v(i) + 1 << " " << (g.uniform_edge_weights ? 1 : g.edges_w(i));
+            }
+            f << "\n";
+        }
+    }
 }
 
 #endif //GPU_HEIPA_HOST_GRAPH_H
