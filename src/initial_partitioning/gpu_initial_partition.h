@@ -127,7 +127,6 @@ namespace GPU_HeiPa {
             }
 
             // Compute cut from edge list.
-            weight_t cut = 0;
             for (u32 e = 0; e < g.m; ++e) {
                 const vertex_t u_edge = g.edges_u(e);
                 const vertex_t v_edge = g.edges_v(e);
@@ -231,7 +230,7 @@ namespace GPU_HeiPa {
 
         // Sum weights and degrees for left graph
         Kokkos::parallel_reduce("SumLeftGraphMetrics", Kokkos::RangePolicy<DeviceExecutionSpace>(exec_space, 0, nl), KOKKOS_LAMBDA(const vertex_t u, weight_t &wl_l, vertex_t &ml_l) {
-            weight_t uw = g.uniform_vertex_weights ? 1 : g.weights(l_n2o_loc(u)); // Need n2o_loc to map back to original u
+            weight_t uw = g.uniform_vertex_weights ? 1 : g.weights(l_n2o(u)); // Need n2o_loc to map back to original u
             wl_l += uw;
             ml_l += l_local_degrees(u);
         }, wl, ml);
@@ -239,7 +238,7 @@ namespace GPU_HeiPa {
 
         // Sum weights and degrees for right graph
         Kokkos::parallel_reduce("SumRightGraphMetrics", Kokkos::RangePolicy<DeviceExecutionSpace>(exec_space, 0, nr), KOKKOS_LAMBDA(const vertex_t u, weight_t &wr_l, vertex_t &mr_l) {
-            weight_t uw = g.uniform_vertex_weights ? 1 : g.weights(r_n2o_loc(u)); // Need n2o_loc to map back to original u
+            weight_t uw = g.uniform_vertex_weights ? 1 : g.weights(r_n2o(u)); // Need n2o_loc to map back to original u
             wr_l += uw;
             mr_l += r_local_degrees(u);
         }, wr, mr);
