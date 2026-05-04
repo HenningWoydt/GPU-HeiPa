@@ -393,6 +393,8 @@ namespace GPU_HeiPa {
     inline Graph make_graph(const vertex_t n,
                             const vertex_t m,
                             const weight_t w,
+                            bool uniform_vw,
+                            bool uniform_ew,
                             KokkosMemoryStack &mem_stack) {
         Graph g;
         // initialize the graph
@@ -400,13 +402,22 @@ namespace GPU_HeiPa {
         g.n = n;
         g.m = m;
         g.g_weight = w;
+        g.uniform_vertex_weights = uniform_vw;
+        g.uniform_edge_weights = uniform_ew;
 
-        g.weights = UnmanagedDeviceWeight((weight_t *) get_chunk_front(mem_stack, sizeof(weight_t) * g.n), g.n);
         g.neighborhood = UnmanagedDeviceU32((u32 *) get_chunk_front(mem_stack, sizeof(u32) * (g.n + 1)), g.n + 1);
         g.edges_v = UnmanagedDeviceVertex((vertex_t *) get_chunk_front(mem_stack, sizeof(vertex_t) * g.m), g.m);
-        g.edges_w = UnmanagedDeviceWeight((weight_t *) get_chunk_front(mem_stack, sizeof(weight_t) * g.m), g.m);
         g.edges_u = UnmanagedDeviceVertex((vertex_t *) get_chunk_front(mem_stack, sizeof(vertex_t) * g.m), g.m);
-        g.n_pops = 5;
+        g.n_pops = 3;
+
+        if (!g.uniform_vertex_weights) {
+            g.weights = UnmanagedDeviceWeight((weight_t *) get_chunk_front(mem_stack, sizeof(weight_t) * g.n), g.n);
+            g.n_pops += 1;
+        }
+        if (!g.uniform_edge_weights) {
+            g.edges_w = UnmanagedDeviceWeight((weight_t *) get_chunk_front(mem_stack, sizeof(weight_t) * g.m), g.m);
+            g.n_pops += 1;
+        }
 
         return g;
     }
@@ -414,6 +425,8 @@ namespace GPU_HeiPa {
     inline HostGraph to_host_graph(const Graph &device_g,
                                    DeviceExecutionSpace &exec_space) {
         HostGraph host_g;
+        host_g.uniform_vertex_weights = device_g.uniform_vertex_weights;
+        host_g.uniform_edge_weights = device_g.uniform_edge_weights;
 
         allocate_memory(host_g, device_g.n, device_g.m, device_g.g_weight);
 

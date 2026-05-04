@@ -53,6 +53,7 @@ namespace GPU_HeiPa {
         Solver solver(device_g, k, imbalance, seed, use_ultra, partition, mem_stack, exec_space);
     }
 
+    template<bool uniform_vw, bool uniform_ew>
     inline void recursive_multisection_device(Graph &device_g,
                                               const UnmanagedDeviceVertex &n_to_o, // local->original mapping for this node
                                               const std::vector<partition_t> &hierarchy, // e.g. {k0,k1,k2,...}
@@ -114,7 +115,7 @@ namespace GPU_HeiPa {
             }, sub_n);
 
             Kokkos::parallel_reduce("SubWeight", Kokkos::RangePolicy<DeviceExecutionSpace>(exec_space, 0, device_g.n), KOKKOS_LAMBDA(const vertex_t u, weight_t &lsum) {
-                if (tmp_part(u) == id) lsum += device_g.weights(u);
+                if (tmp_part(u) == id) lsum += uniform_vw ? 1 : device_g.weights(u);
             }, sub_weight);
 
             Kokkos::parallel_reduce("SubM", Kokkos::RangePolicy<DeviceExecutionSpace>(exec_space, 0, device_g.n), KOKKOS_LAMBDA(const vertex_t u, vertex_t &lsum) {
@@ -136,7 +137,7 @@ namespace GPU_HeiPa {
             }
 
             // --- Allocate child graph + mappings
-            Graph child_g = make_graph(sub_n, sub_m, sub_weight, mem_stack);
+            Graph child_g = make_graph(sub_n, sub_m, sub_weight, uniform_vw, uniform_ew, mem_stack);
             UnmanagedDeviceVertex child_n_to_o = UnmanagedDeviceVertex((vertex_t *) get_chunk_front(mem_stack, sizeof(vertex_t) * sub_n), sub_n);
             UnmanagedDeviceVertex child_o_to_n = UnmanagedDeviceVertex((vertex_t *) get_chunk_back(mem_stack, sizeof(vertex_t) * global_n), global_n);
 
@@ -148,7 +149,9 @@ namespace GPU_HeiPa {
                         const vertex_t old_u = n_to_o(u);
                         child_o_to_n(old_u) = my_idx;
                         child_n_to_o(my_idx) = old_u;
-                        child_g.weights(my_idx) = device_g.weights(u);
+                        if (!uniform_vw) {
+                            child_g.weights(my_idx) = device_g.weights(u);
+                        }
                     }
                     prefix += 1;
                 }
@@ -171,7 +174,9 @@ namespace GPU_HeiPa {
                             if (final) {
                                 const vertex_t sub_v = child_o_to_n(n_to_o(v));
                                 child_g.edges_v(start) = sub_v;
-                                child_g.edges_w(start) = device_g.edges_w(i);
+                                if (!uniform_ew) {
+                                    child_g.edges_w(start) = device_g.edges_w(i);
+                                }
                             }
                             ++start;
                             ++cnt;
@@ -205,7 +210,7 @@ namespace GPU_HeiPa {
 
             // --- Recurse into this child
             identifier.push_back(id);
-            recursive_multisection_device(
+            recursive_multisection_device<uniform_vw, uniform_ew>(
                 child_g,
                 child_n_to_o,
                 hierarchy,
@@ -274,22 +279,15 @@ namespace GPU_HeiPa {
 
         t.stop();
 
-        recursive_multisection_device(dev_g,
-                                      dev_n_to_o,
-                                      hierarchy,
-                                      (u64) (l - 1),
-                                      imbalance,
-                                      g.g_weight,
-                                      global_k,
-                                      g.n,
-                                      seed,
-                                      use_ultra,
-                                      index_vec,
-                                      k_rem,
-                                      identifier,
-                                      dev_global_part,
-                                      mem_stack,
-                                      exec_space);
+        if (dev_g.uniform_vertex_weights && dev_g.uniform_edge_weights) {
+            recursive_multisection_device<true, true>(dev_g, dev_n_to_o, hierarchy, (u64) (l - 1), imbalance, g.g_weight, global_k, g.n, seed, use_ultra, index_vec, k_rem, identifier, dev_global_part, mem_stack, exec_space);
+        } else if (dev_g.uniform_vertex_weights) {
+            recursive_multisection_device<true, false>(dev_g, dev_n_to_o, hierarchy, (u64) (l - 1), imbalance, g.g_weight, global_k, g.n, seed, use_ultra, index_vec, k_rem, identifier, dev_global_part, mem_stack, exec_space);
+        } else if (dev_g.uniform_edge_weights) {
+            recursive_multisection_device<false, true>(dev_g, dev_n_to_o, hierarchy, (u64) (l - 1), imbalance, g.g_weight, global_k, g.n, seed, use_ultra, index_vec, k_rem, identifier, dev_global_part, mem_stack, exec_space);
+        } else {
+            recursive_multisection_device<false, false>(dev_g, dev_n_to_o, hierarchy, (u64) (l - 1), imbalance, g.g_weight, global_k, g.n, seed, use_ultra, index_vec, k_rem, identifier, dev_global_part, mem_stack, exec_space);
+        }
 
         ScopedTimer t_copy{"hm", "io", "copy_to_host"};
 

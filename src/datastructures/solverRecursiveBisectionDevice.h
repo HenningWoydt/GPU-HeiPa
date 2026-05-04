@@ -265,10 +265,10 @@ namespace GPU_HeiPa {
             // step 2: allocate and make the subgraphs
 
             right_mapping_device = DeviceVertex((vertex_t *) get_chunk_front(mem_stack, sizeof(vertex_t) * res_num_vertices.partial_1s), res_num_vertices.partial_1s);
-            right_graph = make_graph(res_num_vertices.partial_1s, edges_and_weights.num_edges_1s, edges_and_weights.weight_1s, mem_stack);
+            right_graph = make_graph(res_num_vertices.partial_1s, edges_and_weights.num_edges_1s, edges_and_weights.weight_1s, input_graph.uniform_vertex_weights, input_graph.uniform_edge_weights, mem_stack);
 
             left_mapping_device = DeviceVertex((vertex_t *) get_chunk_front(mem_stack, sizeof(vertex_t) * res_num_vertices.partial_0s), res_num_vertices.partial_0s);
-            left_graph = make_graph(res_num_vertices.partial_0s, edges_and_weights.num_edges_0s, edges_and_weights.weight_0s, mem_stack);
+            left_graph = make_graph(res_num_vertices.partial_0s, edges_and_weights.num_edges_0s, edges_and_weights.weight_0s, input_graph.uniform_vertex_weights, input_graph.uniform_edge_weights, mem_stack);
 
             Kokkos::fence();
 

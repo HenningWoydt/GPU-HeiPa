@@ -482,11 +482,19 @@ namespace GPU_HeiPa {
             // Use METIS for initial partitioning
             kway_partition(graphs.back(), (int) k, config.imbalance, config.seed, partition, exec_space);
 
-            recalculate_weights<false>(partition, graphs.back(), exec_space);
+            if (graphs.back().uniform_vertex_weights) {
+                recalculate_weights<true>(partition, graphs.back(), exec_space);
+            } else {
+                recalculate_weights<false>(partition, graphs.back(), exec_space);
+            }
 
             ScopedTimer _t("initial_partitioning", "Partition", "first_stats");
 
-            initial_edge_cut = edge_cut<false>(graphs.back(), partition, exec_space);
+            if (graphs.back().uniform_edge_weights) {
+                initial_edge_cut = edge_cut<true>(graphs.back(), partition, exec_space);
+            } else {
+                initial_edge_cut = edge_cut<false>(graphs.back(), partition, exec_space);
+            }
             curr_edge_cut = initial_edge_cut;
             initial_max_block_weight = max_weight(partition);
             curr_max_block_weight = initial_max_block_weight;

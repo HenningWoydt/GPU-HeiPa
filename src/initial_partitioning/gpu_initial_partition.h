@@ -245,8 +245,8 @@ namespace GPU_HeiPa {
         exec_space.fence();
 
         // Safe allocation: ensure we always push 5 chunks to stack, even if n=0 or m=0
-        lg = make_graph(std::max<vertex_t>(1, nl), std::max<vertex_t>(1, ml), wl, mem_stack);
-        rg = make_graph(std::max<vertex_t>(1, nr), std::max<vertex_t>(1, mr), wr, mem_stack);
+        lg = make_graph(std::max<vertex_t>(1, nl), std::max<vertex_t>(1, ml), wl, g.uniform_vertex_weights, g.uniform_edge_weights, mem_stack);
+        rg = make_graph(std::max<vertex_t>(1, nr), std::max<vertex_t>(1, mr), wr, g.uniform_vertex_weights, g.uniform_edge_weights, mem_stack);
         lg.n = nl;
         lg.m = ml;
         rg.n = nr;
@@ -434,7 +434,7 @@ namespace GPU_HeiPa {
     inline void gpu_initial_partition(const Graph &g, const std::vector<partition_t> &hierarchy, partition_t k, f64 imbalance, u64 seed, Partition &partition, KokkosMemoryStack &mem_stack, DeviceExecutionSpace &exec_space) {
         ScopedTimer _t("initial_partitioning", "gpu_initial_partition", "total");
 
-        Graph dev_g = make_graph(g.n, g.m, g.g_weight, mem_stack);
+        Graph dev_g = make_graph(g.n, g.m, g.g_weight, g.uniform_vertex_weights, g.uniform_edge_weights, mem_stack);
         Kokkos::deep_copy(exec_space, dev_g.neighborhood, g.neighborhood);
         Kokkos::deep_copy(exec_space, dev_g.edges_v, g.edges_v);
         Kokkos::deep_copy(exec_space, dev_g.edges_w, g.edges_w);

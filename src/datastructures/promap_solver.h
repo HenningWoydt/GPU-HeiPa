@@ -398,9 +398,17 @@ namespace GPU_HeiPa {
             global_multisection(graphs.back(), config.hierarchy, k, config.imbalance, config.seed, partition, exec_space);
             // gpu_initial_partition(graphs.back(), config.hierarchy, k, config.imbalance, config.seed, partition, mem_stack, exec_space);
 
-            recalculate_weights<false>(partition, graphs.back(), exec_space);
+            if (graphs.back().uniform_vertex_weights) {
+                recalculate_weights<true>(partition, graphs.back(), exec_space);
+            } else {
+                recalculate_weights<false>(partition, graphs.back(), exec_space);
+            }
 
-            initial_comm_cost = comm_cost<false>(graphs.back(), partition, d_oracle, exec_space);
+            if (graphs.back().uniform_edge_weights) {
+                initial_comm_cost = comm_cost<true>(graphs.back(), partition, d_oracle, exec_space);
+            } else {
+                initial_comm_cost = comm_cost<false>(graphs.back(), partition, d_oracle, exec_space);
+            }
             curr_comm_cost = initial_comm_cost;
             initial_max_block_weight = max_weight(partition);
             curr_max_block_weight = initial_max_block_weight;
