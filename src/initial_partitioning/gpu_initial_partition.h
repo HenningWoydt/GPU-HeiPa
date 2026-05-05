@@ -105,8 +105,8 @@ namespace GPU_HeiPa {
             weight_t cut = 0;
 
             // Precompute partition for all vertices in the current mask for faster lookup
-            // n is small (max 16), so a stack-allocated array is fine.
-            int parts[16]; 
+            // n is small (max 32), so a stack-allocated array is fine.
+            int parts[32]; 
             parts[0] = 0; // Vertex 0 is fixed to block 0
 
             for (vertex_t u_idx = 1; u_idx < n; ++u_idx) {
