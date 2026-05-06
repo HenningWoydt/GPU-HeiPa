@@ -80,7 +80,7 @@ namespace GPU_HeiPa {
             u32 end = host_g.neighborhood(u + 1);
 
             for (u32 i = begin; i < end; ++i) {
-                weight_t w = host_g.edges_w(i);
+                weight_t w = host_g.uniform_edge_weights ? 1 : host_g.edges_w(i);
 
                 ASSERT(w > 0);
             }
@@ -119,7 +119,7 @@ namespace GPU_HeiPa {
         for (vertex_t u = 0; u < g.n; ++u) {
             partition_t u_id = partition.map(u);
 
-            weights[u_id] += g.weights(u);
+            weights[u_id] += g.uniform_vertex_weights ? 1 : g.weights(u);
         }
 
         for (partition_t id = 0; id < k; ++id) {
