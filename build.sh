@@ -2,7 +2,7 @@
 set -euo pipefail
 
 # Parse arguments
-DOWNLOAD_KOKKOS="ON" # Default to ON, can be overridden by AUTO or OFF
+DOWNLOAD_KOKKOS="OFF" # Default to ON, can be overridden by AUTO or OFF
 ENABLE_PROFILER="OFF"
 ASSERT_ENABLED="OFF"
 MAX_THREADS=""
