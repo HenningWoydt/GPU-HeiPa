@@ -77,7 +77,7 @@ namespace GPU_HeiPa {
 
         // device space info
         std::string device_space;
-        u64 n_bytes_requested = 1024ul * 1024ul * 1024ul * 14ul;
+        u64 n_bytes_requested = 1024ul * 1024ul * 1024ul * 10ul;
 
         ProMapConfiguration() = default;
 

@@ -31,32 +31,51 @@ option(ASSERT_ENABLED "Enable assertions" OFF)
 file(GLOB_RECURSE SOURCES CONFIGURE_DEPENDS "src/*.cpp")
 file(GLOB_RECURSE HEADERS CONFIGURE_DEPENDS "src/*.h")
 
+# --- Kway Partitioning (Warnings Suppressed) ---
+file(GLOB_RECURSE KWAY_SOURCES CONFIGURE_DEPENDS
+        "src/initial_partitioning/kway_partitioner/*.cpp"
+)
+file(GLOB_RECURSE KWAY_HEADERS CONFIGURE_DEPENDS
+        "src/initial_partitioning/kway_partitioner/*.h"
+)
+
+# Remove kway sources from the general executable source list
+list(REMOVE_ITEM SOURCES ${KWAY_SOURCES})
+list(REMOVE_ITEM HEADERS ${KWAY_HEADERS})
+
+add_library(kway_lib ${KWAY_SOURCES} ${KWAY_HEADERS})
+
+target_compile_options(kway_lib PRIVATE
+        -w
+)
+
+target_include_directories(kway_lib SYSTEM PUBLIC
+        "${CMAKE_CURRENT_SOURCE_DIR}/src/initial_partitioning/kway_partitioner"
+)
+
+target_link_libraries(kway_lib PUBLIC
+        Kokkos::kokkos
+        Kokkos::kokkoskernels
+)
+
 add_executable(GPU-HeiPa app/GPU-HeiPa.cpp ${SOURCES} ${HEADERS})
 add_executable(GPU-HeiProMap app/GPU-HeiProMap.cpp ${SOURCES} ${HEADERS})
 
-if(ENABLE_PROFILER)
-    target_compile_definitions(GPU-HeiPa PRIVATE ENABLE_PROFILER=1)
-    target_compile_definitions(GPU-HeiProMap PRIVATE ENABLE_PROFILER=1)
-endif()
-if(ASSERT_ENABLED)
-    target_compile_definitions(GPU-HeiPa PRIVATE ASSERT_ENABLED=1)
-    target_compile_definitions(GPU-HeiProMap PRIVATE ASSERT_ENABLED=1)
-endif()
+target_link_libraries(GPU-HeiPa PRIVATE kway_lib)
+target_link_libraries(GPU-HeiProMap PRIVATE kway_lib)
 
-target_link_libraries(GPU-HeiPa
-        PRIVATE
-        Kokkos::kokkos
-        Kokkos::kokkoskernels
-)
-
-target_link_libraries(GPU-HeiProMap
-        PRIVATE
-        Kokkos::kokkos
-        Kokkos::kokkoskernels
-)
 
 # Disable CUDA lazy loading via linker flags
 if(Kokkos_ENABLE_CUDA)
     target_link_options(GPU-HeiPa PRIVATE "LINKER:--require-defined,cudaDeviceSynchronize")
     target_link_options(GPU-HeiProMap PRIVATE "LINKER:--require-defined,cudaDeviceSynchronize")
 endif()
+
+
+target_compile_options(GPU-HeiPa PRIVATE
+        -Wno-sign-conversion
+)
+
+target_compile_options(GPU-HeiProMap PRIVATE
+        -Wno-sign-conversion
+)

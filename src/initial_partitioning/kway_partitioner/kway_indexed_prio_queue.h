@@ -52,8 +52,8 @@ namespace GPU_HeiPa::ModifiedMetis {
                 if (!(key > heap_[parent].key))
                     break;
 
-                heap_[i] = heap_[parent];
-                locator_[heap_[i].val] = i;
+                heap_[static_cast<size_t>(i)] = heap_[static_cast<size_t>(parent)];
+                locator_[heap_[static_cast<size_t>(i)].val] = i;
                 i = parent;
             }
         }
@@ -78,15 +78,15 @@ namespace GPU_HeiPa::ModifiedMetis {
                     break;
                 }
 
-                heap_[i] = heap_[best];
-                locator_[heap_[i].val] = i;
+                heap_[static_cast<size_t>(i)] = heap_[static_cast<size_t>(best)];
+                locator_[heap_[static_cast<size_t>(i)].val] = i;
                 i = best;
             }
         }
 
         void placeAt(ssize_t i, int node, const T &key) {
-            heap_[i] = {key, node};
-            locator_[node] = i;
+            heap_[static_cast<size_t>(i)] = {key, node};
+            locator_[static_cast<size_t>(node)] = i;
         }
 
     public:

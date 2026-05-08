@@ -36,7 +36,7 @@
 #include "partition.h"
 #include "../coarsening/two_hop_matching.h"
 #include "../initial_partitioning/global_multisection.h"
-#include "../initial_partitioning/gpu_initial_partition.h"
+#include "../initial_partitioning/gpu_progressive_partition.h"
 #include "../utility/definitions.h"
 #include "../utility/promap_configuration.h"
 #include "../utility/profiler.h"
@@ -252,6 +252,9 @@ namespace GPU_HeiPa {
 
 
             u32 level = 0;
+            if (config.verbose_level >= 1) {
+                std::cout << "Starting coarsening (target max_n: " << max_n << ")..." << std::endl;
+            }
             while (graphs.back().n > max_n) {
                 #if ENABLE_PROFILER
                 level_infos.emplace_back();
@@ -263,7 +266,15 @@ namespace GPU_HeiPa {
                 coarsening(level);
                 contraction(level);
 
+                if (config.verbose_level >= 2) {
+                    std::cout << "Level " << level << ": n=" << graphs.back().n << ", m=" << graphs.back().m << std::endl;
+                }
+
                 level += 1;
+            }
+
+            if (config.verbose_level >= 1) {
+                std::cout << "Coarsening finished at level " << level << " (n=" << graphs.back().n << "). Starting initial partitioning..." << std::endl;
             }
 
             #if ENABLE_PROFILER
@@ -274,6 +285,10 @@ namespace GPU_HeiPa {
             #endif
 
             initial_partitioning();
+
+            if (config.verbose_level >= 1) {
+                std::cout << "Initial partitioning finished. Starting uncontraction and refinement..." << std::endl;
+            }
 
             #if ENABLE_PROFILER
             level_infos[level].max_b_weight = max_weight(partition);
@@ -395,8 +410,9 @@ namespace GPU_HeiPa {
         void initial_partitioning() {
             auto p = get_time_point();
 
-            global_multisection(graphs.back(), config.hierarchy, k, config.imbalance, config.seed, partition, exec_space);
+            // global_multisection(graphs.back(), config.hierarchy, k, config.imbalance, config.seed, partition, exec_space);
             // gpu_initial_partition(graphs.back(), config.hierarchy, k, config.imbalance, config.seed, partition, mem_stack, exec_space);
+            gpu_progressive_partition(graphs.back(), config.hierarchy, k, config.imbalance, config.seed, 24, partition, mem_stack, exec_space);
 
             if (graphs.back().uniform_vertex_weights) {
                 recalculate_weights<true>(partition, graphs.back(), exec_space);
