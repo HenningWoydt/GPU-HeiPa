@@ -42,7 +42,7 @@ namespace GPU_HeiPa {
     struct BestBisectReducer {
         using reducer = BestBisectReducer;
         using value_type = BestBisectConfig;
-        using result_view_type = Kokkos::View<value_type, HostMemory, Kokkos::MemoryTraits<Kokkos::Unmanaged>>;
+        using result_view_type = Kokkos::View<value_type, HostMemory, Kokkos::MemoryTraits<Kokkos::Unmanaged> >;
 
         KOKKOS_INLINE_FUNCTION void join(value_type &dst, const value_type &src) const {
             if (src.penalty < dst.penalty) {
@@ -62,9 +62,11 @@ namespace GPU_HeiPa {
 
         value_type *value;
 
-        KOKKOS_INLINE_FUNCTION BestBisectReducer(value_type &val) : value(&val) {}
+        KOKKOS_INLINE_FUNCTION BestBisectReducer(value_type &val) : value(&val) {
+        }
 
-        KOKKOS_INLINE_FUNCTION BestBisectReducer(result_view_type view) : value(view.data()) {}
+        KOKKOS_INLINE_FUNCTION BestBisectReducer(result_view_type view) : value(view.data()) {
+        }
 
         KOKKOS_INLINE_FUNCTION value_type &reference() const { return *value; }
 
@@ -79,7 +81,7 @@ namespace GPU_HeiPa {
         weight_t lmax_left,
         weight_t lmax_right,
         UnmanagedDevicePartition &partition_map,
-        Kokkos::View<BestBisectConfig, HostMemory, Kokkos::MemoryTraits<Kokkos::Unmanaged>> result_view,
+        Kokkos::View<BestBisectConfig, HostMemory, Kokkos::MemoryTraits<Kokkos::Unmanaged> > result_view,
         DeviceExecutionSpace &exec_space
     ) {
         if (g.n == 0) return;
@@ -149,7 +151,8 @@ namespace GPU_HeiPa {
                 const u64 new_part_u = old_part_u ^ 1ULL;
                 const weight_t wu = uvw ? 1 : g.weights(flip_u);
 
-                if (new_part_u) wr += wu; else wr -= wu;
+                if (new_part_u) wr += wu;
+                else wr -= wu;
 
                 for (u32 e = g.neighborhood(flip_u); e < g.neighborhood(flip_u + 1); ++e) {
                     const vertex_t v = g.edges_v(e);
@@ -157,7 +160,8 @@ namespace GPU_HeiPa {
                     const bool was_cut = old_part_u != part_v;
                     const bool now_cut = new_part_u != part_v;
                     const weight_t ew = uew ? 1 : g.edges_w(e);
-                    if (was_cut && !now_cut) cut -= ew; else if (!was_cut && now_cut) cut += ew;
+                    if (was_cut && !now_cut) cut -= ew;
+                    else if (!was_cut && now_cut) cut += ew;
                 }
                 gray = next_gray;
                 evaluate_current(gray, wr, cut, local_best);
@@ -579,11 +583,7 @@ namespace GPU_HeiPa {
                 ScopedTimer _t("initial_partitioning", "gpu_progressive_partition", "partition_contraction");
                 contract(partition, mappings.back(), exec_space);
             }
-
-            std::cout << "  [Progressive Coarsening] Level " << graphs.size() - 1 << ": n=" << graphs.back().n << std::endl;
         }
-
-        std::cout << "  [Progressive Bisection] Starting loop at level " << graphs.size() - 1 << " (n=" << graphs.back().n << ")" << std::endl;
 
         UnmanagedDeviceVertex vertex_count = UnmanagedDeviceVertex((vertex_t *) get_chunk_front(mem_stack, sizeof(vertex_t) * k), k);
         HostVertex h_counts(Kokkos::view_alloc(Kokkos::WithoutInitializing, "h_counts"), k);
@@ -667,8 +667,6 @@ namespace GPU_HeiPa {
                     }
                 }
 
-                std::cout << "need to split " << blocks_to_split.size() << " blocks" << std::endl;
-
                 if (!blocks_to_split.empty()) {
                     split_occurred = true;
 
@@ -681,10 +679,10 @@ namespace GPU_HeiPa {
 
                     UnmanagedDevicePartition sub_part_batch = UnmanagedDevicePartition((partition_t *) get_chunk_front(mem_stack, sizeof(partition_t) * batch.total_sub_n), batch.total_sub_n);
                     UnmanagedDevicePartition split_rids = UnmanagedDevicePartition((partition_t *) get_chunk_front(mem_stack, sizeof(partition_t) * batch.S), batch.S);
-                    
-                    using result_view_t = Kokkos::View<BestBisectConfig*, HostMemory, Kokkos::MemoryTraits<Kokkos::Unmanaged>>;
-                    result_view_t results_batch((BestBisectConfig*)get_chunk_front(mem_stack, sizeof(BestBisectConfig) * batch.S), batch.S);
-                    
+
+                    using result_view_t = Kokkos::View<BestBisectConfig *, HostMemory, Kokkos::MemoryTraits<Kokkos::Unmanaged> >;
+                    result_view_t results_batch((BestBisectConfig *) get_chunk_front(mem_stack, sizeof(BestBisectConfig) * batch.S), batch.S);
+
                     HostPartition h_split_rids(Kokkos::view_alloc(Kokkos::WithoutInitializing, "h_split_rids"), batch.S);
 
                     u32 n_instances = std::min(batch.S, 16u);
@@ -704,8 +702,6 @@ namespace GPU_HeiPa {
 
                         weight_t lmax_l = (weight_t) std::ceil((1.0 + imbalance) * avg_core_weight * (lp * stride));
                         weight_t lmax_r = (weight_t) std::ceil((1.0 + imbalance) * avg_core_weight * (rp * stride));
-
-                        std::cout << "      [Lvl " << lvl << "][Block " << b << "]" << " n=" << batch.h_sub_n[s] << " f=" << f << " stride=" << stride << " lp=" << lp << " rp=" << rp << " rid=" << rid << " -> Splitting" << std::endl;
 
                         Graph sub_g = make_batched_subgraph_view(batch, s, curr_g.uniform_vertex_weights, curr_g.uniform_edge_weights);
                         UnmanagedDevicePartition sub_part = Kokkos::subview(sub_part_batch, std::make_pair(batch.h_sub_vertex_offsets[s], batch.h_sub_vertex_offsets[s] + batch.h_sub_n[s]));
@@ -731,7 +727,7 @@ namespace GPU_HeiPa {
                         normalize_block_meta(rid);
                     }
 
-                    for (auto &st : instances) st.fence();
+                    for (auto &st: instances) st.fence();
 
                     Kokkos::deep_copy(exec_space, split_rids, h_split_rids);
 
@@ -770,8 +766,6 @@ namespace GPU_HeiPa {
             }
 
             cl--;
-
-            std::cout << "  [Progressive Bisection] uncontract " << cl << " (n=" << graphs[cl].n << ")" << std::endl;
 
             {
                 ScopedTimer _t("initial_partitioning", "gpu_progressive_partition", "uncontract");
