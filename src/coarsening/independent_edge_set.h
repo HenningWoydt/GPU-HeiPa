@@ -134,7 +134,7 @@ namespace GPU_HeiPa {
             Kokkos::parallel_reduce("IES_count_matches", Kokkos::RangePolicy<DeviceExecutionSpace>(exec_space, 0, n), KOKKOS_LAMBDA(const vertex_t u, vertex_t &update) {
                 if (matched(u) != SENTINEL) update++;
             }, matched_count);
-            std::cout << "  Round " << round << ": matched " << matched_count << " / " << n << " vertices" << std::endl;
+            exec_space.fence();
         }
 
         // Finalize: unmatched vertices become singletons (map to themselves)
@@ -164,10 +164,9 @@ namespace GPU_HeiPa {
             mapping.mapping(u) = coarse_ids(rep);
         });
 
-        std::cout << "Coarsening finished. Coarse vertices: " << nc << " (reduction factor: " << (f64)n/nc << ")" << std::endl;
-
         // Ensure all kernels using temporary buffers are finished before popping them
         exec_space.fence();
+        std::cout << "Coarsening finished. Coarse vertices: " << nc << " (reduction factor: " << (f64)n/nc << ")" << std::endl;
 
         // Cleanup temporary buffers from the stack
         pop_back(mem_stack); // vertex_max_rating

@@ -7,6 +7,7 @@ ENABLE_PROFILER="OFF"
 ASSERT_ENABLED="OFF"
 MAX_THREADS=""
 KOKKOS_ARCH=""
+SILENT="OFF"
 
 for arg in "$@"; do
   case "$arg" in
@@ -25,13 +26,25 @@ for arg in "$@"; do
     --kokkos-arch=*)
       KOKKOS_ARCH="${arg#*=}"
       ;;
+    --silent)
+      SILENT="ON"
+      ;;
     *)
       echo "Unknown argument: $arg"
-      echo "Usage: $0 [--download-kokkos=ON|OFF|AUTO] [--max-threads=N] [--kokkos-arch=ARCH]"
+      echo "Usage: $0 [--download-kokkos=ON|OFF|AUTO] [--max-threads=N] [--kokkos-arch=ARCH] [--silent]"
       exit 1
       ;;
   esac
 done
+
+SUCCESS="false"
+if [ "$SILENT" = "ON" ]; then
+  LOG_FILE=$(mktemp)
+  # Save original stderr to fd 4 to ensure we can print the log on error
+  exec 4>&2
+  exec > "$LOG_FILE" 2>&1
+  trap 'if [ "$SUCCESS" = "false" ]; then cat "$LOG_FILE" >&4; fi; rm -f "$LOG_FILE"' EXIT
+fi
 
 BACKEND="Cuda"
 BACKEND_LOWER="$(echo "$BACKEND" | tr '[:upper:]' '[:lower:]')"
@@ -248,3 +261,5 @@ cd "${ROOT}/build"
 cmake .. -DCMAKE_BUILD_TYPE=Release -DCMAKE_PREFIX_PATH="${ROOT}/extern/local/kokkos;${ROOT}/extern/local/kokkos-kernels" -DCMAKE_CXX_STANDARD=20 -DCMAKE_CXX_EXTENSIONS=OFF -DENABLE_PROFILER=${ENABLE_PROFILER} -DASSERT_ENABLED=${ASSERT_ENABLED}
 cmake --build . --parallel "$JOBS" --target GPU-HeiPa
 cmake --build . --parallel "$JOBS" --target GPU-HeiProMap
+
+SUCCESS="true"

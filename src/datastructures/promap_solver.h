@@ -410,9 +410,9 @@ namespace GPU_HeiPa {
         void initial_partitioning() {
             auto p = get_time_point();
 
-            global_multisection(graphs.back(), config.hierarchy, k, config.imbalance, config.seed, partition, exec_space);
+            // global_multisection(graphs.back(), config.hierarchy, k, config.imbalance, config.seed, partition, exec_space);
             // gpu_initial_partition(graphs.back(), config.hierarchy, k, config.imbalance, config.seed, partition, mem_stack, exec_space);
-            // gpu_progressive_partition(graphs.back(), config.hierarchy, k, config.imbalance, config.seed, 24, partition, mem_stack, exec_space);
+            gpu_progressive_partition(graphs.back(), config.hierarchy, k, config.imbalance, config.seed, 24, partition, mem_stack, exec_space);
 
             if (graphs.back().uniform_vertex_weights) {
                 recalculate_weights<true>(partition, graphs.back(), exec_space);

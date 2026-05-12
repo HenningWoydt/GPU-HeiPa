@@ -46,9 +46,9 @@ int main(int argc, char *argv[]) {
 
     ProMapConfiguration config;
     if (argc == 1) {
-        config.print_help_message();
-        Kokkos::finalize();
-        return 0;
+        // config.print_help_message();
+        // Kokkos::finalize();
+        // return 0;
         //
         {
             ScopedTimer _t("io", "main", "parse_args");
@@ -63,7 +63,7 @@ int main(int argc, char *argv[]) {
                 {"--hierarchy", "4:8:6"},
                 {"--distance", "1:10:100"},
                 {"--imbalance", "0.03"},
-                {"--config", "HM-ultra"},
+                {"--config", "IM"},
                 {"--verbose-level", "2"}
             };
 
