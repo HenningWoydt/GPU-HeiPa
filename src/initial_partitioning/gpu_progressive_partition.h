@@ -12,6 +12,7 @@
 #include "../datastructures/partition.h"
 #include "../datastructures/kokkos_memory_stack.h"
 #include "../coarsening/two_hop_matching.h"
+#include "../coarsening/independent_edge_set.h"
 #include "../utility/definitions.h"
 #include "../utility/kokkos_util.h"
 #include "../utility/profiler.h"
@@ -728,7 +729,8 @@ namespace GPU_HeiPa {
         while (graphs.back().n > threshold) {
             {
                 ScopedTimer _t("initial_partitioning", "gpu_progressive_partition", "coarsening");
-                mappings.push_back(two_hop_matcher_get_mapping<false, false>(graphs.back(), partition, lmax_global, mem_stack, exec_space));
+                // mappings.push_back(two_hop_matcher_get_mapping<false, false>(graphs.back(), partition, lmax_global, mem_stack, exec_space));
+                mappings.push_back(independent_edge_set_get_mapping<false, false>(graphs.back(), partition, lmax_global, mem_stack, exec_space));
             }
             //
             {

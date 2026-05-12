@@ -53,6 +53,7 @@ namespace GPU_HeiPa {
             {"--mapping", "-m", "Output filepath to the generated mapping.", "GPU-HeiPa_par.txt", "", false},
             {"--k", "-k", "Number of blocks k", "", "", false},
             {"--imbalance", "-e", "Allowed imbalance (for example 0.03).", "0.03", "", false},
+            {"--coarsening", "", "Coarsening Config {two-hop, independent-edge-set}.", "two-hop", "", false},
             {"--config", "-c", "Algorithm Config {default, ultra}.", "", "", false},
             {"--verbose-level", "", "Whether to print.", "1", "", false},
         };

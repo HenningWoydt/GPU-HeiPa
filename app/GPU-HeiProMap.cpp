@@ -55,7 +55,8 @@ int main(int argc, char *argv[]) {
             std::vector<std::pair<std::string, std::string> > input = {
                 // {"--graph", "../../ProMapRepo/data/mapping/rgg23.graph"}, // comm cost 9543754, 1098 ms
                 // {"--graph", "../../ProMapRepo/data/mapping/shipsec5.mtx.graph"},     // 1.778114 s
-                {"--graph", "../../ProMapRepo/data/mapping/2cubes_sphere.mtx.graph"},
+                {"--graph", "../../ProMapRepo/data/mapping/144.graph"},
+                // {"--graph", "../../ProMapRepo/data/mapping/2cubes_sphere.mtx.graph"},
                 // {"--graph", "../../ProMapRepo/data/mapping/bmwcra_1.mtx.graph"}, // 5.71 s
                 // {"--graph", "../../ProMapRepo/data/mapping/europe_osm.graph"},
                 // {"--graph", "../../ProMapRepo/data/mapping/cop20k_A.mtx.graph"},
@@ -63,7 +64,7 @@ int main(int argc, char *argv[]) {
                 {"--distance", "1:10:100"},
                 {"--imbalance", "0.03"},
                 {"--config", "HM-ultra"},
-                {"--verbose-level", "1"}
+                {"--verbose-level", "2"}
             };
 
             std::vector<std::string> args = {"GPU-HeiProMap"};
