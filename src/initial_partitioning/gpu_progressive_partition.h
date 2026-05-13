@@ -100,6 +100,182 @@ namespace GPU_HeiPa {
         KOKKOS_INLINE_FUNCTION bool references_scalar() const { return true; }
     };
 
+    /**
+     * Managed container for a batch of identical-size graphs.
+     */
+    struct GraphBatch {
+        Kokkos::View<uint8_t*, DeviceMemorySpace> storage;
+        Kokkos::View<Graph*, DeviceMemorySpace> graphs;
+        size_t stride_bytes = 0; // Size of one graph in the chunk
+    };
+
+    /**
+     * Allocates space for k graphs as one big chunk based on a reference graph.
+     */
+    inline GraphBatch allocate_graph_batch(const Graph& ref_g,
+                                           const size_t k,
+                                           DeviceExecutionSpace& exec_space) {
+        // 1. Calculate space required for a single graph instance (CSR data)
+        size_t stride = 0;
+        stride += round_up_64(sizeof(u32) * (ref_g.n + 1));      // neighborhood
+        stride += round_up_64(sizeof(vertex_t) * ref_g.m);       // edges_u
+        stride += round_up_64(sizeof(vertex_t) * ref_g.m);       // edges_v
+
+        if (!ref_g.uniform_edge_weights) {
+            stride += round_up_64(sizeof(weight_t) * ref_g.m);   // edges_w
+        }
+        if (!ref_g.uniform_vertex_weights) {
+            stride += round_up_64(sizeof(weight_t) * ref_g.n);   // weights
+        }
+
+        // 2. Perform the single large device allocation
+        GraphBatch batch;
+        batch.stride_bytes = stride;
+        batch.storage = Kokkos::View<uint8_t*, DeviceMemorySpace>("batch_storage", stride * k);
+        batch.graphs = Kokkos::View<Graph*, DeviceMemorySpace>("batch_graphs", k);
+
+        // 3. Initialize Graph objects on Host with correct device pointers
+        auto h_graphs = Kokkos::create_mirror_view(batch.graphs);
+        uint8_t* base_ptr = batch.storage.data();
+
+        for (size_t i = 0; i < k; ++i) {
+            // Set metadata based on reference
+            h_graphs(i).n = ref_g.n;
+            h_graphs(i).m = ref_g.m;
+            h_graphs(i).g_weight = ref_g.g_weight;
+            h_graphs(i).uniform_vertex_weights = ref_g.uniform_vertex_weights;
+            h_graphs(i).uniform_edge_weights = ref_g.uniform_edge_weights;
+
+            // Offset to the i-th graph's memory region
+            uint8_t* graph_mem = base_ptr + (i * stride);
+            size_t local_cursor = 0;
+
+            h_graphs(i).neighborhood = UnmanagedDeviceU32((u32*)(graph_mem + local_cursor), ref_g.n + 1);
+            local_cursor += round_up_64(sizeof(u32) * (ref_g.n + 1));
+
+            h_graphs(i).edges_u = UnmanagedDeviceVertex((vertex_t*)(graph_mem + local_cursor), ref_g.m);
+            local_cursor += round_up_64(sizeof(vertex_t) * ref_g.m);
+
+            h_graphs(i).edges_v = UnmanagedDeviceVertex((vertex_t*)(graph_mem + local_cursor), ref_g.m);
+            local_cursor += round_up_64(sizeof(vertex_t) * ref_g.m);
+
+            if (!ref_g.uniform_edge_weights) {
+                h_graphs(i).edges_w = UnmanagedDeviceWeight((weight_t*)(graph_mem + local_cursor), ref_g.m);
+                local_cursor += round_up_64(sizeof(weight_t) * ref_g.m);
+            }
+            if (!ref_g.uniform_vertex_weights) {
+                h_graphs(i).weights = UnmanagedDeviceWeight((weight_t*)(graph_mem + local_cursor), ref_g.n);
+            }
+        }
+
+        // 4. Transfer the Graph objects (containing the pointers) to the device
+        Kokkos::deep_copy(exec_space, batch.graphs, h_graphs);
+
+        return batch;
+    }
+
+    /**
+     * Extracts all k subgraphs from a graph based on a partition into a GraphBatch.
+     * Assumes all k subgraphs have the same dimensions as the Graphs in the batch.
+     */
+    inline void extract_all_subgraphs_batched(const Graph& g,
+                                              const Partition& partition,
+                                              GraphBatch& batch,
+                                              KokkosMemoryStack& mem_stack,
+                                              DeviceExecutionSpace& exec_space) {
+        const partition_t k = partition.k;
+        const vertex_t gn = g.n;
+        const bool uniform_vw = g.uniform_vertex_weights;
+        const bool uniform_ew = g.uniform_edge_weights;
+
+        // 1. Temporary mapping from global vertex to local vertex index in its subgraph
+        UnmanagedDeviceVertex global_to_local = UnmanagedDeviceVertex((vertex_t*)get_chunk_front(mem_stack, sizeof(vertex_t) * gn), gn);
+        UnmanagedDeviceVertex local_counters = UnmanagedDeviceVertex((vertex_t*)get_chunk_front(mem_stack, sizeof(vertex_t) * k), k);
+        UnmanagedDeviceU32 edge_counters = UnmanagedDeviceU32((u32*)get_chunk_front(mem_stack, sizeof(u32) * k), k);
+
+        Kokkos::deep_copy(exec_space, local_counters, 0);
+        Kokkos::deep_copy(exec_space, edge_counters, 0);
+
+        auto p_map = partition.map;
+        auto graphs = batch.graphs;
+
+        // 2. Assign local IDs to vertices and copy vertex weights
+        Kokkos::parallel_for("fill_sub_vertices", Kokkos::RangePolicy<DeviceExecutionSpace>(exec_space, 0, gn), KOKKOS_LAMBDA(const vertex_t u) {
+            partition_t b = p_map(u);
+            vertex_t local_u = Kokkos::atomic_fetch_add(&local_counters(b), 1);
+            global_to_local(u) = local_u;
+
+            if (!uniform_vw) {
+                graphs(b).weights(local_u) = g.weights(u);
+            }
+        });
+
+        // 3. Count edges and fill sub-neighborhoods (prefix sum style)
+        // Note: For identical-size graphs in a batch, sub_g.neighborhood(local_u) 
+        // will be filled as we iterate.
+        auto g_neigh = g.neighborhood;
+        auto g_edges_v = g.edges_v;
+        auto g_edges_w = g.edges_w;
+
+        Kokkos::parallel_for("fill_sub_edges", Kokkos::RangePolicy<DeviceExecutionSpace>(exec_space, 0, gn), KOKKOS_LAMBDA(const vertex_t u) {
+            partition_t b = p_map(u);
+            vertex_t local_u = global_to_local(u);
+            Graph& sub_g = graphs(b);
+
+            u32 start_e = g_neigh(u);
+            u32 end_e = g_neigh(u + 1);
+            
+            // We need to count how many edges stay within the same block
+            u32 local_edge_count = 0;
+            for (u32 e = start_e; e < end_e; ++e) {
+                vertex_t v = g_edges_v(e);
+                if (p_map(v) == b) {
+                    local_edge_count++;
+                }
+            }
+            
+            // This is a simplified fill for identical-size batches.
+            // In a real scenario, sub_g.n and sub_g.m might differ per block.
+            // If the batch assumes MAXIMUM sizes, we must be careful with neighborhood offsets.
+            // Here we assume the caller ensures sub_g has enough capacity.
+            
+            u32 sub_e_pos = Kokkos::atomic_fetch_add(&edge_counters(b), local_edge_count);
+            
+            // Fill neighborhood: this is tricky without a prefix sum per subgraph.
+            // For now, we store the local count in the neighborhood array to scan it later.
+            sub_g.neighborhood(local_u + 1) = local_edge_count;
+
+            u32 current_e_idx = sub_e_pos;
+            for (u32 e = start_e; e < end_e; ++e) {
+                vertex_t v = g_edges_v(e);
+                if (p_map(v) == b) {
+                    vertex_t local_v = global_to_local(v);
+                    sub_g.edges_u(current_e_idx) = local_u;
+                    sub_g.edges_v(current_e_idx) = local_v;
+                    if (!uniform_ew) {
+                        sub_g.edges_w(current_e_idx) = g_edges_w(e);
+                    }
+                    current_e_idx++;
+                }
+            }
+        });
+
+        // 4. Finalize neighborhoods for each subgraph
+        Kokkos::parallel_for("finalize_sub_neighborhoods", Kokkos::RangePolicy<DeviceExecutionSpace>(exec_space, 0, k), KOKKOS_LAMBDA(const partition_t b) {
+            Graph& sub_g = graphs(b);
+            sub_g.neighborhood(0) = 0;
+            u32 sum = 0;
+            for (vertex_t i = 0; i < sub_g.n; ++i) {
+                u32 deg = sub_g.neighborhood(i + 1);
+                sub_g.neighborhood(i + 1) = sum + deg;
+                sum += deg;
+            }
+        });
+
+        pop_front(mem_stack); // edge_counters
+        pop_front(mem_stack); // local_counters
+        pop_front(mem_stack); // global_to_local
+    }
 
     template<bool uvw, bool uew, int CHUNK>
     inline void brute_force_bisect_async(const Graph &g,
@@ -681,6 +857,8 @@ namespace GPU_HeiPa {
         UnmanagedDeviceVertex vertex_count = UnmanagedDeviceVertex((vertex_t *) get_chunk_front(mem_stack, sizeof(vertex_t) * k), k);
         UnmanagedDeviceU32 combined_stats = UnmanagedDeviceU32((u32 *) get_chunk_front(mem_stack, sizeof(u32) * 2 * k), 2 * k);
 
+        GraphBatch graph_batch = allocate_graph_batch(g, k, exec_space);
+
         // --- Hierarchy and Metadata Setup ---
         u32 num_levels = (u32) hierarchy.size();
         std::vector<partition_t> strides(num_levels);
@@ -762,6 +940,8 @@ namespace GPU_HeiPa {
 
                 if (S > 0) {
                     split_occurred = true;
+
+                    extract_all_subgraphs_batched(g, partition, graph_batch, mem_stack, exec_space);
 
                     // --- UPPER BOUND ALLOCATION ---
                     // Allocate based on current graph level sizes to avoid waiting for exact counts
