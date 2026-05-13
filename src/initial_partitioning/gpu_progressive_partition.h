@@ -100,121 +100,9 @@ namespace GPU_HeiPa {
         KOKKOS_INLINE_FUNCTION bool references_scalar() const { return true; }
     };
 
-    template<typename MatrixView>
-    inline void build_weight_matrix(const Graph &g,
-                                    MatrixView matrix,
-                                    DeviceExecutionSpace &exec_space) {
-        Kokkos::deep_copy(exec_space, matrix, 0);
-        auto neigh = g.neighborhood;
-        auto edges_v = g.edges_v;
-        auto edges_w = g.edges_w;
-        Kokkos::parallel_for("build_weight_matrix", Kokkos::RangePolicy<DeviceExecutionSpace>(exec_space, 0, g.n), KOKKOS_LAMBDA(const vertex_t u) {
-            for (u32 e = neigh(u); e < neigh(u + 1); ++e) {
-                matrix(u, edges_v(e)) = edges_w(e);
-            }
-        });
-    }
 
-    template<bool uvw, int CHUNK = 16, typename MatrixView>
-    inline void brute_force_bisect_matrix_async(const Graph &g,
-                                                const MatrixView matrix,
-                                                weight_t lmax_left,
-                                                weight_t lmax_right,
-                                                UnmanagedDevicePartition &partition_map,
-                                                Kokkos::View<BestBisectConfig, HostMemory, Kokkos::MemoryTraits<Kokkos::Unmanaged> > result_view,
-                                                DeviceExecutionSpace &exec_space);
 
-    template<bool uvw, int CHUNK, typename MatrixView>
-    inline void brute_force_bisect_matrix_async(const Graph &g,
-                                                const MatrixView matrix,
-                                                weight_t lmax_left,
-                                                weight_t lmax_right,
-                                                UnmanagedDevicePartition &partition_map,
-                                                Kokkos::View<BestBisectConfig, HostMemory, Kokkos::MemoryTraits<Kokkos::Unmanaged> > result_view,
-                                                DeviceExecutionSpace &exec_space) {
-        if (g.n == 0) return;
-        if (g.n == 1) {
-            Kokkos::parallel_for("bisect1", Kokkos::RangePolicy<DeviceExecutionSpace>(exec_space, 0, 1), KOKKOS_LAMBDA(int) {
-                partition_map(0) = 0;
-            });
-            return;
-        }
 
-        const vertex_t gn = g.n;
-        const vertex_t last = gn - 1;
-        const u64 num_configs = 1ULL << last;
-        const u64 num_chunks = (num_configs + CHUNK - 1) / CHUNK;
-
-        Kokkos::parallel_reduce("brute_force_bisect_matrix_reduction", Kokkos::RangePolicy<DeviceExecutionSpace>(exec_space, 0, num_chunks), KOKKOS_LAMBDA(const u64 chunk_id, BestBisectConfig &local_best) {
-            const u64 begin = chunk_id * CHUNK;
-            const u64 end = begin + CHUNK < num_configs ? begin + CHUNK : num_configs;
-
-            u64 gray = begin ^ (begin >> 1);
-            weight_t wr = 0;
-            for (vertex_t u = 0; u < last; ++u) {
-                if ((gray >> u) & 1ULL) {
-                    wr += uvw ? 1 : g.weights(u);
-                }
-            }
-
-            weight_t cut = 0;
-            for (vertex_t u = 0; u < gn; ++u) {
-                const u64 pu = (gray >> u) & 1ULL;
-                for (vertex_t v = u + 1; v < gn; ++v) {
-                    const u64 pv = (gray >> v) & 1ULL;
-                    if (pu != pv) {
-                        cut += matrix(u, v);
-                    }
-                }
-            }
-
-            auto evaluate_current = [&](const u64 config, const weight_t wr_cur, const weight_t cut_cur, BestBisectConfig &best_cur) {
-                const weight_t wl = g.g_weight - wr_cur;
-                const u64 p_l = wl > lmax_left ? (u64) (wl - lmax_left) : 0;
-                const u64 p_r = wr_cur > lmax_right ? (u64) (wr_cur - lmax_right) : 0;
-                const u64 penalty = p_l * p_l + p_r * p_r;
-
-                if (penalty < best_cur.penalty || (penalty == best_cur.penalty && cut_cur < best_cur.cut)) {
-                    best_cur.penalty = penalty;
-                    best_cur.cut = cut_cur;
-                    best_cur.config = config;
-                }
-            };
-
-            evaluate_current(gray, wr, cut, local_best);
-
-            for (u64 i = begin + 1; i < end; i++) {
-                const u64 next_gray = i ^ (i >> 1);
-                const u64 diff = gray ^ next_gray;
-
-                #if defined(__CUDA_ARCH__) || defined(__HIP_DEVICE_COMPILE__)
-                const vertex_t flip_u = (vertex_t) __ffsll(diff) - 1;
-                #else
-                const vertex_t flip_u = (vertex_t) __builtin_ctzll(diff);
-                #endif
-
-                const u64 old_part_u = (gray >> flip_u) & 1ULL;
-                const u64 new_part_u = old_part_u ^ 1ULL;
-                const weight_t wu = uvw ? 1 : g.weights(flip_u);
-
-                if (new_part_u) wr += wu;
-                else wr -= wu;
-
-                for (vertex_t v = 0; v < gn; ++v) {
-                    if (v == flip_u) continue;
-                    const u64 part_v = (gray >> v) & 1ULL;
-                    if (old_part_u != part_v) cut -= matrix(flip_u, v);
-                    else cut += matrix(flip_u, v);
-                }
-                gray = next_gray;
-                evaluate_current(gray, wr, cut, local_best);
-            }
-        }, BestBisectReducer(result_view));
-
-        Kokkos::parallel_for("apply_best_config", Kokkos::RangePolicy<DeviceExecutionSpace>(exec_space, 0, gn), KOKKOS_LAMBDA(const vertex_t u) {
-            partition_map(u) = (partition_t) ((result_view().config >> u) & 1ULL);
-        });
-    }
 
     template<bool uvw, bool uew, int CHUNK = 16>
     inline void brute_force_bisect_async(const Graph &g,
@@ -537,7 +425,7 @@ namespace GPU_HeiPa {
         batch.h_sub_n.assign(h_full_metadata.data(), h_full_metadata.data() + S);
         batch.h_sub_m.assign(h_full_metadata.data() + S, h_full_metadata.data() + 2 * S);
         batch.h_sub_weight.resize(S);
-        for(u32 s=0; s<S; ++s) batch.h_sub_weight[s] = static_cast<weight_t>(h_full_metadata(2 * S + s));
+        for (u32 s = 0; s < S; ++s) batch.h_sub_weight[s] = static_cast<weight_t>(h_full_metadata(2 * S + s));
         batch.h_sub_vertex_offsets.assign(h_full_metadata.data() + 3 * S, h_full_metadata.data() + 4 * S);
         batch.h_sub_edge_offsets.assign(h_full_metadata.data() + 4 * S, h_full_metadata.data() + 5 * S);
         batch.h_sub_neigh_offsets.assign(h_full_metadata.data() + 5 * S, h_full_metadata.data() + 6 * S);
@@ -685,40 +573,7 @@ namespace GPU_HeiPa {
         exec_space.fence();
     }
 
-    template<typename MatricesView>
-    inline void extract_weight_matrices_batched(const Graph &g,
-                                                const UnmanagedDevicePartition &partition_map,
-                                                const BatchedSubgraphs &batch,
-                                                MatricesView matrices,
-                                                DeviceExecutionSpace &exec_space) {
-        Kokkos::deep_copy(exec_space, matrices, 0);
 
-        auto sub_to_old = batch.sub_to_old;
-        auto old_to_sub = batch.old_to_sub;
-        auto sub_vertex_offsets = batch.sub_vertex_offsets;
-        auto sub_vertex_to_split = batch.sub_vertex_to_split;
-        auto neigh = g.neighborhood;
-        auto edges_v = g.edges_v;
-        auto edges_w = g.edges_w;
-        const bool uew = g.uniform_edge_weights;
-
-        Kokkos::parallel_for("extract_weight_matrices_batched", Kokkos::RangePolicy<DeviceExecutionSpace>(exec_space, 0, batch.total_sub_n), KOKKOS_LAMBDA(const vertex_t global_sub_u) {
-            vertex_t old_u = sub_to_old(global_sub_u);
-            partition_t s = sub_vertex_to_split(global_sub_u);
-            vertex_t voff = sub_vertex_offsets(s);
-            vertex_t local_u = global_sub_u - voff;
-            partition_t b = partition_map(old_u);
-
-            for (u32 e = neigh(old_u); e < neigh(old_u + 1); ++e) {
-                vertex_t old_v = edges_v(e);
-                if (partition_map(old_v) == b) {
-                    vertex_t global_sub_v = old_to_sub(old_v);
-                    vertex_t local_v = global_sub_v - voff;
-                    matrices(s, local_u, local_v) = uew ? 1 : edges_w(e);
-                }
-            }
-        });
-    }
 
     inline Graph make_batched_subgraph_view(const BatchedSubgraphs &batch,
                                             u32 s,
@@ -846,10 +701,10 @@ namespace GPU_HeiPa {
 
         // Move strides and hierarchy to device
         DeviceU32 d_strides("d_strides", num_levels);
-        Kokkos::deep_copy(exec_space, d_strides, Kokkos::View<partition_t *, HostMemory, Kokkos::MemoryTraits<Kokkos::Unmanaged>>(strides.data(), num_levels));
+        Kokkos::deep_copy(exec_space, d_strides, Kokkos::View<partition_t *, HostMemory, Kokkos::MemoryTraits<Kokkos::Unmanaged> >(strides.data(), num_levels));
 
         DeviceU32 d_hierarchy("d_hierarchy", num_levels);
-        Kokkos::deep_copy(exec_space, d_hierarchy, Kokkos::View<const partition_t *, HostMemory, Kokkos::MemoryTraits<Kokkos::Unmanaged>>(hierarchy.data(), num_levels));
+        Kokkos::deep_copy(exec_space, d_hierarchy, Kokkos::View<const partition_t *, HostMemory, Kokkos::MemoryTraits<Kokkos::Unmanaged> >(hierarchy.data(), num_levels));
 
         // Persistent Hierarchy Metadata on Device
         DeviceU32 d_block_lvl("d_block_lvl", k);
@@ -868,19 +723,15 @@ namespace GPU_HeiPa {
         f64 avg_core_weight = (f64) g.g_weight / (f64) k;
         int cl = (int) graphs.size() - 1;
 
-        // --- 2. PROGRESSIVE BISECTION / UNCOARSENING ---
-        Kokkos::deep_copy(exec_space, partition.map, 0);
-
         {
             ScopedTimer _t("initial_partitioning", "gpu_progressive_partition", "initial_count");
 
             recalculate_weights<false>(partition, graphs.back(), exec_space);
             count_block_vertices(partition, graphs.back(), vertex_count, exec_space);
 
-            auto b_weights = partition.bweights;
             Kokkos::parallel_for("combine_stats", Kokkos::RangePolicy<DeviceExecutionSpace>(exec_space, 0, k), KOKKOS_LAMBDA(const partition_t b) {
                 combined_stats(b) = vertex_count(b);
-                combined_stats(k + b) = static_cast<u32>(b_weights(b));
+                combined_stats(k + b) = partition.bweights(b);
             });
             exec_space.fence();
         }
@@ -935,14 +786,8 @@ namespace GPU_HeiPa {
                     extract_block_subgraphs_batched(curr_g, partition.map, k, d_blocks_to_split, S, batch, d_strides, d_block_lvl, d_block_fact, imbalance, avg_core_weight, mem_stack, exec_space);
 
                     UnmanagedDevicePartition sub_part_batch = UnmanagedDevicePartition((partition_t *) get_chunk_front(mem_stack, sizeof(partition_t) * alloc_n), alloc_n);
-                    Kokkos::View<weight_t ***, DeviceMemorySpace, Kokkos::MemoryTraits<Kokkos::Unmanaged>> sub_matrices((weight_t *) get_chunk_front(mem_stack, sizeof(weight_t) * S * threshold * threshold), S, threshold, threshold);
-                    
-                    {
-                        ScopedTimer _t("initial_partitioning", "gpu_progressive_partition", "extract_weight_matrices_batched");
-                        extract_weight_matrices_batched(curr_g, partition.map, batch, sub_matrices, exec_space);
-                    }
 
-                    using result_view_t = Kokkos::View<BestBisectConfig *, HostMemory, Kokkos::MemoryTraits<Kokkos::Unmanaged>>;
+                    using result_view_t = Kokkos::View<BestBisectConfig *, HostMemory, Kokkos::MemoryTraits<Kokkos::Unmanaged> >;
                     result_view_t results_batch((BestBisectConfig *) get_chunk_front(mem_stack, sizeof(BestBisectConfig) * S), S);
 
                     u32 n_instances = std::min(S, 16u);
@@ -960,16 +805,23 @@ namespace GPU_HeiPa {
 
                         Graph sub_g = make_batched_subgraph_view(batch, s, curr_g.uniform_vertex_weights, curr_g.uniform_edge_weights);
                         UnmanagedDevicePartition sub_part = Kokkos::subview(sub_part_batch, std::make_pair(voff, voff + sub_g.n));
-                        
-                        auto sub_matrix = Kokkos::subview(sub_matrices, s, Kokkos::ALL(), Kokkos::ALL());
+
                         auto result_s = Kokkos::subview(results_batch, s);
 
                         {
                             ScopedTimer _t("initial_partitioning", "gpu_progressive_partition", "brute_force_bisect");
                             if (sub_g.uniform_vertex_weights) {
-                                brute_force_bisect_matrix_async<true, 64>(sub_g, sub_matrix, lmax_l, lmax_r, sub_part, result_s, instances[s % n_instances]);
+                                if (sub_g.uniform_edge_weights) {
+                                    brute_force_bisect_async<true, true, 64>(sub_g, lmax_l, lmax_r, sub_part, result_s, instances[s % n_instances]);
+                                } else {
+                                    brute_force_bisect_async<true, false, 64>(sub_g, lmax_l, lmax_r, sub_part, result_s, instances[s % n_instances]);
+                                }
                             } else {
-                                brute_force_bisect_matrix_async<false, 64>(sub_g, sub_matrix, lmax_l, lmax_r, sub_part, result_s, instances[s % n_instances]);
+                                if (sub_g.uniform_edge_weights) {
+                                    brute_force_bisect_async<false, true, 64>(sub_g, lmax_l, lmax_r, sub_part, result_s, instances[s % n_instances]);
+                                } else {
+                                    brute_force_bisect_async<false, false, 64>(sub_g, lmax_l, lmax_r, sub_part, result_s, instances[s % n_instances]);
+                                }
                             }
                         }
                     }
@@ -984,7 +836,6 @@ namespace GPU_HeiPa {
                     }
 
                     pop_front(mem_stack); // results_batch
-                    pop_front(mem_stack); // sub_matrices
                     pop_front(mem_stack); // sub_part_batch
                     free_batched_subgraphs(batch, curr_g.uniform_vertex_weights, curr_g.uniform_edge_weights, mem_stack);
 
