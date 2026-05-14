@@ -83,6 +83,7 @@ namespace GPU_HeiPa {
             vertex_t u_new = mapping.mapping(u);
             partition.temp_map(u_new) = partition.map(u);
         });
+        exec_space.fence();
 
         std::swap(partition.map, partition.temp_map);
 
@@ -99,6 +100,8 @@ namespace GPU_HeiPa {
             vertex_t new_v = mapping.mapping(u);
             partition.temp_map(u) = partition.map(new_v);
         });
+        exec_space.fence();
+
         std::swap(partition.map, partition.temp_map);
 
         KOKKOS_PROFILE_FENCE(exec_space);

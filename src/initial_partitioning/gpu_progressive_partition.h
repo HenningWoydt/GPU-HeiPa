@@ -49,11 +49,11 @@ namespace GPU_HeiPa {
                                      UnmanagedDeviceVertex &d_counts,
                                      DeviceExecutionSpace &exec_space) {
         Kokkos::deep_copy(exec_space, d_counts, 0);
-        auto part_map = partition.map;
         Kokkos::parallel_for("count_block_vertices", Kokkos::RangePolicy<DeviceExecutionSpace>(exec_space, 0, g.n), KOKKOS_LAMBDA(const vertex_t u) {
-            partition_t b = part_map(u);
+            partition_t b = partition.map(u);
             Kokkos::atomic_add(&d_counts(b), 1);
         });
+        exec_space.fence();
     }
 
     struct BestBisectConfig {
@@ -113,15 +113,25 @@ namespace GPU_HeiPa {
             Kokkos::parallel_for("bisect1", Kokkos::RangePolicy<DeviceExecutionSpace>(exec_space, 0, 1), KOKKOS_LAMBDA(int) {
                 partition_map(0) = 0;
             });
+            exec_space.fence();
             return;
         }
 
         const vertex_t gn = g.n;
         const vertex_t last = gn - 1;
+
+        if (last >= 31) {
+            Kokkos::parallel_for("simple_split", Kokkos::RangePolicy<DeviceExecutionSpace>(exec_space, 0, gn), KOKKOS_LAMBDA(const vertex_t u) {
+                partition_map(u) = (u < gn / 2) ? 0 : 1;
+            });
+            exec_space.fence();
+            return;
+        }
+
         const u64 num_configs = 1ULL << last;
         const u64 num_chunks = (num_configs + CHUNK - 1) / CHUNK;
 
-        Kokkos::parallel_reduce("brute_force_bisect_reduction", Kokkos::RangePolicy<DeviceExecutionSpace>(exec_space, 0, num_chunks), KOKKOS_LAMBDA(const u64 chunk_id, BestBisectConfig &local_best) {
+        Kokkos::parallel_reduce("brute_force_bisect_reduction", Kokkos::RangePolicy<DeviceExecutionSpace>(exec_space, 0ULL, num_chunks), KOKKOS_LAMBDA(const u64 chunk_id, BestBisectConfig &local_best) {
             const u64 begin = chunk_id * CHUNK;
             const u64 end = begin + CHUNK < num_configs ? begin + CHUNK : num_configs;
 
@@ -191,10 +201,12 @@ namespace GPU_HeiPa {
                 evaluate_current(gray, wr, cut, local_best);
             }
         }, BestBisectReducer(result_view));
+        exec_space.fence();
 
         Kokkos::parallel_for("apply_best_config", Kokkos::RangePolicy<DeviceExecutionSpace>(exec_space, 0, gn), KOKKOS_LAMBDA(const vertex_t u) {
             partition_map(u) = (partition_t) ((result_view().config >> u) & 1ULL);
         });
+        exec_space.fence();
     }
 
     inline void predict_block_distribution(const Mapping &mapping,
@@ -206,6 +218,7 @@ namespace GPU_HeiPa {
             partition_t coarse_b = partition_map(mapping.mapping(u));
             Kokkos::atomic_add(&d_counts(coarse_b), 1);
         });
+        exec_space.fence();
     }
 
     struct BatchedSubgraphs {
@@ -305,7 +318,6 @@ namespace GPU_HeiPa {
         const u32 lmax_l_off = 7 * S;
         const u32 lmax_r_off = 8 * S;
         batch.totals_offset = 9 * S;
-        auto d_metadata = batch.metadata;
 
         batch.split_blocks = UnmanagedDevicePartition((partition_t *) get_chunk_front(mem_stack, sizeof(partition_t) * S), S);
         batch.block_to_split = UnmanagedDevicePartition((partition_t *) get_chunk_front(mem_stack, sizeof(partition_t) * k), k);
@@ -331,6 +343,7 @@ namespace GPU_HeiPa {
         Kokkos::parallel_for("batch_build_block_to_split", Kokkos::RangePolicy<DeviceExecutionSpace>(exec_space, 0, S), KOKKOS_LAMBDA(const u32 s) {
             d_block_to_split(d_split_blocks(s)) = s;
         });
+        exec_space.fence();
 
         auto part_map = partition_map;
         auto sub_n = batch.sub_n;
@@ -362,6 +375,7 @@ namespace GPU_HeiPa {
                 Kokkos::atomic_add(&sub_m(s), local_m);
             }
         });
+        exec_space.fence();
 
         Totals totals;
 
@@ -371,12 +385,12 @@ namespace GPU_HeiPa {
             const weight_t ws = sub_weight(s);
 
             if (final) {
-                d_metadata(s) = ns;
-                d_metadata(S + s) = ms;
-                d_metadata(2 * S + s) = static_cast<u32>(ws);
-                d_metadata(3 * S + s) = update.v;
-                d_metadata(4 * S + s) = update.e;
-                d_metadata(5 * S + s) = update.n;
+                batch.metadata(s) = ns;
+                batch.metadata(S + s) = ms;
+                batch.metadata(2 * S + s) = static_cast<u32>(ws);
+                batch.metadata(3 * S + s) = update.v;
+                batch.metadata(4 * S + s) = update.e;
+                batch.metadata(5 * S + s) = update.n;
 
                 // RID and lmax calculation on device
                 partition_t b = d_split_blocks(s);
@@ -386,20 +400,22 @@ namespace GPU_HeiPa {
                 partition_t lp = f - rp;
                 partition_t stride = d_strides(lvl);
 
-                d_metadata(6 * S + s) = b + lp * stride;
-                d_metadata(lmax_l_off + s) = static_cast<u32>(ceil((1.0 + imbalance) * avg_core_weight * (lp * stride)));
-                d_metadata(lmax_r_off + s) = static_cast<u32>(ceil((1.0 + imbalance) * avg_core_weight * (rp * stride)));
+                batch.metadata(6 * S + s) = b + lp * stride;
+                batch.metadata(lmax_l_off + s) = static_cast<u32>(ceil((1.0 + imbalance) * avg_core_weight * (lp * stride)));
+                batch.metadata(lmax_r_off + s) = static_cast<u32>(ceil((1.0 + imbalance) * avg_core_weight * (rp * stride)));
             }
             update.v += ns;
             update.e += ms;
             update.n += ns + 1;
         }, totals);
+        exec_space.fence();
 
         Kokkos::parallel_for("fill_totals", Kokkos::RangePolicy<DeviceExecutionSpace>(exec_space, 0, 1), KOKKOS_LAMBDA(int) {
-            d_metadata(batch.totals_offset) = totals.v;
-            d_metadata(batch.totals_offset + 1) = totals.e;
-            d_metadata(batch.totals_offset + 2) = totals.n;
+            batch.metadata(batch.totals_offset) = totals.v;
+            batch.metadata(batch.totals_offset + 1) = totals.e;
+            batch.metadata(batch.totals_offset + 2) = totals.n;
         });
+        exec_space.fence();
 
         // Download all metadata to the host in a single contiguous transfer
         HostU32 h_full_metadata(Kokkos::view_alloc(Kokkos::WithoutInitializing, "h_full_metadata"), batch.metadata.extent(0));
@@ -425,10 +441,11 @@ namespace GPU_HeiPa {
 
         // We still need the structural offsets on the device for kernels
         Kokkos::parallel_for("fill_device_offsets", Kokkos::RangePolicy<DeviceExecutionSpace>(exec_space, 0, S), KOKKOS_LAMBDA(const u32 s) {
-            batch.sub_vertex_offsets(s) = d_metadata(3 * S + s);
-            batch.sub_edge_offsets(s) = d_metadata(4 * S + s);
-            batch.sub_neigh_offsets(s) = d_metadata(5 * S + s);
+            batch.sub_vertex_offsets(s) = batch.metadata(3 * S + s);
+            batch.sub_edge_offsets(s) = batch.metadata(4 * S + s);
+            batch.sub_neigh_offsets(s) = batch.metadata(5 * S + s);
         });
+        exec_space.fence();
 
         const vertex_t total_sub_n = batch.total_sub_n;
         const u32 total_sub_m = batch.total_sub_m;
@@ -450,6 +467,7 @@ namespace GPU_HeiPa {
         }
 
         Kokkos::deep_copy(exec_space, batch.sub_write_pos, 0);
+        exec_space.fence();
 
         auto sub_vertex_offsets = batch.sub_vertex_offsets;
         auto sub_write_pos = batch.sub_write_pos;
@@ -475,8 +493,7 @@ namespace GPU_HeiPa {
                 }
             }
         });
-
-        auto degrees = batch.degrees;
+        exec_space.fence();
 
         Kokkos::parallel_for("batch_count_vertex_degrees", Kokkos::RangePolicy<DeviceExecutionSpace>(exec_space, 0, total_sub_n), KOKKOS_LAMBDA(const vertex_t global_sub_u) {
             vertex_t old_u = sub_to_old(global_sub_u);
@@ -489,19 +506,18 @@ namespace GPU_HeiPa {
                     deg++;
                 }
             }
-            degrees(global_sub_u) = deg;
+            batch.degrees(global_sub_u) = deg;
         });
+        exec_space.fence();
 
         auto neighborhood = batch.neighborhood;
-        auto sub_neigh_offsets = batch.sub_neigh_offsets;
-        auto d_sub_n = batch.sub_n;
 
         // Construct neighborhood on device
         Kokkos::parallel_for("batch_build_neighborhood", Kokkos::TeamPolicy<DeviceExecutionSpace>(exec_space, S, Kokkos::AUTO), KOKKOS_LAMBDA(const Kokkos::TeamPolicy<DeviceExecutionSpace>::member_type &team) {
             const u32 s = team.league_rank();
             const vertex_t voff = sub_vertex_offsets(s);
-            const vertex_t noff = sub_neigh_offsets(s);
-            const vertex_t ns = d_sub_n(s);
+            const vertex_t noff = batch.sub_neigh_offsets(s);
+            const vertex_t ns = batch.sub_n(s);
 
             // Set the first entry to 0
             Kokkos::single(Kokkos::PerTeam(team), [=]() {
@@ -510,21 +526,14 @@ namespace GPU_HeiPa {
 
             // Exclusive prefix sum over degrees for this subgraph
             Kokkos::parallel_scan(Kokkos::TeamThreadRange(team, ns), [=](const vertex_t i, u32 &update, const bool final) {
-                const u32 d = degrees(voff + i);
+                const u32 d = batch.degrees(voff + i);
                 if (final) {
                     neighborhood(noff + i + 1) = update + d;
                 }
                 update += d;
             });
         });
-
-        auto sub_edge_offsets = batch.sub_edge_offsets;
-        auto batched_edges_u = batch.edges_u;
-        auto batched_edges_v = batch.edges_v;
-        auto batched_edges_w = batch.edges_w;
-        auto g_edges_w = g.edges_w;
-
-        const bool uniform_ew = g.uniform_edge_weights;
+        exec_space.fence();
 
         Kokkos::parallel_for("batch_fill_edges", Kokkos::RangePolicy<DeviceExecutionSpace>(exec_space, 0, total_sub_n), KOKKOS_LAMBDA(const vertex_t global_sub_u) {
             partition_t s = sub_vertex_to_split(global_sub_u);
@@ -533,8 +542,8 @@ namespace GPU_HeiPa {
             partition_t old_block = part_map(old_u);
 
             vertex_t voff = sub_vertex_offsets(s);
-            vertex_t noff = sub_neigh_offsets(s);
-            u32 eoff = sub_edge_offsets(s);
+            vertex_t noff = batch.sub_neigh_offsets(s);
+            u32 eoff = batch.sub_edge_offsets(s);
 
             vertex_t local_u = global_sub_u - voff;
 
@@ -548,16 +557,17 @@ namespace GPU_HeiPa {
                     vertex_t global_sub_v = old_to_sub(old_v);
                     vertex_t local_v = global_sub_v - voff;
 
-                    batched_edges_u(global_pos) = local_u;
-                    batched_edges_v(global_pos) = local_v;
+                    batch.edges_u(global_pos) = local_u;
+                    batch.edges_v(global_pos) = local_v;
 
-                    if (!uniform_ew) {
-                        batched_edges_w(global_pos) = g_edges_w(e);
+                    if (!g.uniform_edge_weights) {
+                        batch.edges_w(global_pos) = g.edges_w(e);
                     }
                     global_pos++;
                 }
             }
         });
+        exec_space.fence();
 
         exec_space.fence();
     }
@@ -612,6 +622,7 @@ namespace GPU_HeiPa {
                 partition_map(old_u) = rid;
             }
         });
+        exec_space.fence();
     }
 
     inline void update_hierarchy(const u32 S,
@@ -646,6 +657,7 @@ namespace GPU_HeiPa {
                 d_block_fact(rid) = d_hierarchy(d_block_lvl(rid));
             }
         });
+        exec_space.fence();
     }
 
     inline void gpu_progressive_partition(Graph &g,
@@ -679,6 +691,7 @@ namespace GPU_HeiPa {
         }
 
         UnmanagedDeviceVertex vertex_count = UnmanagedDeviceVertex((vertex_t *) get_chunk_front(mem_stack, sizeof(vertex_t) * k), k);
+        UnmanagedDeviceVertex current_vertex_count = UnmanagedDeviceVertex((vertex_t *) get_chunk_front(mem_stack, sizeof(vertex_t) * k), k);
         UnmanagedDeviceU32 combined_stats = UnmanagedDeviceU32((u32 *) get_chunk_front(mem_stack, sizeof(u32) * 2 * k), 2 * k);
 
         // --- Hierarchy and Metadata Setup ---
@@ -707,6 +720,7 @@ namespace GPU_HeiPa {
                 d_block_fact(0) = d_hierarchy(num_levels - 1);
             }
         });
+        exec_space.fence();
 
         f64 avg_core_weight = (f64) g.g_weight / (f64) k;
         int cl = (int) graphs.size() - 1;
@@ -715,11 +729,12 @@ namespace GPU_HeiPa {
             ScopedTimer _t("initial_partitioning", "gpu_progressive_partition", "initial_count");
 
             recalculate_weights<false>(partition, graphs.back(), exec_space);
-            count_block_vertices(partition, graphs.back(), vertex_count, exec_space);
+            count_block_vertices(partition, graphs.back(), current_vertex_count, exec_space);
+            Kokkos::deep_copy(exec_space, vertex_count, current_vertex_count);
 
             Kokkos::parallel_for("combine_stats", Kokkos::RangePolicy<DeviceExecutionSpace>(exec_space, 0, k), KOKKOS_LAMBDA(const partition_t b) {
                 combined_stats(b) = vertex_count(b);
-                combined_stats(k + b) = partition.bweights(b);
+                combined_stats(k + b) = current_vertex_count(b);
             });
             exec_space.fence();
         }
@@ -727,18 +742,20 @@ namespace GPU_HeiPa {
         while (true) {
             Graph &curr_g = graphs[cl];
 
+            count_block_vertices(partition, curr_g, current_vertex_count, exec_space);
+
             if (!mappings.empty()) {
                 ScopedTimer _t("initial_partitioning", "gpu_progressive_partition", "predict_block_distribution");
                 predict_block_distribution(mappings.back(), partition.map, vertex_count, exec_space);
             } else {
-                ScopedTimer _t("initial_partitioning", "gpu_progressive_partition", "count_block_vertices");
-                count_block_vertices(partition, curr_g, vertex_count, exec_space);
+                Kokkos::deep_copy(exec_space, vertex_count, current_vertex_count);
             }
 
             Kokkos::parallel_for("combine_stats", Kokkos::RangePolicy<DeviceExecutionSpace>(exec_space, 0, k), KOKKOS_LAMBDA(const partition_t b) {
                 combined_stats(b) = vertex_count(b);
-                combined_stats(k + b) = partition.bweights(b);
+                combined_stats(k + b) = current_vertex_count(b);
             });
+            exec_space.fence();
 
             bool split_occurred;
             do {
@@ -748,9 +765,10 @@ namespace GPU_HeiPa {
                 HostScalarPinnedU32 h_S("h_S");
 
                 Kokkos::parallel_scan("find_split_candidates", Kokkos::RangePolicy<DeviceExecutionSpace>(exec_space, 0, k), KOKKOS_LAMBDA(const u32 b, u32 &update, const bool final) {
-                    const u32 n = combined_stats(b);
+                    const u32 n_predicted = combined_stats(b);
+                    const u32 n_current = combined_stats(k + b);
                     const u32 fact = d_block_fact(b);
-                    bool splittable = (n > 0) && (fact > 1) && ((n > threshold) || (cl == 0));
+                    bool splittable = (n_current > 1) && (fact > 1) && ((n_predicted > threshold) || (cl == 0));
                     if (splittable) {
                         if (final) d_blocks_to_split(update) = b;
                         update++;
@@ -781,14 +799,30 @@ namespace GPU_HeiPa {
                     // Use downloaded metadata for host-side loop control (memory subviewing and workload)
                     HostU32 h_full_metadata(Kokkos::view_alloc(Kokkos::WithoutInitializing, "h_full_metadata"), batch.metadata.extent(0));
                     Kokkos::deep_copy(exec_space, h_full_metadata, batch.metadata);
+
+                    HostPartition h_split_blocks(Kokkos::view_alloc(Kokkos::WithoutInitializing, "h_split_blocks"), batch.split_blocks.extent(0));
+                    Kokkos::deep_copy(exec_space, h_split_blocks, batch.split_blocks);
                     exec_space.fence();
+
+                    if (S > 0) {
+                        std::cout << "Processing batch of " << S << " subgraphs: Total n=" << batch.total_sub_n << ", Total m=" << batch.total_sub_m << std::endl;
+                    }
 
                     for (u32 s = 0; s < S; ++s) {
                         weight_t lmax_l = static_cast<weight_t>(h_full_metadata(7 * S + s));
                         weight_t lmax_r = static_cast<weight_t>(h_full_metadata(8 * S + s));
                         vertex_t voff = h_full_metadata(3 * S + s);
+                        partition_t original_b = h_split_blocks(s);
 
                         Graph sub_g = make_batched_subgraph_view(batch, s, curr_g.uniform_vertex_weights, curr_g.uniform_edge_weights);
+
+                        if (sub_g.n >= 31) {
+                            std::cout << "WARNING: Subgraph for block " << original_b << " has " << sub_g.n 
+                                      << " vertices, which exceeds the 31-vertex limit for brute-force bisection (potential UB)." << std::endl;
+                        } else {
+                            std::cout << "Bisecting block " << original_b << ": n=" << sub_g.n << ", m=" << sub_g.m << std::endl;
+                        }
+
                         UnmanagedDevicePartition sub_part = Kokkos::subview(sub_part_batch, std::make_pair(voff, voff + sub_g.n));
 
                         auto result_s = Kokkos::subview(results_batch, s);
@@ -813,7 +847,7 @@ namespace GPU_HeiPa {
                         ScopedTimer _t("initial_partitioning", "gpu_progressive_partition", "update_partition");
                         update_partition_from_batched_subparts(batch, sub_part_batch, batch.metadata, partition.map, exec_space);
                         update_hierarchy(S, batch.split_blocks, batch.metadata, d_block_lvl, d_block_fact, d_hierarchy, exec_space);
-                        KOKKOS_PROFILE_FENCE(exec_space);
+                        exec_space.fence();
                     }
 
                     pop_front(mem_stack); // results_batch
@@ -823,12 +857,19 @@ namespace GPU_HeiPa {
                     {
                         ScopedTimer _t("initial_partitioning", "gpu_progressive_partition", "recalc_stats");
                         recalculate_weights<false>(partition, curr_g, exec_space);
-                        count_block_vertices(partition, curr_g, vertex_count, exec_space);
+
+                        count_block_vertices(partition, curr_g, current_vertex_count, exec_space);
+                        if (!mappings.empty()) {
+                            predict_block_distribution(mappings.back(), partition.map, vertex_count, exec_space);
+                        } else {
+                            Kokkos::deep_copy(exec_space, vertex_count, current_vertex_count);
+                        }
+
                         Kokkos::parallel_for("combine_stats", Kokkos::RangePolicy<DeviceExecutionSpace>(exec_space, 0, k), KOKKOS_LAMBDA(const partition_t b) {
                             combined_stats(b) = vertex_count(b);
-                            combined_stats(k + b) = partition.bweights(b);
+                            combined_stats(k + b) = current_vertex_count(b);
                         });
-                        KOKKOS_PROFILE_FENCE(exec_space);
+                        exec_space.fence();
                     }
                 }
                 pop_front(mem_stack); // d_blocks_to_split
@@ -839,17 +880,24 @@ namespace GPU_HeiPa {
             {
                 ScopedTimer _t("initial_partitioning", "gpu_progressive_partition", "uncontract");
                 uncontract(partition, mappings.back(), exec_space);
-                KOKKOS_PROFILE_FENCE(exec_space);
+                exec_space.fence();
             }
             {
                 ScopedTimer _t("initial_partitioning", "gpu_progressive_partition", "recalc_stats");
                 recalculate_weights<false>(partition, graphs[cl], exec_space);
-                count_block_vertices(partition, graphs[cl], vertex_count, exec_space);
+
+                count_block_vertices(partition, graphs[cl], current_vertex_count, exec_space);
+                if (!mappings.empty()) {
+                    predict_block_distribution(mappings.back(), partition.map, vertex_count, exec_space);
+                } else {
+                    Kokkos::deep_copy(exec_space, vertex_count, current_vertex_count);
+                }
+
                 Kokkos::parallel_for("combine_stats", Kokkos::RangePolicy<DeviceExecutionSpace>(exec_space, 0, k), KOKKOS_LAMBDA(const partition_t b) {
                     combined_stats(b) = vertex_count(b);
-                    combined_stats(k + b) = partition.bweights(b);
+                    combined_stats(k + b) = current_vertex_count(b);
                 });
-                KOKKOS_PROFILE_FENCE(exec_space);
+                exec_space.fence();
             }
             free_graph(graphs.back(), mem_stack);
             graphs.pop_back();
@@ -858,6 +906,7 @@ namespace GPU_HeiPa {
             exec_space.fence();
         }
         pop_front(mem_stack); // combined_stats
+        pop_front(mem_stack); // current_vertex_count
         pop_front(mem_stack); // vertex_count
     }
 }
