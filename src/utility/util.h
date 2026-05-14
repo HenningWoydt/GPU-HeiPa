@@ -48,6 +48,20 @@
 #include "definitions.h"
 
 namespace GPU_HeiPa {
+    inline u32 floor_log2(u32 n) {
+        if (n == 0) return 0;
+#if defined(__GNUC__) || defined(__clang__)
+        return 31 - __builtin_clz(n);
+#else
+        u32 log = 0;
+        while (n > 1) {
+            n >>= 1;
+            log++;
+        }
+        return log;
+#endif
+    }
+
     template<typename T>
     void print(const std::vector<T> &vec, const std::string &name = "") {
         if (!name.empty()) std::cout << name << " = ";
