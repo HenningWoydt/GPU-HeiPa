@@ -127,6 +127,36 @@ namespace GPU_HeiPa {
         }
     }
 
+    inline void assert_hierarchy(const partition_t k,
+                                 const DeviceU32 &d_block_lvl,
+                                 const DeviceU32 &d_block_fact,
+                                 const DeviceU32 &d_hierarchy,
+                                 DeviceExecutionSpace &exec_space) {
+        #if !ASSERT_ENABLED
+        return;
+        #endif
+
+        HostU32 h_block_lvl("h_block_lvl", k);
+        HostU32 h_block_fact("h_block_fact", k);
+        HostU32 h_hierarchy("h_hierarchy", d_hierarchy.extent(0));
+
+        Kokkos::deep_copy(exec_space, h_block_lvl, d_block_lvl);
+        Kokkos::deep_copy(exec_space, h_block_fact, d_block_fact);
+        Kokkos::deep_copy(exec_space, h_hierarchy, d_hierarchy);
+        exec_space.fence();
+
+        for (partition_t i = 0; i < k; ++i) {
+            u32 lvl = h_block_lvl(i);
+            u32 fact = h_block_fact(i);
+            ASSERT(lvl < h_hierarchy.extent(0));
+            if (fact > 0) {
+                // If fact > 1, it should be <= the hierarchy value at that level (or equal if just normalized)
+                // This is a loose check as fact changes during splitting.
+                ASSERT(fact <= h_hierarchy(lvl));
+            }
+        }
+    }
+
 
     inline void assert_state_pre_partition(const Graph &device_g,
                                            DeviceExecutionSpace &exec_space) {
