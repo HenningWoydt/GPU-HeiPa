@@ -203,32 +203,63 @@ namespace GPU_HeiPa {
         return x;
     }
 
-    inline void print(const UnmanagedDeviceWeight &dev_vec, const std::string &name = "") {
+    inline void print(const UnmanagedDeviceWeight &dev_vec, const std::string &name = "", size_t n = std::numeric_limits<size_t>::max()) {
         auto host_vec =
                 Kokkos::create_mirror_view_and_copy(Kokkos::HostSpace(), dev_vec);
 
         if (!name.empty()) std::cout << name << " = ";
         std::cout << "[";
 
-        for (size_t i = 0; i < host_vec.extent(0); ++i) {
+        size_t limit = std::min((size_t)host_vec.extent(0), n);
+        for (size_t i = 0; i < limit; ++i) {
             std::cout << host_vec(i);
-            if (i + 1 != host_vec.extent(0)) std::cout << ", ";
+            if (i + 1 != limit) std::cout << ", ";
         }
 
         std::cout << "]\n";
     }
 
-    inline void print(const UnmanagedDevicePartition &dev_vec, const std::string &name = "") {
+    inline void print(const HostWeight &host_vec, const std::string &name = "", size_t n = std::numeric_limits<size_t>::max()) {
+        if (!name.empty()) std::cout << name << " = ";
+        std::cout << "[";
+
+        size_t limit = std::min((size_t)host_vec.extent(0), n);
+        for (size_t i = 0; i < limit; ++i) {
+            std::cout << host_vec(i);
+            if (i + 1 != limit) std::cout << ", ";
+        }
+        if (limit < host_vec.extent(0)) std::cout << ", ...";
+
+        std::cout << "]\n";
+    }
+
+    inline void print(const HostVertex &host_vec, const std::string &name = "", size_t n = std::numeric_limits<size_t>::max()) {
+        if (!name.empty()) std::cout << name << " = ";
+        std::cout << "[";
+
+        size_t limit = std::min((size_t)host_vec.extent(0), n);
+        for (size_t i = 0; i < limit; ++i) {
+            std::cout << host_vec(i);
+            if (i + 1 != limit) std::cout << ", ";
+        }
+        if (limit < host_vec.extent(0)) std::cout << ", ...";
+
+        std::cout << "]\n";
+    }
+
+    inline void print(const UnmanagedDevicePartition &dev_vec, const std::string &name = "", size_t n = std::numeric_limits<size_t>::max()) {
         auto host_vec =
                 Kokkos::create_mirror_view_and_copy(Kokkos::HostSpace(), dev_vec);
 
         if (!name.empty()) std::cout << name << " = ";
         std::cout << "[";
 
-        for (size_t i = 0; i < host_vec.extent(0); ++i) {
+        size_t limit = std::min((size_t)host_vec.extent(0), n);
+        for (size_t i = 0; i < limit; ++i) {
             std::cout << host_vec(i);
-            if (i + 1 != host_vec.extent(0)) std::cout << ", ";
+            if (i + 1 != limit) std::cout << ", ";
         }
+        if (limit < host_vec.extent(0)) std::cout << ", ...";
 
         std::cout << "]\n";
     }

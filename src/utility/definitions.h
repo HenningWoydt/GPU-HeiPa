@@ -49,6 +49,9 @@ namespace GPU_HeiPa {
     typedef s32 weight_t;
     typedef u32 partition_t;
 
+    constexpr vertex_t vertex_t_max = std::numeric_limits<vertex_t>::max();
+    constexpr vertex_t SENTINEL = vertex_t_max;
+
     constexpr weight_t GAIN_MIN = std::numeric_limits<weight_t>::lowest();
     constexpr partition_t NULL_PART = std::numeric_limits<u32>::max() - 1;
     constexpr partition_t HASH_RECLAIM = std::numeric_limits<u32>::max() - 2;

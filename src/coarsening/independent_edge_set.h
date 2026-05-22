@@ -36,146 +36,190 @@
 #include "../datastructures/graph.h"
 #include "../datastructures/mapping.h"
 
-namespace GPU_HeiPa {
+#include <numeric>
+#include <algorithm>
+#include <random>
 
+namespace GPU_HeiPa {
     /**
-     * @brief Computes a coarsening mapping based on an independent edge set (matching).
+     * @brief Computes a coarsening mapping based on an independent edge set (matching) on the CPU.
      * 
-     * This scheme finds a maximal matching in the graph and contracts each matched edge
-     * into a single vertex in the coarse graph. Unmatched vertices are kept as singletons.
-     * The implementation is edge-parallel: edges are rated, and an edge is selected if
-     * its rating is the best among its "neighborhood" (incident edges).
+     * This version copies the graph to the host, performs a simple greedy matching,
+     * and then uploads the result back to the device.
      */
-    template <bool uniform_v_weights, bool uniform_e_weights>
+    template<bool uniform_v_weights, bool uniform_e_weights>
     inline Mapping independent_edge_set_get_mapping(const Graph &g,
-                                                   const Partition &partition,
-                                                   const weight_t &lmax,
-                                                   KokkosMemoryStack &mem_stack,
-                                                   DeviceExecutionSpace &exec_space) {
-        ScopedTimer _t_total("coarsening", "IndependentEdgeSet", "total");
+                                                    const Partition &partition,
+                                                    const weight_t &lmax,
+                                                    KokkosMemoryStack &mem_stack,
+                                                    DeviceExecutionSpace &exec_space) {
+        ScopedTimer _t_total("coarsening", "IndependentEdgeSetCPU", "total");
 
         const vertex_t n = g.n;
-        const u32 m = g.m;
         if (n == 0) return initialize_mapping(0, 0, mem_stack);
 
-        std::cout << "Starting Independent Edge Set Coarsening (n=" << n << ", m=" << m << ")..." << std::endl;
+        // 1. Transfer graph and partition to host
+        HostGraph h_g = to_host_graph(g, exec_space);
+        PartitionHost h_p = to_host_partition(partition, exec_space);
 
-        constexpr vertex_t SENTINEL = std::numeric_limits<vertex_t>::max();
+        // 2. Perform greedy matching on CPU
+        std::vector<vertex_t> matched(n, SENTINEL);
+        std::vector<vertex_t> perm(n);
+        std::iota(perm.begin(), perm.end(), 0);
+        
+        std::mt19937 rng(12345);
+        std::shuffle(perm.begin(), perm.end(), rng);
 
-        // Temporary buffers
-        // matched[u] stores the representative vertex of the match, or SENTINEL
-        UnmanagedDeviceVertex matched = UnmanagedDeviceVertex((vertex_t *) get_chunk_back(mem_stack, sizeof(vertex_t) * n), n);
-        // edge_ratings stores the rating for each directed edge entry
-        UnmanagedDeviceU64 edge_ratings = UnmanagedDeviceU64((u64 *) get_chunk_back(mem_stack, sizeof(u64) * m), m);
-        // vertex_max_rating stores the maximum rating of any edge incident to a vertex
-        UnmanagedDeviceU64 vertex_max_rating = UnmanagedDeviceU64((u64 *) get_chunk_back(mem_stack, sizeof(u64) * n), n);
+        for (vertex_t u : perm) {
+            if (matched[u] != SENTINEL) continue;
 
-        Kokkos::deep_copy(exec_space, matched, SENTINEL);
+            vertex_t best_v = SENTINEL;
+            f32 best_rating = -1.0f;
 
-        // Simple hash function for randomized tie-breaking
-        auto simple_hash = KOKKOS_LAMBDA(u32 key) -> u32 {
-            key ^= key << 13;
-            key ^= key >> 17;
-            key ^= key << 5;
-            return key;
-        };
+            partition_t u_part = h_p.map(u);
 
-        const u32 seed = 1234567u;
-        const int n_rounds = 2; // Perform multiple iterations to increase matching size
+            for (u32 i = h_g.neighborhood(u); i < h_g.neighborhood(u + 1); ++i) {
+                vertex_t v = h_g.edges_v(i);
+                if (u == v || matched[v] != SENTINEL) continue;
 
-        for (int round = 0; round < n_rounds; ++round) {
-            // Phase 1: Rate each directed edge entry in parallel
-            // Ratings are stable for undirected edges: rating(u,v) == rating(v,u)
-            Kokkos::parallel_for("IES_rate_edges", Kokkos::RangePolicy<DeviceExecutionSpace>(exec_space, 0, m), KOKKOS_LAMBDA(const u32 i) {
-                const vertex_t u = g.edges_u(i);
-                const vertex_t v = g.edges_v(i);
-                
-                // Only rate edges between currently unmatched vertices
-                if (u != v && matched(u) == SENTINEL && matched(v) == SENTINEL) {
-                    const weight_t ew = uniform_e_weights ? 1 : g.edges_w(i);
-                    const vertex_t min_uv = u < v ? u : v;
-                    const vertex_t max_uv = u < v ? v : u;
-                    
-                    // Combine edge weight (high bits) and a hash (low bits) for stable tie-breaking
-                    edge_ratings(i) = (static_cast<u64>(ew) << 32) | simple_hash(min_uv ^ max_uv ^ seed ^ (u32)round);
-                } else {
-                    edge_ratings(i) = 0;
+                // Respect partition boundaries
+                if (h_p.map(v) != u_part) continue;
+
+                weight_t uw = uniform_v_weights ? 1 : h_g.weights(u);
+                weight_t vw = uniform_v_weights ? 1 : h_g.weights(v);
+                weight_t ew = uniform_e_weights ? 1 : h_g.edges_w(i);
+
+                // Heavy-edge rating
+                f32 rating = ((f32)ew * (f32)ew) / ((f32)uw * (f32)vw);
+                if (rating > best_rating) {
+                    best_rating = rating;
+                    best_v = v;
                 }
-            });
+            }
 
-            // Phase 2: Each vertex identifies the maximum rating among its incident edges
-            Kokkos::deep_copy(exec_space, vertex_max_rating, 0);
-            Kokkos::parallel_for("IES_vertex_max_rating", Kokkos::RangePolicy<DeviceExecutionSpace>(exec_space, 0, m), KOKKOS_LAMBDA(const u32 i) {
-                const vertex_t u = g.edges_u(i);
-                const u64 r = edge_ratings(i);
-                if (r > 0) {
-                    Kokkos::atomic_max(&vertex_max_rating(u), r);
-                }
-            });
-
-            // Phase 3: Selection - an edge is selected if its rating is the best for both endpoints
-            Kokkos::parallel_for("IES_select_edges", Kokkos::RangePolicy<DeviceExecutionSpace>(exec_space, 0, m), KOKKOS_LAMBDA(const u32 i) {
-                const vertex_t u = g.edges_u(i);
-                const vertex_t v = g.edges_v(i);
-                
-                // Only process each undirected edge once
-                if (u < v) {
-                    const u64 r = edge_ratings(i);
-                    if (r > 0 && r == vertex_max_rating(u) && r == vertex_max_rating(v)) {
-                        // Edge is selected for the independent set
-                        matched(u) = u; 
-                        matched(v) = u;
-                    }
-                }
-            });
-            exec_space.fence();
-
-            vertex_t matched_count = 0;
-            Kokkos::parallel_reduce("IES_count_matches", Kokkos::RangePolicy<DeviceExecutionSpace>(exec_space, 0, n), KOKKOS_LAMBDA(const vertex_t u, vertex_t &update) {
-                if (matched(u) != SENTINEL) update++;
-            }, matched_count);
-            exec_space.fence();
+            if (best_v != SENTINEL) {
+                matched[u] = best_v;
+                matched[best_v] = u;
+            }
         }
 
-        // Finalize: unmatched vertices become singletons (map to themselves)
-        Kokkos::parallel_for("IES_finalize_matches", Kokkos::RangePolicy<DeviceExecutionSpace>(exec_space, 0, n), KOKKOS_LAMBDA(const vertex_t u) {
-            if (matched(u) == SENTINEL) {
-                matched(u) = u;
-            }
-        });
-
-        // Step 4: Enumerate coarse vertices
+        // 3. Compute coarse IDs
+        std::vector<vertex_t> h_mapping(n);
         vertex_t nc = 0;
-        // Reuse vertex_max_rating memory for coarse IDs to save space
-        UnmanagedDeviceVertex coarse_ids = UnmanagedDeviceVertex((vertex_t*)vertex_max_rating.data(), n);
-        
-        Kokkos::parallel_scan("IES_enumerate_coarse", Kokkos::RangePolicy<DeviceExecutionSpace>(exec_space, 0, n), KOKKOS_LAMBDA(const vertex_t u, vertex_t &update, const bool final) {
-            // A vertex is a representative if matched[u] == u
-            if (matched(u) == u) {
-                if (final) coarse_ids(u) = update;
-                update++;
+        for (vertex_t u = 0; u < n; ++u) {
+            if (matched[u] == SENTINEL || u < matched[u]) {
+                h_mapping[u] = nc++;
             }
-        }, nc);
+        }
+        for (vertex_t u = 0; u < n; ++u) {
+            if (matched[u] != SENTINEL && u > matched[u]) {
+                h_mapping[u] = h_mapping[matched[u]];
+            }
+        }
 
-        // Step 5: Build final Mapping
+        // 4. Initialize device mapping and upload
         Mapping mapping = initialize_mapping(n, nc, mem_stack);
-        Kokkos::parallel_for("IES_build_mapping", Kokkos::RangePolicy<DeviceExecutionSpace>(exec_space, 0, n), KOKKOS_LAMBDA(const vertex_t u) {
-            const vertex_t rep = matched(u);
-            mapping.mapping(u) = coarse_ids(rep);
-        });
-
-        // Ensure all kernels using temporary buffers are finished before popping them
+        
+        HostVertex host_mapping_view("h_mapping_view", n);
+        for (vertex_t u = 0; u < n; ++u) {
+            host_mapping_view(u) = h_mapping[u];
+        }
+        
+        Kokkos::deep_copy(exec_space, mapping.mapping, host_mapping_view);
         exec_space.fence();
-        std::cout << "Coarsening finished. Coarse vertices: " << nc << " (reduction factor: " << (f64)n/nc << ")" << std::endl;
 
-        // Cleanup temporary buffers from the stack
-        pop_back(mem_stack); // vertex_max_rating
-        pop_back(mem_stack); // edge_ratings
-        pop_back(mem_stack); // matched
+        std::cout << "CPU Coarsening finished. Coarse vertices: " << nc << " (reduction factor: " << (f64) n / nc << ")" << std::endl;
 
         return mapping;
     }
 
+    /**
+     * @brief Computes a coarsening mapping based on an independent edge set (matching) exclusively on the GPU.
+     */
+    template<bool uniform_v_weights, bool uniform_e_weights>
+    inline Mapping independent_edge_set_get_mapping_gpu(const Graph &g,
+                                                        const Partition &partition,
+                                                        const weight_t &lmax,
+                                                        KokkosMemoryStack &mem_stack,
+                                                        DeviceExecutionSpace &exec_space) {
+        ScopedTimer _t_total("coarsening", "IndependentEdgeSetGPU", "total");
+
+        const vertex_t n = g.n;
+        if (n == 0) return initialize_mapping(0, 0, mem_stack);
+
+        // 1. Allocate matching and hn arrays on GPU
+        UnmanagedDeviceVertex matching((vertex_t *) get_chunk_back(mem_stack, sizeof(vertex_t) * n), n);
+        UnmanagedDeviceVertex hn((vertex_t *) get_chunk_back(mem_stack, sizeof(vertex_t) * n), n);
+
+        Kokkos::deep_copy(exec_space, matching, SENTINEL);
+        Kokkos::deep_copy(exec_space, hn, SENTINEL);
+
+        // 2. Pick phase: Each vertex picks its best neighbor in the same partition
+        u32 seed = 12345u;
+        Kokkos::parallel_for("IES_GPU_Pick", Kokkos::RangePolicy<DeviceExecutionSpace>(exec_space, 0, n), KOKKOS_LAMBDA(const vertex_t u) {
+            partition_t u_part = partition.map(u);
+            vertex_t best_v = SENTINEL;
+            f64 best_score = -1.0;
+            u32 r = xs32(u ^ seed);
+
+            for (u32 i = g.neighborhood(u); i < g.neighborhood(u + 1); ++i) {
+                vertex_t v = g.edges_v(i);
+                if (u == v || partition.map(v) != u_part) continue;
+
+                weight_t uw = uniform_v_weights ? 1 : g.weights(u);
+                weight_t vw = uniform_v_weights ? 1 : g.weights(v);
+                weight_t ew = uniform_e_weights ? 1 : g.edges_w(i);
+
+                f64 rating = ((f64)ew * (f64)ew) / ((f64)uw * (f64)vw);
+                u32 tb = xs32(v ^ r);
+                f64 score = rating + (f64)tb / 4294967296.0 * 1e-9;
+
+                if (score > best_score) {
+                    best_score = score;
+                    best_v = v;
+                }
+            }
+            hn(u) = best_v;
+        });
+        KOKKOS_PROFILE_FENCE(exec_space);
+
+        // 3. Commit phase: Check for mutual picks and identify heads/tails
+        Kokkos::parallel_for("IES_GPU_Commit", Kokkos::RangePolicy<DeviceExecutionSpace>(exec_space, 0, n), KOKKOS_LAMBDA(const vertex_t u) {
+            vertex_t v = hn(u);
+            if (v != SENTINEL && hn(v) == u) {
+                matching(u) = (u < v) ? u : v; // Store head index
+            } else {
+                matching(u) = u; // Singletons map to themselves
+            }
+        });
+        KOKKOS_PROFILE_FENCE(exec_space);
+
+        // 4. Scan phase: Assign coarse IDs to heads and singletons
+        vertex_t nc = 0;
+        Kokkos::parallel_scan("IES_GPU_Scan", Kokkos::RangePolicy<DeviceExecutionSpace>(exec_space, 0, n), KOKKOS_LAMBDA(const vertex_t u, vertex_t &update, const bool final) {
+            if (matching(u) == u) {
+                if (final) hn(u) = update; // Overwrite hn with coarse ID for heads/singletons
+                update++;
+            }
+        }, nc);
+        KOKKOS_PROFILE_FENCE(exec_space);
+
+        // 5. Build Mapping: Final assignment
+        Mapping mapping = initialize_mapping(n, nc, mem_stack);
+        Kokkos::parallel_for("IES_GPU_FillMapping", Kokkos::RangePolicy<DeviceExecutionSpace>(exec_space, 0, n), KOKKOS_LAMBDA(const vertex_t u) {
+            if (matching(u) == u) {
+                mapping.mapping(u) = hn(u);
+            } else {
+                mapping.mapping(u) = hn(matching(u));
+            }
+        });
+        KOKKOS_PROFILE_FENCE(exec_space);
+
+        pop_back(mem_stack); // hn
+        pop_back(mem_stack); // matching
+
+        return mapping;
+    }
 } // namespace GPU_HeiPa
 
 #endif // GPU_HEIPA_INDEPENDENT_EDGE_SET_H

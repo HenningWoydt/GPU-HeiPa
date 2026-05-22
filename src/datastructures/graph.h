@@ -138,6 +138,7 @@ namespace GPU_HeiPa {
             coarse_g.g_weight = old_g.g_weight;
             coarse_g.uniform_edge_weights = false;
             coarse_g.uniform_vertex_weights = false;
+            coarse_g.n_pops = 5;
 
             coarse_g.weights = UnmanagedDeviceWeight((weight_t *) get_chunk_front(mem_stack, sizeof(weight_t) * coarse_g.n), coarse_g.n);
             coarse_g.neighborhood = UnmanagedDeviceU32((u32 *) get_chunk_front(mem_stack, sizeof(u32) * (coarse_g.n + 1)), coarse_g.n + 1);
@@ -430,19 +431,19 @@ namespace GPU_HeiPa {
 
         allocate_memory(host_g, device_g.n, device_g.m, device_g.g_weight);
 
-        Kokkos::deep_copy(exec_space, host_g.neighborhood, device_g.neighborhood);
-        Kokkos::deep_copy(exec_space, host_g.edges_v, device_g.edges_v);
+        Kokkos::deep_copy(exec_space, host_g.neighborhood, Kokkos::subview(device_g.neighborhood, std::make_pair(0U, device_g.n + 1)));
+        Kokkos::deep_copy(exec_space, host_g.edges_v, Kokkos::subview(device_g.edges_v, std::make_pair(0U, device_g.m)));
 
         if (device_g.uniform_vertex_weights) {
             Kokkos::deep_copy(exec_space, host_g.weights, 1);
         } else {
-            Kokkos::deep_copy(exec_space, host_g.weights, device_g.weights);
+            Kokkos::deep_copy(exec_space, host_g.weights, Kokkos::subview(device_g.weights, std::make_pair(0U, device_g.n)));
         }
 
         if (device_g.uniform_edge_weights) {
             Kokkos::deep_copy(exec_space, host_g.edges_w, 1);
         } else {
-            Kokkos::deep_copy(exec_space, host_g.edges_w, device_g.edges_w);
+            Kokkos::deep_copy(exec_space, host_g.edges_w, Kokkos::subview(device_g.edges_w, std::make_pair(0U, device_g.m)));
         }
         exec_space.fence();
 

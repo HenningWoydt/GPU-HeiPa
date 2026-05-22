@@ -37,6 +37,7 @@
 #include "../coarsening/two_hop_matching.h"
 #include "../initial_partitioning/global_multisection.h"
 #include "../initial_partitioning/gpu_progressive_partition.h"
+#include "../initial_partitioning/gpu_bisection_partition.h"
 #include "../utility/definitions.h"
 #include "../utility/promap_configuration.h"
 #include "../utility/profiler.h"
@@ -385,7 +386,7 @@ namespace GPU_HeiPa {
             auto p = get_time_point();
 
 
-            const Graph &cur = graphs.back();
+            const Graph cur = graphs.back();
             if (cur.uniform_vertex_weights && cur.uniform_edge_weights) {
                 graphs.emplace_back(from_Graph_Mapping<true, true>(cur, mappings.back(), mem_stack, exec_space));
             } else if (cur.uniform_vertex_weights) {
@@ -404,15 +405,21 @@ namespace GPU_HeiPa {
             level_infos[level].t_contraction = get_milli_seconds(p, get_time_point());
             #endif
 
+            assert_coarsening(cur, graphs.back(), mappings.back(), exec_space);
             assert_state_pre_partition(graphs.back(), exec_space);
         }
 
         void initial_partitioning() {
             auto p = get_time_point();
 
-            // global_multisection(graphs.back(), config.hierarchy, k, config.imbalance, config.seed, partition, exec_space);
-            // gpu_initial_partition(graphs.back(), config.hierarchy, k, config.imbalance, config.seed, partition, mem_stack, exec_space);
-            gpu_progressive_partition(graphs.back(), config.hierarchy, k, config.imbalance, config.seed, 24, partition, mem_stack, exec_space);
+            if (config.initial_partitioning == "global_multisection") {
+                global_multisection(graphs.back(), config.hierarchy, k, config.imbalance, config.seed, partition, exec_space);
+            } else if (config.initial_partitioning == "gpu_bisection") {
+                gpu_bisect_partition(graphs.back(), config.hierarchy, k, config.imbalance, config.seed, 24, partition, mem_stack, exec_space);
+            } else {
+                std::cerr << "Unknown initial partitioning config: " << config.initial_partitioning << std::endl;
+                exit(EXIT_FAILURE);
+            }
 
             if (graphs.back().uniform_vertex_weights) {
                 recalculate_weights<true>(partition, graphs.back(), exec_space);

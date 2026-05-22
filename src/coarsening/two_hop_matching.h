@@ -46,8 +46,6 @@ namespace GPU_HeiPa {
     using TeamPolicy_t = Kokkos::TeamPolicy<DeviceExecutionSpace>;
     using TeamMember = TeamPolicy_t::member_type;
 
-    constexpr vertex_t SENTINEL = std::numeric_limits<vertex_t>::max();
-
     struct TwoHopMatcher {
         vertex_t n = 0;
         vertex_t m = 0;

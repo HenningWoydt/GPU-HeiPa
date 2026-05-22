@@ -67,7 +67,7 @@ namespace GPU_HeiPa {
             std::cerr << "ERROR: Failed to allocate Kokkos memory stack '" << t_name << "'\n";
             std::cerr << "       Requested: " << ((double) n_bytes / (1024.0 * 1024.0)) << " MB (" << n_bytes << " bytes)\n";
             std::cerr << "       Aligned:   " << ((double) stack.n_bytes_allocated / (1024.0 * 1024.0)) << " MB (" << stack.n_bytes_allocated << " bytes)\n";
-            exit(EXIT_FAILURE);
+            abort();
         }
 
         return stack;
@@ -107,7 +107,7 @@ namespace GPU_HeiPa {
             std::cerr << "       Stack size:   " << ((double) stack.n_bytes_allocated / (1024.0 * 1024.0)) << " MB\n";
             std::cerr << "       Bytes front:  " << ((double) stack.n_bytes_in_use / (1024.0 * 1024.0)) << " MB\n";
             std::cerr << "       Bytes back:   " << ((double) stack.n_bytes_in_use_back / (1024.0 * 1024.0)) << " MB\n";
-            exit(EXIT_FAILURE);
+            abort();
         }
 
         const size_t sz = stack.reserved_chunks.back();
@@ -158,7 +158,7 @@ namespace GPU_HeiPa {
             std::cerr << "       Stack size:   " << ((double) stack.n_bytes_allocated / (1024.0 * 1024.0)) << " MB\n";
             std::cerr << "       Bytes front:  " << ((double) stack.n_bytes_in_use / (1024.0 * 1024.0)) << " MB\n";
             std::cerr << "       Bytes back:   " << ((double) stack.n_bytes_in_use_back / (1024.0 * 1024.0)) << " MB\n";
-            exit(EXIT_FAILURE);
+            abort();
         }
 
         const size_t sz = stack.reserved_chunks_back.back();

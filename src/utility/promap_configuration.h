@@ -45,6 +45,7 @@ namespace GPU_HeiPa {
             {"--config", "-c", "Algorithm Config {IM, HM, HM-ultra}.", "", "", false},
             {"--verbose-level", "", "Whether to print.", "1", "", false},
             {"--n-bytes-requested", "", "Total bytes requested from device.", "8589934592", "", false},
+            {"--initial-partitioning", "", "Initial partitioning algorithm {global_multisection, gpu_bisection}", "gpu_bisection", "", false},
         };
 
     public:
@@ -66,6 +67,9 @@ namespace GPU_HeiPa {
 
         // partitioning algorithm
         std::string config;
+        
+        // initial partitioning algorithm
+        std::string initial_partitioning = "gpu_bisection";
 
         // random initialization
         u64 seed = 0;
@@ -120,6 +124,8 @@ namespace GPU_HeiPa {
 
             // partitioning algorithm
             config = get("--config");
+
+            initial_partitioning = get("--initial-partitioning");
 
             // random initialization
             seed = std::random_device{}();
