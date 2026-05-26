@@ -361,55 +361,19 @@ namespace GPU_HeiPa {
             return;
         }
 
-        const vertex_t last = g.n - 1;
-        const u64 num_configs = 1ULL << last;
+        Kokkos::View<BestBisectConfig, DeviceMemorySpace> device_result("result_view");
+        auto result_view = Kokkos::View<BestBisectConfig, HostMemory, Kokkos::MemoryTraits<Kokkos::Unmanaged>>(device_result.data());
 
-        BestBisectConfig best_config;
-        BestBisectReducer reducer(best_config);
+        if (g.uniform_vertex_weights && g.uniform_edge_weights) {
+            brute_force_bisect_async<true, true, 64>(g, lmax_1, lmax_2, partition, result_view, exec_space);
+        } else if (g.uniform_vertex_weights && !g.uniform_edge_weights) {
+            brute_force_bisect_async<true, false, 64>(g, lmax_1, lmax_2, partition, result_view, exec_space);
+        } else if (!g.uniform_vertex_weights && g.uniform_edge_weights) {
+            brute_force_bisect_async<false, true, 64>(g, lmax_1, lmax_2, partition, result_view, exec_space);
+        } else {
+            brute_force_bisect_async<false, false, 64>(g, lmax_1, lmax_2, partition, result_view, exec_space);
+        }
 
-        Kokkos::parallel_reduce("brute_force_bisect", Kokkos::RangePolicy<DeviceExecutionSpace>(exec_space, 0, num_configs), KOKKOS_LAMBDA(const u64 gray_config, BestBisectConfig &local_best) {
-            weight_t wr = 0;
-            for (vertex_t u = 0; u < last; ++u) {
-                if ((gray_config >> u) & 1ULL) {
-                    wr += g.uniform_vertex_weights ? 1 : g.weights(u);
-                }
-            }
-
-            weight_t cut = 0;
-            for (u32 e = 0; e < g.m; ++e) {
-                const vertex_t u = g.edges_u(e);
-                const vertex_t v = g.edges_v(e);
-                if (u < v) {
-                    // Only count each undirected edge once
-                    const u64 pu = (gray_config >> u) & 1ULL;
-                    const u64 pv = (gray_config >> v) & 1ULL;
-                    if (pu != pv) {
-                        cut += g.uniform_edge_weights ? 1 : g.edges_w(e);
-                    }
-                }
-            }
-
-            const weight_t wl = g.g_weight - wr;
-            const u64 p_l = wl > lmax_1 ? (u64) (wl - lmax_1) : 0;
-            const u64 p_r = wr > lmax_2 ? (u64) (wr - lmax_2) : 0;
-            u64 penalty = p_l * p_l + p_r * p_r;
-
-            if (wl == 0 || wr == 0) {
-                // Massive penalty to strictly prohibit empty partitions
-                penalty += 1000000000000ULL;
-            }
-
-            if (penalty < local_best.penalty || (penalty == local_best.penalty && cut < local_best.cut)) {
-                local_best.penalty = penalty;
-                local_best.cut = cut;
-                local_best.config = gray_config;
-            }
-        }, reducer);
-        exec_space.fence();
-
-        Kokkos::parallel_for("apply_best_config", Kokkos::RangePolicy<DeviceExecutionSpace>(exec_space, 0, g.n), KOKKOS_LAMBDA(const vertex_t u) {
-            partition(u) = (partition_t) ((best_config.config >> u) & 1ULL);
-        });
         exec_space.fence();
     }
 

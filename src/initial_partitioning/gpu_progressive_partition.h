@@ -191,7 +191,11 @@ namespace GPU_HeiPa {
                     const weight_t wl = g.g_weight - wr_cur;
                     const u64 p_l = wl > lmax_left ? (u64) (wl - lmax_left) : 0;
                     const u64 p_r = wr_cur > lmax_right ? (u64) (wr_cur - lmax_right) : 0;
-                    const u64 penalty = p_l * p_l + p_r * p_r;
+                    u64 penalty = p_l * p_l + p_r * p_r;
+
+                    if (wl == 0 || wr_cur == 0) {
+                        penalty += 1000000000000ULL;
+                    }
 
                     if (penalty < best_cur.penalty || (penalty == best_cur.penalty && cut_cur < best_cur.cut)) {
                         best_cur.penalty = penalty;
