@@ -156,7 +156,7 @@ namespace GPU_HeiPa {
             HostPartition host_partition;
             //
             {
-                ScopedTimer _t("up/download", "Solver", "download_partition");
+                HEIPA_PROFILE_SCOPE("up/download", "Solver", "download_partition");
                 host_partition = HostPartition(Kokkos::view_alloc(Kokkos::WithoutInitializing, "host_partition"), graphs.back().n);
                 Kokkos::deep_copy(exec_space, host_partition, partition.map);
                 exec_space.fence("deep_copy host_partition");
@@ -170,7 +170,7 @@ namespace GPU_HeiPa {
             weight_t sum_too_much = 0;
             PartitionHost partition_host;
             if (config.verbose_level >= 1) {
-                ScopedTimer _t("misc", "Solver", "calc_stats");
+                HEIPA_PROFILE_SCOPE("misc", "Solver", "calc_stats");
                 max_block_w = max_weight(partition);
                 partition_host = to_host_partition(partition, exec_space);
                 for (partition_t id = 0; id < config.k; ++id) {
@@ -182,7 +182,7 @@ namespace GPU_HeiPa {
 
             // free all memory
             {
-                ScopedTimer _t("misc", "Solver", "free_memory");
+                HEIPA_PROFILE_SCOPE("misc", "Solver", "free_memory");
 
                 free_distance_oracle<d_oracle_t>(d_oracle, mem_stack);
                 free_partition(partition, mem_stack);
@@ -344,13 +344,13 @@ namespace GPU_HeiPa {
 
             // initialize distance oracle
             {
-                ScopedTimer t{"misc", "distance_oracle", "initialize"};
+                HEIPA_PROFILE_SCOPE("misc", "distance_oracle", "initialize");
                 d_oracle = initialize_distance_oracle<d_oracle_t>(k, hierarchy, distances, mem_stack, exec_space);
             }
 
             // initialize partition
             {
-                ScopedTimer t{"misc", "partition", "initialize"};
+                HEIPA_PROFILE_SCOPE("misc", "partition", "initialize");
                 partition = initialize_partition(n, k, lmax, mem_stack, exec_space);
             }
 

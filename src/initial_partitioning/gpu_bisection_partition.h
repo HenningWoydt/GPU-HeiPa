@@ -61,6 +61,7 @@ namespace GPU_HeiPa {
                                 Graph &g,
                                 partition_t k,
                                 KokkosMemoryStack &mem_stack) {
+        HEIPA_PROFILE_SCOPE("initial_partitioning", "gpu_bisection_partition", "init_GraphBatch");
         batch.n = g.n;
         batch.m = g.m;
         batch.k = k;
@@ -145,7 +146,7 @@ namespace GPU_HeiPa {
                                  Partition &partition,
                                  KokkosMemoryStack &mem_stack,
                                  DeviceExecutionSpace &exec_space) {
-        ScopedTimer _t("initial_partitioning", "gpu_bisection_partition", "extract_subgraph");
+        HEIPA_PROFILE_SCOPE("initial_partitioning", "gpu_bisection_partition", "extract_subgraph");
 
         auto map = partition.map;
         UnmanagedDeviceVertex local_ids((vertex_t *) get_chunk_back(mem_stack, sizeof(vertex_t) * g.n), g.n);
@@ -211,14 +212,9 @@ namespace GPU_HeiPa {
 
         weight_t sub_weight = 0;
 
-        Kokkos::parallel_reduce(
-            "sum_subgraph_weight",
-            Kokkos::RangePolicy<DeviceExecutionSpace>(exec_space, 0, sub_n),
-            KOKKOS_LAMBDA(const vertex_t u_local, weight_t &local_sum) {
-                local_sum += sub_g.weights(u_local);
-            },
-            sub_weight
-        );
+        Kokkos::parallel_reduce("sum_subgraph_weight", Kokkos::RangePolicy<DeviceExecutionSpace>(exec_space, 0, sub_n), KOKKOS_LAMBDA(const vertex_t u_local, weight_t &local_sum) {
+            local_sum += sub_g.weights(u_local);
+        }, sub_weight);
 
         sub_g.g_weight = sub_weight;
 
@@ -317,6 +313,7 @@ namespace GPU_HeiPa {
                                           const UnmanagedDevicePartition &map,
                                           UnmanagedDeviceWeight &bweights,
                                           DeviceExecutionSpace &exec_space) {
+        HEIPA_PROFILE_SCOPE("initial_partitioning", "gpu_bisection_partition", "recalculate_block_weights");
         Kokkos::deep_copy(exec_space, bweights, 0);
         Kokkos::parallel_for("recalculate_block_weights", Kokkos::RangePolicy<DeviceExecutionSpace>(exec_space, 0, g.n), KOKKOS_LAMBDA(const vertex_t u) {
             partition_t id = map(u);
@@ -331,6 +328,7 @@ namespace GPU_HeiPa {
                                       UnmanagedDeviceVertex &bsizes,
                                       UnmanagedDeviceVertex &projected_sizes,
                                       DeviceExecutionSpace &exec_space) {
+        HEIPA_PROFILE_SCOPE("initial_partitioning", "gpu_bisection_partition", "calculate_block_sizes");
         Kokkos::deep_copy(exec_space, bsizes, 0);
         Kokkos::parallel_for("calculate_block_sizes", Kokkos::RangePolicy<DeviceExecutionSpace>(exec_space, 0, g.n), KOKKOS_LAMBDA(const vertex_t u) {
             partition_t id = map(u);
@@ -353,6 +351,7 @@ namespace GPU_HeiPa {
                        weight_t lmax_2,
                        UnmanagedDevicePartition &partition,
                        DeviceExecutionSpace &exec_space) {
+        HEIPA_PROFILE_SCOPE("initial_partitioning", "gpu_bisection_partition", "bisect");
         if (g.n == 0) return;
         if (g.n == 1) {
             Kokkos::parallel_for("bisect1", Kokkos::RangePolicy<DeviceExecutionSpace>(exec_space, 0, 1), KOKKOS_LAMBDA(int) {
@@ -423,6 +422,7 @@ namespace GPU_HeiPa {
                                      Partition &partition,
                                      KokkosMemoryStack &mem_stack,
                                      DeviceExecutionSpace &exec_space) {
+        HEIPA_PROFILE_SCOPE("initial_partitioning", "gpu_bisection_partition", "gpu_bisect_partition");
         // allocate all memory up front
         GraphBatch batch;
         init_GraphBatch(batch, g, k, mem_stack);
@@ -431,6 +431,7 @@ namespace GPU_HeiPa {
         init_HierarchyManager(manager, hierarchy, 2 * k);
 
         // --- coarsening phase ---
+        HEIPA_PROFILE_SCOPE("initial_partitioning", "gpu_bisection_partition", "coarsening_loop");
         std::vector<Graph> graphs = {g};
         std::vector<Mapping> mappings;
 
@@ -454,6 +455,7 @@ namespace GPU_HeiPa {
 
         // --- initial partitioning phase ---
         {
+            HEIPA_PROFILE_SCOPE("initial_partitioning", "gpu_bisection_partition", "initial_partitioning_phase");
             partition_t l_k, r_k;
             split_into(manager, 0, l_k, r_k);
 
@@ -479,8 +481,10 @@ namespace GPU_HeiPa {
 
         // --- uncontraction & extraction phase ---
         while (true) {
+            HEIPA_PROFILE_SCOPE("initial_partitioning", "gpu_bisection_partition", "uncontraction_extraction_loop");
             bool do_extract = true;
             while (do_extract) {
+                HEIPA_PROFILE_SCOPE("initial_partitioning", "gpu_bisection_partition", "extraction_inner_loop");
                 do_extract = false;
 
                 UnmanagedDeviceVertex bsizes((vertex_t *) get_chunk_back(mem_stack, sizeof(vertex_t) * manager.max_blocks), manager.max_blocks);

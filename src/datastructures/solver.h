@@ -151,7 +151,7 @@ namespace GPU_HeiPa {
                KokkosMemoryStack &dev_mem_stack,
                DeviceExecutionSpace &t_exec_space) : exec_space(t_exec_space) {
             // Main stack: Graph + coarsening overhead
-            ScopedTimer t_init{"hm", "solver", "initialize"};
+            HEIPA_PROFILE_SCOPE("hm", "solver", "initialize");
 
             n = dev_g.n;
             m = dev_g.m;
@@ -170,20 +170,16 @@ namespace GPU_HeiPa {
 
             assert_state_pre_partition(graphs.back(), exec_space);
 
-            t_init.stop();
-
             const partition_t c = 8;
             const partition_t max_n = c * k;
 
             u32 level = 0;
             while (graphs.back().n > max_n) {
                 #if ENABLE_PROFILER
-                ScopedTimer t_profiler{"hm", "solver", "profiling"};
                 level_infos.emplace_back();
                 level_infos[level].level = level;
                 level_infos[level].n = graphs.back().n;
                 level_infos[level].m = graphs.back().m;
-                t_profiler.stop();
                 #endif
                 coarsening(level, dev_mem_stack);
                 contraction(level, dev_mem_stack);
@@ -192,18 +188,15 @@ namespace GPU_HeiPa {
             }
 
             #if ENABLE_PROFILER
-            ScopedTimer t_profiler{"hm", "solver", "profiling"};
             level_infos.emplace_back();
             level_infos[level].level = level;
             level_infos[level].n = graphs.back().n;
             level_infos[level].m = graphs.back().m;
-            t_profiler.stop();
             #endif
 
             initial_partitioning(dev_mem_stack);
 
             #if ENABLE_PROFILER
-            ScopedTimer t_profiler2{"hm", "solver", "profiling"};
             level_infos[level].max_b_weight = max_weight(partition);
             level_infos[level].imb = (f64) level_infos[level].max_b_weight / ((f64) dev_g.g_weight / (f64) config.k);
             if (graphs.back().uniform_edge_weights) {
@@ -214,7 +207,6 @@ namespace GPU_HeiPa {
             level_infos[level].empty_partitions = n_empty_blocks(partition);
             level_infos[level].oload_partitions = n_oload_blocks(partition);
             level_infos[level].sum_oload_weights = sum_oload_weight(partition);
-            t_profiler2.stop();
             #endif
 
             while (!mappings.empty()) {
@@ -224,7 +216,6 @@ namespace GPU_HeiPa {
                 refinement(level, dev_mem_stack);
 
                 #if ENABLE_PROFILER
-                ScopedTimer t_profiler3{"hm", "solver", "profiling"};
                 level_infos[level].max_b_weight = max_weight(partition);
                 level_infos[level].imb = (f64) level_infos[level].max_b_weight / ((f64) dev_g.g_weight / (f64) config.k);
                 if (graphs.back().uniform_edge_weights) {
@@ -235,11 +226,10 @@ namespace GPU_HeiPa {
                 level_infos[level].empty_partitions = n_empty_blocks(partition);
                 level_infos[level].oload_partitions = n_oload_blocks(partition);
                 level_infos[level].sum_oload_weights = sum_oload_weight(partition);
-                t_profiler3.stop();
                 #endif
             }
 
-            ScopedTimer t{"hm", "solver", "copy_res"};
+            HEIPA_PROFILE_SCOPE("hm", "solver", "copy_res");
             Kokkos::deep_copy(exec_space, dev_partition, partition.map);
             exec_space.fence("deep_copy dev_partition");
 
@@ -258,7 +248,7 @@ namespace GPU_HeiPa {
             HostPartition host_partition;
             //
             {
-                ScopedTimer _t("up/download", "Solver", "download_partition");
+                HEIPA_PROFILE_SCOPE("up/download", "Solver", "download_partition");
                 host_partition = HostPartition(Kokkos::view_alloc(Kokkos::WithoutInitializing, "host_partition"), graphs.back().n);
                 Kokkos::deep_copy(exec_space, host_partition, partition.map);
                 exec_space.fence("deep_copy host_partition");
@@ -271,7 +261,7 @@ namespace GPU_HeiPa {
             size_t n_overloaded_partitions = 0;
             weight_t sum_too_much = 0;
             if (config.verbose_level >= 1) {
-                ScopedTimer _t("misc", "Solver", "calc_stats");
+                HEIPA_PROFILE_SCOPE("misc", "Solver", "calc_stats");
                 PartitionHost partition_host = to_host_partition(partition, exec_space);
                 for (partition_t id = 0; id < config.k; ++id) {
                     n_empty_partitions += partition_host.bweights(id) == 0;
@@ -282,7 +272,7 @@ namespace GPU_HeiPa {
 
             // free all memory
             {
-                ScopedTimer _t("misc", "Solver", "free_memory");
+                HEIPA_PROFILE_SCOPE("misc", "Solver", "free_memory");
 
                 free_partition(partition, mem_stack);
 
@@ -488,7 +478,7 @@ namespace GPU_HeiPa {
                 recalculate_weights<false>(partition, graphs.back(), exec_space);
             }
 
-            ScopedTimer _t("initial_partitioning", "Partition", "first_stats");
+            HEIPA_PROFILE_SCOPE("initial_partitioning", "Partition", "first_stats");
 
             if (graphs.back().uniform_edge_weights) {
                 initial_edge_cut = edge_cut<true>(graphs.back(), partition, exec_space);

@@ -41,7 +41,7 @@ int main(int argc, char *argv[]) {
     int verbose_level = 2;
     //
     {
-        ScopedTimer _t("io", "main", "Kokkos::initialize");
+        HEIPA_PROFILE_SCOPE("io", "main", "Kokkos::initialize");
         Kokkos::initialize();
     }
 
@@ -50,7 +50,7 @@ int main(int argc, char *argv[]) {
         config.print_help_message();
         return 0;
         {
-            ScopedTimer _t("io", "main", "parse_args");
+            HEIPA_PROFILE_SCOPE("io", "main", "parse_args");
             std::vector<std::pair<std::string, std::string> > input = {
                 {"--graph", "./res/graphs/144.graph"},    // 100.054 in 334ms
                 // {"--graph", "../../ProMapRepo/data/mapping/cfd2.mtx.graph"}, // 92.920 in 40ms
@@ -89,7 +89,7 @@ int main(int argc, char *argv[]) {
             delete[] argv_temp;
         }
     } else {
-        ScopedTimer _t("io", "main", "parse_args");
+        HEIPA_PROFILE_SCOPE("io", "main", "parse_args");
         config = MemeticConfiguration(argc, argv);
     }
     
@@ -126,7 +126,7 @@ int main(int argc, char *argv[]) {
         }
 
         if (config.is_set("--mapping")) {
-            ScopedTimer _t("io", "main", "write_partition");
+            HEIPA_PROFILE_SCOPE("io", "main", "write_partition");
             auto p = get_time_point();
 
             write_partition(host_partition, host_g.n, config.mapping_out);
@@ -144,7 +144,7 @@ int main(int argc, char *argv[]) {
 
     //
     {
-        ScopedTimer _t("io", "main", "Kokkos::finalize");
+        HEIPA_PROFILE_SCOPE("io", "main", "Kokkos::finalize");
         Kokkos::finalize();
     }
 

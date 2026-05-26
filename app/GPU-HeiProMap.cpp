@@ -40,7 +40,7 @@ int main(int argc, char *argv[]) {
     int verbose_level = 1;
     //
     {
-        ScopedTimer _t("io", "main", "Kokkos::initialize");
+        HEIPA_PROFILE_SCOPE("io", "main", "Kokkos::initialize");
         Kokkos::initialize();
     }
 
@@ -51,7 +51,7 @@ int main(int argc, char *argv[]) {
         // return 0;
         //
         {
-            ScopedTimer _t("io", "main", "parse_args");
+            HEIPA_PROFILE_SCOPE("io", "main", "parse_args");
             std::vector<std::pair<std::string, std::string> > input = {
                 // {"--graph", "../../ProMapRepo/data/mapping/rgg23.graph"}, // comm cost 9543754, 1098 ms
                 // {"--graph", "../../ProMapRepo/data/mapping/shipsec5.mtx.graph"},     // 1.778114 s
@@ -95,7 +95,7 @@ int main(int argc, char *argv[]) {
             delete[] argv_temp;
         }
     } else {
-        ScopedTimer _t_parse("io", "main", "parse_args");
+        HEIPA_PROFILE_SCOPE("io", "main", "parse_args");
         config = ProMapConfiguration(argc, argv);
     }
     verbose_level = config.verbose_level;
@@ -130,7 +130,7 @@ int main(int argc, char *argv[]) {
         }
 
         if (config.is_set("--mapping")) {
-            ScopedTimer _t("io", "main", "write_partition");
+            HEIPA_PROFILE_SCOPE("io", "main", "write_partition");
             auto p = get_time_point();
 
             write_partition(host_partition, host_g.n, config.mapping_out);
@@ -149,7 +149,7 @@ int main(int argc, char *argv[]) {
 
     //
     {
-        ScopedTimer _t("io", "main", "Kokkos::finalize");
+        HEIPA_PROFILE_SCOPE("io", "main", "Kokkos::finalize");
         Kokkos::finalize();
     }
 

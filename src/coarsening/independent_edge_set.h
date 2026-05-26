@@ -53,7 +53,7 @@ namespace GPU_HeiPa {
                                                     const weight_t &lmax,
                                                     KokkosMemoryStack &mem_stack,
                                                     DeviceExecutionSpace &exec_space) {
-        ScopedTimer _t_total("coarsening", "IndependentEdgeSetCPU", "total");
+        HEIPA_PROFILE_SCOPE("coarsening", "IndependentEdgeSetCPU", "total");
 
         const vertex_t n = g.n;
         if (n == 0) return initialize_mapping(0, 0, mem_stack);
@@ -142,7 +142,7 @@ namespace GPU_HeiPa {
                                                         const weight_t &lmax,
                                                         KokkosMemoryStack &mem_stack,
                                                         DeviceExecutionSpace &exec_space) {
-        ScopedTimer _t_total("coarsening", "IndependentEdgeSetGPU", "total");
+        HEIPA_PROFILE_SCOPE("coarsening", "IndependentEdgeSetGPU", "total");
 
         const vertex_t n = g.n;
         if (n == 0) return initialize_mapping(0, 0, mem_stack);

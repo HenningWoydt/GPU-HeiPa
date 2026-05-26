@@ -165,7 +165,7 @@ namespace GPU_HeiPa {
 
         // leaf: last split (identifier already contains all previous split-ids)
         if (identifier.size() == l - 1) {
-            ScopedTimer _t("initial_partitioning", "global_multisection", "insert_solution");
+            HEIPA_PROFILE_SCOPE("initial_partitioning", "global_multisection", "insert_solution");
 
             partition_t offset = 0;
             for (partition_t i = 0; i < l - 1; ++i) { offset += identifier[i] * index_vec[index_vec.size() - 1 - i]; }
@@ -178,7 +178,7 @@ namespace GPU_HeiPa {
         std::vector<std::vector<vertex_t> > o_to_ns;
         //
         {
-            ScopedTimer _t("initial_partitioning", "global_multisection", "build subgraphs");
+            HEIPA_PROFILE_SCOPE("initial_partitioning", "global_multisection", "build subgraphs");
             build_subgraphs(g, temp_partition, k, n_to_o, global_n, sub_gs, n_to_os, o_to_ns);
         }
 
@@ -208,7 +208,7 @@ namespace GPU_HeiPa {
                                          f64 imbalance,
                                          u64 seed,
                                          HostPartition &partition) {
-        ScopedTimer _t("initial_partitioning", "global_multisection", "global_multisection_host");
+        HEIPA_PROFILE_SCOPE("initial_partitioning", "global_multisection", "global_multisection_host");
 
         const f64 global_imbalance = imbalance;
         const weight_t global_g_weight = g.g_weight;
@@ -236,8 +236,6 @@ namespace GPU_HeiPa {
 
         std::vector<partition_t> identifier;
         identifier.reserve(l);
-
-        _t.stop();
 
         // IMPORTANT: start from hierarchy.back() like your stack version
         recursive_partition(g,
@@ -267,7 +265,7 @@ namespace GPU_HeiPa {
         HostPartition host_partition;
         // initialize the host
         {
-            ScopedTimer _t("initial_partitioning", "global_multisection", "init_host");
+            HEIPA_PROFILE_SCOPE("initial_partitioning", "global_multisection", "init_host");
 
             // Convert device graph to simple CSR arrays on host
             host_g = to_host_graph(g, exec_space);
@@ -278,7 +276,7 @@ namespace GPU_HeiPa {
 
         // upload the partition
         {
-            ScopedTimer _t("initial_partitioning", "global_multisection", "upload_partition");
+            HEIPA_PROFILE_SCOPE("initial_partitioning", "global_multisection", "upload_partition");
 
             auto device_subview = Kokkos::subview(partition.map, std::pair<size_t, size_t>(0, host_partition.extent(0)));
             Kokkos::deep_copy(exec_space, device_subview, host_partition);

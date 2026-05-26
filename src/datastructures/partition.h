@@ -49,7 +49,7 @@ namespace GPU_HeiPa {
                                           const weight_t t_lmax,
                                           KokkosMemoryStack &mem_stack,
                                           DeviceExecutionSpace &exec_space) {
-        ScopedTimer t{"misc", "partition", "initialize_partition"};
+        HEIPA_PROFILE_SCOPE("misc", "partition", "initialize_partition");
 
         Partition partition;
 
@@ -77,7 +77,7 @@ namespace GPU_HeiPa {
     inline void contract(Partition &partition,
                          const Mapping &mapping,
                          DeviceExecutionSpace &exec_space) {
-        ScopedTimer t{"contraction", "partition", "contract"};
+        HEIPA_PROFILE_SCOPE("contraction", "partition", "contract");
         Kokkos::parallel_for("initialize", Kokkos::RangePolicy<DeviceExecutionSpace>(exec_space, 0, mapping.old_n), KOKKOS_LAMBDA(const vertex_t u) {
             // TODO: multiple threads may write the same value, is this bad?
             vertex_t u_new = mapping.mapping(u);
@@ -93,7 +93,7 @@ namespace GPU_HeiPa {
     inline void uncontract(Partition &partition,
                            const Mapping &mapping,
                            DeviceExecutionSpace &exec_space) {
-        ScopedTimer _t("uncontraction", "partition", "uncontract");
+        HEIPA_PROFILE_SCOPE("uncontraction", "partition", "uncontract");
 
         // reset activity
         Kokkos::parallel_for("initialize", Kokkos::RangePolicy<DeviceExecutionSpace>(exec_space, 0, mapping.old_n), KOKKOS_LAMBDA(const vertex_t u) {
@@ -111,7 +111,7 @@ namespace GPU_HeiPa {
     inline void recalculate_weights(Partition &partition,
                                     const Graph &g,
                                     DeviceExecutionSpace &exec_space) {
-        ScopedTimer _t("initial_partitioning", "Partition", "recalculate_weights");
+        HEIPA_PROFILE_SCOPE("initial_partitioning", "Partition", "recalculate_weights");
 
         // reset weights
         Kokkos::deep_copy(exec_space, partition.bweights, 0);

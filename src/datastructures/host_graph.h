@@ -152,7 +152,7 @@ namespace GPU_HeiPa {
     }
 
     inline HostGraph from_file(const std::string &file_path) {
-        ScopedTimer _t_allocate("io", "CSRGraph", "allocate");
+        HEIPA_PROFILE_SCOPE("io", "CSRGraph", "allocate");
         if (!file_exists(file_path)) {
             std::cerr << "File " << file_path << " does not exist!" << std::endl;
             exit(EXIT_FAILURE);
@@ -163,8 +163,7 @@ namespace GPU_HeiPa {
         char *p = mm.data;
         const char *end = mm.data + mm.size;
 
-        _t_allocate.stop();
-        ScopedTimer _t_read_header("io", "CSRGraph", "read_header");
+        HEIPA_PROFILE_SCOPE("io", "CSRGraph", "read_header");
 
         // skip comment lines
         while (*p == '%') {
@@ -224,8 +223,7 @@ namespace GPU_HeiPa {
         g.g_weight = 0;
         allocate_memory(g, g.n, g.m, 0);
 
-        _t_read_header.stop();
-        ScopedTimer _t_read_edges("io", "CSRGraph", "read_edges");
+        HEIPA_PROFILE_SCOPE("io", "CSRGraph", "read_edges");
 
         ++p;
 
@@ -239,7 +237,6 @@ namespace GPU_HeiPa {
             read_edges<false, false>(g, p, end);
         }
 
-        _t_read_edges.stop();
         // done with the file
         munmap_file(mm);
 

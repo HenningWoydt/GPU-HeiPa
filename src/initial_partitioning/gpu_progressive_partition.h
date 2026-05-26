@@ -746,7 +746,7 @@ namespace GPU_HeiPa {
             {
                 assert_state_pre_partition(graphs.back(), exec_space);
 
-                ScopedTimer _t("initial_partitioning", "gpu_progressive_partition", "coarsening");
+                HEIPA_PROFILE_SCOPE("initial_partitioning", "gpu_progressive_partition", "coarsening");
                 if (uvw && uew) {
                     mappings.push_back(independent_edge_set_get_mapping<true, true>(old_g, partition, lmax_global, mem_stack, exec_space));
                 } else if (uvw) {
@@ -762,7 +762,7 @@ namespace GPU_HeiPa {
                 print(mappings.back().mapping, "mapping");
             }
             {
-                ScopedTimer _t("initial_partitioning", "gpu_progressive_partition", "graph_contraction");
+                HEIPA_PROFILE_SCOPE("initial_partitioning", "gpu_progressive_partition", "graph_contraction");
                 if (uvw && uew) {
                     graphs.push_back(from_Graph_Mapping<true, true>(old_g, mappings.back(), mem_stack, exec_space));
                 } else if (uvw) {
@@ -774,7 +774,7 @@ namespace GPU_HeiPa {
                 }
             }
             {
-                ScopedTimer _t("initial_partitioning", "gpu_progressive_partition", "partition_contraction");
+                HEIPA_PROFILE_SCOPE("initial_partitioning", "gpu_progressive_partition", "partition_contraction");
                 contract(partition, mappings.back(), exec_space);
             }
 
@@ -818,7 +818,7 @@ namespace GPU_HeiPa {
         // here do initial partition
 
         {
-            ScopedTimer _t("initial_partitioning", "gpu_progressive_partition", "initial_count");
+            HEIPA_PROFILE_SCOPE("initial_partitioning", "gpu_progressive_partition", "initial_count");
 
             if (graphs.back().uniform_vertex_weights) recalculate_weights_and_counts<true>(partition, graphs.back(), vertex_count, exec_space);
             else recalculate_weights_and_counts<false>(partition, graphs.back(), vertex_count, exec_space);
@@ -837,7 +837,7 @@ namespace GPU_HeiPa {
             assert_hierarchy(k, d_block_lvl, d_block_fact, d_hierarchy, exec_space);
 
             {
-                ScopedTimer _t("initial_partitioning", "gpu_progressive_partition", "uncontract");
+                HEIPA_PROFILE_SCOPE("initial_partitioning", "gpu_progressive_partition", "uncontract");
                 uncontract(partition, mappings.back(), exec_space);
 
                 free_graph(graphs.back(), mem_stack);
@@ -852,10 +852,10 @@ namespace GPU_HeiPa {
             assert_hierarchy(k, d_block_lvl, d_block_fact, d_hierarchy, exec_space);
 
             if (!mappings.empty()) {
-                ScopedTimer _t("initial_partitioning", "gpu_progressive_partition", "predict_block_distribution");
+                HEIPA_PROFILE_SCOPE("initial_partitioning", "gpu_progressive_partition", "predict_block_distribution");
                 predict_block_distribution(mappings.back(), partition.map, vertex_count, exec_space);
             } else {
-                ScopedTimer _t("initial_partitioning", "gpu_progressive_partition", "count_block_vertices");
+                HEIPA_PROFILE_SCOPE("initial_partitioning", "gpu_progressive_partition", "count_block_vertices");
                 if (curr_g.uniform_vertex_weights) recalculate_weights_and_counts<true>(partition, curr_g, vertex_count, exec_space);
                 else recalculate_weights_and_counts<false>(partition, curr_g, vertex_count, exec_space);
             }
@@ -889,7 +889,7 @@ namespace GPU_HeiPa {
                     auto result_s = Kokkos::subview(results_batch, s);
 
                     {
-                        ScopedTimer _t("initial_partitioning", "gpu_progressive_partition", "brute_force_bisect");
+                        HEIPA_PROFILE_SCOPE("initial_partitioning", "gpu_progressive_partition", "brute_force_bisect");
                         if (sub_g.uniform_vertex_weights && sub_g.uniform_edge_weights) {
                             brute_force_bisect_async<true, true, 64>(sub_g, lmax_l, lmax_r, sub_part, result_s, instances[s % n_instances]);
                         } else if (sub_g.uniform_vertex_weights && !sub_g.uniform_edge_weights) {
@@ -905,7 +905,7 @@ namespace GPU_HeiPa {
                 for (auto &st: instances) st.fence();
 
                 {
-                    ScopedTimer _t("initial_partitioning", "gpu_progressive_partition", "update_partition");
+                    HEIPA_PROFILE_SCOPE("initial_partitioning", "gpu_progressive_partition", "update_partition");
                     update_partition_from_batched_subparts(batch, sub_part_batch, batch.metadata, k, partition.map, exec_space);
                     update_hierarchy(n_to_extract, batch.split_blocks, batch.metadata, k, d_block_lvl, d_block_fact, d_hierarchy, exec_space);
                     KOKKOS_PROFILE_FENCE(exec_space);
@@ -916,10 +916,10 @@ namespace GPU_HeiPa {
                 free_batched_subgraphs(batch, curr_g.uniform_vertex_weights, curr_g.uniform_edge_weights, mem_stack);
 
                 if (!mappings.empty()) {
-                    ScopedTimer _t("initial_partitioning", "gpu_progressive_partition", "predict_block_distribution");
+                    HEIPA_PROFILE_SCOPE("initial_partitioning", "gpu_progressive_partition", "predict_block_distribution");
                     predict_block_distribution(mappings.back(), partition.map, vertex_count, exec_space);
                 } else {
-                    ScopedTimer _t("initial_partitioning", "gpu_progressive_partition", "count_block_vertices");
+                    HEIPA_PROFILE_SCOPE("initial_partitioning", "gpu_progressive_partition", "count_block_vertices");
                     if (curr_g.uniform_vertex_weights) recalculate_weights_and_counts<true>(partition, curr_g, vertex_count, exec_space);
                     else recalculate_weights_and_counts<false>(partition, curr_g, vertex_count, exec_space);
                 }

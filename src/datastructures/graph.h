@@ -66,7 +66,7 @@ namespace GPU_HeiPa {
                                 DeviceExecutionSpace &exec_space) {
         Graph g;
         {
-            ScopedTimer _t{"misc", "from_HostGraph", "initialize"};
+            HEIPA_PROFILE_SCOPE("misc", "from_HostGraph", "initialize");
 
             g.n = host_g.n;
             g.m = host_g.m;
@@ -90,7 +90,7 @@ namespace GPU_HeiPa {
         }
         auto p = get_time_point();
         {
-            ScopedTimer _t{"up/download", "from_HostGraph", "copy"};
+            HEIPA_PROFILE_SCOPE("up/download", "from_HostGraph", "copy");
 
             Kokkos::deep_copy(exec_space, g.neighborhood, host_g.neighborhood);
             Kokkos::deep_copy(exec_space, g.edges_v, host_g.edges_v);
@@ -108,7 +108,7 @@ namespace GPU_HeiPa {
         down_upload_ms += get_milli_seconds(p, get_time_point());
         // create the third array
         {
-            ScopedTimer _t{"misc", "from_HostGraph", "fill_edges_u"};
+            HEIPA_PROFILE_SCOPE("misc", "from_HostGraph", "fill_edges_u");
 
             Kokkos::parallel_for("fill_edges_u", Kokkos::RangePolicy<DeviceExecutionSpace>(exec_space, 0, g.n), KOKKOS_LAMBDA(const vertex_t u) {
                 u32 begin = g.neighborhood(u);
@@ -132,7 +132,7 @@ namespace GPU_HeiPa {
         Graph coarse_g;
         // initialize graphs
         {
-            ScopedTimer _t{"contraction", "from_Graph_Mapping", "initialize_graph"};
+            HEIPA_PROFILE_SCOPE("contraction", "from_Graph_Mapping", "initialize_graph");
 
             coarse_g.n = mapping.coarse_n;
             coarse_g.g_weight = old_g.g_weight;
@@ -152,7 +152,7 @@ namespace GPU_HeiPa {
         UnmanagedDeviceWeight hash_vals;
         // initialize helpers
         {
-            ScopedTimer _t{"contraction", "from_Graph_Mapping", "initialize_helpers"};
+            HEIPA_PROFILE_SCOPE("contraction", "from_Graph_Mapping", "initialize_helpers");
 
             degrees = UnmanagedDeviceVertex((vertex_t *) get_chunk_back(mem_stack, sizeof(vertex_t) * (coarse_g.n + 1)), (coarse_g.n + 1));
             sum_degrees = UnmanagedDeviceVertex((vertex_t *) get_chunk_back(mem_stack, sizeof(vertex_t) * (coarse_g.n + 1)), (coarse_g.n + 1));
@@ -163,7 +163,7 @@ namespace GPU_HeiPa {
 
         // set memory to 0
         {
-            ScopedTimer _t{"contraction", "from_Graph_Mapping", "initialize_set_0"};
+            HEIPA_PROFILE_SCOPE("contraction", "from_Graph_Mapping", "initialize_set_0");
 
             Kokkos::deep_copy(exec_space, coarse_g.weights, 0);
             Kokkos::deep_copy(exec_space, sum_degrees, 0);
@@ -176,7 +176,7 @@ namespace GPU_HeiPa {
 
         // determine weight of new vertices and maximum degree
         {
-            ScopedTimer _t{"contraction", "from_Graph_Mapping", "max_degrees"};
+            HEIPA_PROFILE_SCOPE("contraction", "from_Graph_Mapping", "max_degrees");
 
             Kokkos::parallel_for("max_degrees", Kokkos::RangePolicy<DeviceExecutionSpace>(exec_space, 0, old_g.n), KOKKOS_LAMBDA(const vertex_t u) {
                 u32 deg = old_g.neighborhood(u + 1) - old_g.neighborhood(u);
@@ -191,7 +191,7 @@ namespace GPU_HeiPa {
 
         // prefix sum over all degrees
         {
-            ScopedTimer _t{"contraction", "from_Graph_Mapping", "max_degrees_prefix_sum"};
+            HEIPA_PROFILE_SCOPE("contraction", "from_Graph_Mapping", "max_degrees_prefix_sum");
 
             Kokkos::parallel_scan("prefix_sum_offsets", Kokkos::RangePolicy<DeviceExecutionSpace>(exec_space, 0, coarse_g.n + 1), KOKKOS_LAMBDA(const u32 i, u32 &running, const bool final) {
                 if (final) { hash_offsets(i) = running; }
@@ -207,7 +207,7 @@ namespace GPU_HeiPa {
 
             if (avg_degree > 32) {
                 // team-parallel over fine vertices: each team cooperatively scans one vertex's adjacency
-                ScopedTimer _t{"contraction", "from_Graph_Mapping", "hash_edges_team_parallel"};
+                HEIPA_PROFILE_SCOPE("contraction", "from_Graph_Mapping", "hash_edges_team_parallel");
 
                 Kokkos::parallel_for("hash_edges_tp", Kokkos::TeamPolicy<DeviceExecutionSpace>(exec_space, old_g.n, Kokkos::AUTO), KOKKOS_LAMBDA(const Kokkos::TeamPolicy<DeviceExecutionSpace>::member_type &team) {
                     vertex_t old_u = team.league_rank();
@@ -245,7 +245,7 @@ namespace GPU_HeiPa {
                 KOKKOS_PROFILE_FENCE(exec_space);
             } else {
                 // edge-parallel: one thread per edge, good for low-degree graphs
-                ScopedTimer _t{"contraction", "from_Graph_Mapping", "hash_edges_edge_parallel"};
+                HEIPA_PROFILE_SCOPE("contraction", "from_Graph_Mapping", "hash_edges_edge_parallel");
 
                 Kokkos::parallel_for("hash_edges_ep", Kokkos::RangePolicy<DeviceExecutionSpace>(exec_space, 0, old_g.m), KOKKOS_LAMBDA(const u32 i) {
                     vertex_t u = old_g.edges_u(i);
@@ -287,7 +287,7 @@ namespace GPU_HeiPa {
 
         // count unique entries per coarse vertex
         {
-            ScopedTimer _t{"contraction", "from_Graph_Mapping", "count_unique"};
+            HEIPA_PROFILE_SCOPE("contraction", "from_Graph_Mapping", "count_unique");
 
             u32 avg_hash_len = old_g.n > 0 ? (old_g.m / coarse_g.n) : 0;
             if (avg_hash_len >= 12) {
@@ -320,7 +320,7 @@ namespace GPU_HeiPa {
 
         // build offsets
         {
-            ScopedTimer _t{"contraction", "from_Graph_Mapping", "build_offsets"};
+            HEIPA_PROFILE_SCOPE("contraction", "from_Graph_Mapping", "build_offsets");
 
             Kokkos::parallel_scan("build_offsets", Kokkos::RangePolicy<DeviceExecutionSpace>(exec_space, 0, coarse_g.n + 1), KOKKOS_LAMBDA(const u32 i, u32 &running, const bool final) {
                 if (final) { coarse_g.neighborhood(i) = running; }
@@ -336,7 +336,7 @@ namespace GPU_HeiPa {
 
         // allocate edges for coarse graph
         {
-            ScopedTimer _t{"contraction", "from_Graph_Mapping", "allocate_edges"};
+            HEIPA_PROFILE_SCOPE("contraction", "from_Graph_Mapping", "allocate_edges");
 
             coarse_g.edges_u = UnmanagedDeviceVertex((vertex_t *) get_chunk_front(mem_stack, sizeof(vertex_t) * coarse_g.m), coarse_g.m);
             coarse_g.edges_v = UnmanagedDeviceVertex((vertex_t *) get_chunk_front(mem_stack, sizeof(vertex_t) * coarse_g.m), coarse_g.m);
@@ -347,7 +347,7 @@ namespace GPU_HeiPa {
 
         // fill the coarse graph and u array
         {
-            ScopedTimer _t{"contraction", "from_Graph_Mapping", "fill_coarse_graph"};
+            HEIPA_PROFILE_SCOPE("contraction", "from_Graph_Mapping", "fill_coarse_graph");
 
             Kokkos::parallel_scan("fill_coarse_graph", Kokkos::RangePolicy<DeviceExecutionSpace>(exec_space, 0, old_g.m), KOKKOS_LAMBDA(const u32 i, u32 &running, const bool final) {
                 vertex_t v = hash_keys(i);
@@ -363,7 +363,7 @@ namespace GPU_HeiPa {
 
         // fill the u array
         {
-            ScopedTimer _t{"contraction", "from_Graph_Mapping", "fill_coarse_u"};
+            HEIPA_PROFILE_SCOPE("contraction", "from_Graph_Mapping", "fill_coarse_u");
 
             Kokkos::parallel_for("fill_edges_u", Kokkos::RangePolicy<DeviceExecutionSpace>(exec_space, 0, coarse_g.n), KOKKOS_LAMBDA(const vertex_t u) {
                 u32 begin = coarse_g.neighborhood(u);
@@ -377,7 +377,7 @@ namespace GPU_HeiPa {
 
         // deallocate mem
         {
-            ScopedTimer _t{"contraction", "from_Graph_Mapping", "deallocate"};
+            HEIPA_PROFILE_SCOPE("contraction", "from_Graph_Mapping", "deallocate");
 
             pop_back(mem_stack);
             pop_back(mem_stack);

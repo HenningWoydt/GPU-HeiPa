@@ -55,7 +55,7 @@ namespace GPU_HeiPa {
     }
 
     inline KokkosMemoryStack initialize_kokkos_memory_stack(size_t n_bytes, const std::string &t_name) {
-        ScopedTimer _t("misc", "KokkosMemoryStack", "allocate");
+        HEIPA_PROFILE_SCOPE("misc", "KokkosMemoryStack", "allocate");
 
         KokkosMemoryStack stack;
         stack.name = t_name;

@@ -54,7 +54,7 @@ namespace GPU_HeiPa {
         BlockConn bc;
         //
         {
-            ScopedTimer _t("refinement", "BlockConnectivity_fs", "allocate_rows");
+            HEIPA_PROFILE_SCOPE("refinement", "BlockConnectivity_fs", "allocate_rows");
 
             bc.n = g.n;
             bc.row = UnmanagedDeviceU32((u32 *) get_chunk_back(mem_stack, sizeof(u32) * (g.n + 1)), g.n + 1);
@@ -65,7 +65,7 @@ namespace GPU_HeiPa {
 
         // set rows
         {
-            ScopedTimer _t("refinement", "BlockConnectivity_fs", "set_rows");
+            HEIPA_PROFILE_SCOPE("refinement", "BlockConnectivity_fs", "set_rows");
 
             Kokkos::parallel_scan("set_rows", Kokkos::RangePolicy<DeviceExecutionSpace>(exec_space, 0, g.n + 1), KOKKOS_LAMBDA(const u32 i, u32 &running, const bool final) {
                 if (i == 0) {
@@ -94,7 +94,7 @@ namespace GPU_HeiPa {
 
         // allocate rest
         {
-            ScopedTimer _t("refinement", "BlockConnectivity_fs", "allocate");
+            HEIPA_PROFILE_SCOPE("refinement", "BlockConnectivity_fs", "allocate");
 
             bc.ids = UnmanagedDevicePartition((partition_t *) get_chunk_back(mem_stack, sizeof(partition_t) * bc.size), bc.size);
             bc.weights = UnmanagedDeviceWeight((weight_t *) get_chunk_back(mem_stack, sizeof(weight_t) * bc.size), bc.size);
@@ -106,7 +106,7 @@ namespace GPU_HeiPa {
 
         // first fill of the structure
         if (g.m / g.n < 16) {
-            ScopedTimer _t("refinement", "BlockConnectivity_fs", "fill");
+            HEIPA_PROFILE_SCOPE("refinement", "BlockConnectivity_fs", "fill");
 
             Kokkos::parallel_for("fill", Kokkos::RangePolicy<DeviceExecutionSpace>(exec_space, 0, g.m), KOKKOS_LAMBDA(const u32 i) {
                 vertex_t u = g.edges_u(i);
@@ -143,7 +143,7 @@ namespace GPU_HeiPa {
 
             KOKKOS_PROFILE_FENCE(exec_space);
         } else {
-            ScopedTimer _t("refinement", "BlockConnectivity_fs", "fill_team");
+            HEIPA_PROFILE_SCOPE("refinement", "BlockConnectivity_fs", "fill_team");
 
             using team_policy = Kokkos::TeamPolicy<DeviceExecutionSpace>;
             using member_type = team_policy::member_type;
@@ -195,7 +195,7 @@ namespace GPU_HeiPa {
 
     inline void free_BlockConn(BlockConn &bc,
                                KokkosMemoryStack &mem_stack) {
-        ScopedTimer _t("refinement", "BlockConnectivity", "free");
+        HEIPA_PROFILE_SCOPE("refinement", "BlockConnectivity", "free");
 
         pop_back(mem_stack);
         pop_back(mem_stack);
@@ -213,7 +213,7 @@ namespace GPU_HeiPa {
                              const DeviceVertex &moves,
                              DeviceExecutionSpace &exec_space) {
         {
-            ScopedTimer _t("refinement", "JetLabelPropagation", "update_large_mark");
+            HEIPA_PROFILE_SCOPE("refinement", "JetLabelPropagation", "update_large_mark");
 
             round += 1;
             u32 total_moves = (u32) moves.extent(0);
@@ -228,7 +228,7 @@ namespace GPU_HeiPa {
 
         //recompute conn tables for each vertex adjacent to a moved vertex
         {
-            ScopedTimer _t("refinement", "JetLabelPropagation", "update_large_rebuild");
+            HEIPA_PROFILE_SCOPE("refinement", "JetLabelPropagation", "update_large_rebuild");
 
             Kokkos::parallel_for("rebuild", Kokkos::TeamPolicy<DeviceExecutionSpace>(exec_space, (int) g.n, Kokkos::AUTO).set_scratch_size(0, Kokkos::PerTeam(partition.k * sizeof(weight_t) + partition.k * sizeof(partition_t) + 4 * sizeof(partition_t))), KOKKOS_LAMBDA(const Kokkos::TeamPolicy<DeviceExecutionSpace>::member_type &t) {
                 vertex_t u = (vertex_t) t.league_rank();
@@ -333,7 +333,7 @@ namespace GPU_HeiPa {
         //recompute conn tables for each vertex adjacent to a moved vertex
         /*
         {
-            ScopedTimer _t("refinement", "JetLabelPropagation", "update_large_rebuild");
+            HEIPA_PROFILE_SCOPE("refinement", "JetLabelPropagation", "update_large_rebuild");
 
             Kokkos::parallel_for("rebuild", Kokkos::TeamPolicy<DeviceExecutionSpace>((int) g.n, Kokkos::AUTO).set_scratch_size(0, Kokkos::PerTeam(partition.k * sizeof(weight_t) + sizeof(u32))), KOKKOS_LAMBDA(const Kokkos::TeamPolicy<DeviceExecutionSpace>::member_type &t) {
                 vertex_t u = (vertex_t) t.league_rank();
@@ -433,7 +433,7 @@ namespace GPU_HeiPa {
 
         //
         {
-            ScopedTimer _t("refinement", "JetLabelPropagation", "update_small_remove_weight");
+            HEIPA_PROFILE_SCOPE("refinement", "JetLabelPropagation", "update_small_remove_weight");
 
             Kokkos::parallel_for("remove_weight", Kokkos::TeamPolicy<DeviceExecutionSpace>(exec_space, (int) total_moves, Kokkos::AUTO), KOKKOS_LAMBDA(const Kokkos::TeamPolicy<DeviceExecutionSpace>::member_type &t) {
                 vertex_t u = moves((u32) t.league_rank());
@@ -465,7 +465,7 @@ namespace GPU_HeiPa {
 
         //
         {
-            ScopedTimer _t("refinement", "JetLabelPropagation", "update_small_add_weight");
+            HEIPA_PROFILE_SCOPE("refinement", "JetLabelPropagation", "update_small_add_weight");
 
             Kokkos::parallel_for("add_weight", Kokkos::TeamPolicy<DeviceExecutionSpace>(exec_space, (int) total_moves, Kokkos::AUTO), KOKKOS_LAMBDA(const Kokkos::TeamPolicy<DeviceExecutionSpace>::member_type &t) {
                 vertex_t u = moves((u32) t.league_rank());

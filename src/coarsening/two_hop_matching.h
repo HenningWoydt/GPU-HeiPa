@@ -63,7 +63,7 @@ namespace GPU_HeiPa {
                                                     const partition_t t_k,
                                                     const weight_t t_lmax,
                                                     KokkosMemoryStack &mem_stack) {
-        ScopedTimer _t("coarsening", "TwoHopMatcher", "allocate");
+        HEIPA_PROFILE_SCOPE("coarsening", "TwoHopMatcher", "allocate");
 
         TwoHopMatcher thm;
 
@@ -255,7 +255,7 @@ namespace GPU_HeiPa {
                                    DeviceExecutionSpace &exec_space) {
         vertex_t unmapped = 0;
         {
-            ScopedTimer _t("coarsening", "coarsen_match", "count_unmapped");
+            HEIPA_PROFILE_SCOPE("coarsening", "coarsen_match", "count_unmapped");
 
             Kokkos::parallel_reduce("count_unmapped", Kokkos::RangePolicy<DeviceExecutionSpace>(exec_space, 0, g.n), KOKKOS_LAMBDA(vertex_t i, vertex_t &update) {
                 if (thm.vcmap(i) == SENTINEL) update++;
@@ -272,7 +272,7 @@ namespace GPU_HeiPa {
                                     u32 seed,
                                     DeviceExecutionSpace &exec_space) {
         if (uniform_e_weights) {
-            ScopedTimer _t("coarsening", "coarsen_match", "initial_pick_uniform");
+            HEIPA_PROFILE_SCOPE("coarsening", "coarsen_match", "initial_pick_uniform");
 
             Kokkos::parallel_for("initial_pick_uniform", Kokkos::RangePolicy<DeviceExecutionSpace>(exec_space, 0, g.n), KOKKOS_LAMBDA(vertex_t i) {
                 u32 adj_size = g.neighborhood(i + 1) - g.neighborhood(i);
@@ -284,13 +284,13 @@ namespace GPU_HeiPa {
             KOKKOS_PROFILE_FENCE(exec_space);
         } else {
             if (g.m / g.n > 32) {
-                ScopedTimer _t("coarsening", "coarsen_match", "initial_pick_team");
+                HEIPA_PROFILE_SCOPE("coarsening", "coarsen_match", "initial_pick_team");
 
                 pick_neighbor_team<true, uniform_e_weights>(g, thm.vcmap, thm.hn, seed, thm.vertex_list, g.n, exec_space);
 
                 KOKKOS_PROFILE_FENCE(exec_space);
             } else {
-                ScopedTimer _t("coarsening", "coarsen_match", "initial_pick_flat");
+                HEIPA_PROFILE_SCOPE("coarsening", "coarsen_match", "initial_pick_flat");
 
                 pick_neighbor_flat<true, uniform_e_weights>(g, thm.vcmap, thm.hn, seed, thm.vertex_list, g.n, exec_space);
 
@@ -305,7 +305,7 @@ namespace GPU_HeiPa {
             u32 round_seed = seed ^ (round * 0x9e3779b1u);
             // 4 sub-rounds of commit
             {
-                ScopedTimer _t("coarsening", "coarsen_match", "commit");
+                HEIPA_PROFILE_SCOPE("coarsening", "coarsen_match", "commit");
 
                 for (u32 r = 0; r < 4; r++) {
                     Kokkos::parallel_for("commit_p1", Kokkos::RangePolicy<DeviceExecutionSpace>(exec_space, 0, perm_length), KOKKOS_LAMBDA(vertex_t i) {
@@ -338,13 +338,13 @@ namespace GPU_HeiPa {
             {
                 if (uniform_e_weights) {
                     if (g.m / g.n > 32) {
-                        ScopedTimer _t("coarsening", "coarsen_match", "repick_uniform_team");
+                        HEIPA_PROFILE_SCOPE("coarsening", "coarsen_match", "repick_uniform_team");
 
                         pick_neighbor_team<false, uniform_e_weights>(g, thm.vcmap, thm.hn, round_seed, thm.vertex_list, perm_length, exec_space);
 
                         KOKKOS_PROFILE_FENCE(exec_space);
                     } else {
-                        ScopedTimer _t("coarsening", "coarsen_match", "repick_uniform_flat");
+                        HEIPA_PROFILE_SCOPE("coarsening", "coarsen_match", "repick_uniform_flat");
 
                         pick_neighbor_flat<false, uniform_e_weights>(g, thm.vcmap, thm.hn, round_seed, thm.vertex_list, perm_length, exec_space);
 
@@ -352,13 +352,13 @@ namespace GPU_HeiPa {
                     }
                 } else {
                     if (g.m / g.n > 32) {
-                        ScopedTimer _t("coarsening", "coarsen_match", "repick_team");
+                        HEIPA_PROFILE_SCOPE("coarsening", "coarsen_match", "repick_team");
 
                         pick_neighbor_team<false, uniform_e_weights>(g, thm.vcmap, thm.hn, round_seed, thm.vertex_list, perm_length, exec_space);
 
                         KOKKOS_PROFILE_FENCE(exec_space);
                     } else {
-                        ScopedTimer _t("coarsening", "coarsen_match", "repick_flat");
+                        HEIPA_PROFILE_SCOPE("coarsening", "coarsen_match", "repick_flat");
 
                         pick_neighbor_flat<false, uniform_e_weights>(g, thm.vcmap, thm.hn, round_seed, thm.vertex_list, perm_length, exec_space);
 
@@ -369,7 +369,7 @@ namespace GPU_HeiPa {
 
             // Compact
             {
-                ScopedTimer _t("coarsening", "coarsen_match", "compact");
+                HEIPA_PROFILE_SCOPE("coarsening", "coarsen_match", "compact");
 
                 if (perm_length != g.n) {
                     Kokkos::parallel_for("copy_perm", Kokkos::RangePolicy<DeviceExecutionSpace>(exec_space, 0, perm_length), KOKKOS_LAMBDA(vertex_t i) {
@@ -395,7 +395,7 @@ namespace GPU_HeiPa {
                               vertex_t unmapped,
                               KokkosMemoryStack &mem_stack,
                               DeviceExecutionSpace &exec_space) {
-        ScopedTimer _t("coarsening", "coarsen_match", "leaf");
+        HEIPA_PROFILE_SCOPE("coarsening", "coarsen_match", "leaf");
 
         UnmanagedDeviceVertex unmappedVtx((vertex_t *) get_chunk_back(mem_stack, sizeof(vertex_t) * unmapped), unmapped);
         UnmanagedDeviceVertex hashes((vertex_t *) get_chunk_back(mem_stack, sizeof(vertex_t) * unmapped), unmapped);
@@ -435,7 +435,7 @@ namespace GPU_HeiPa {
         UnmanagedDeviceVertex twins((vertex_t *) get_chunk_back(mem_stack, sizeof(vertex_t) * table_size), table_size);
 
         {
-            ScopedTimer _t("coarsening", "twin_matching", "unmapped");
+            HEIPA_PROFILE_SCOPE("coarsening", "twin_matching", "unmapped");
 
             Kokkos::parallel_scan("scan_twin", Kokkos::RangePolicy<DeviceExecutionSpace>(exec_space, 0, g.n), KOKKOS_LAMBDA(const vertex_t i, vertex_t &update, const bool final) {
                 if (thm.vcmap(i) == SENTINEL) {
@@ -448,7 +448,7 @@ namespace GPU_HeiPa {
         }
         //
         {
-            ScopedTimer _t("coarsening", "twin_matching", "hash");
+            HEIPA_PROFILE_SCOPE("coarsening", "twin_matching", "hash");
 
             hasher_t hasher;
             Kokkos::parallel_for("twin_digests", TeamPolicy_t(exec_space, unmapped, Kokkos::AUTO), KOKKOS_LAMBDA(const TeamMember &thread) {
@@ -469,7 +469,7 @@ namespace GPU_HeiPa {
         }
         //
         {
-            ScopedTimer _t("coarsening", "twin_matching", "reset_htable");
+            HEIPA_PROFILE_SCOPE("coarsening", "twin_matching", "reset_htable");
 
             Kokkos::deep_copy(exec_space, htable, 0);
             Kokkos::deep_copy(exec_space, twins, SENTINEL);
@@ -478,7 +478,7 @@ namespace GPU_HeiPa {
         }
         //
         {
-            ScopedTimer _t("coarsening", "twin_matching", "match");
+            HEIPA_PROFILE_SCOPE("coarsening", "twin_matching", "match");
 
             Kokkos::parallel_for("match_by_hash", Kokkos::RangePolicy<DeviceExecutionSpace>(exec_space, 0, unmapped), KOKKOS_LAMBDA(const u32 i) {
                 vertex_t u = unmappedVtx(i);
@@ -527,7 +527,7 @@ namespace GPU_HeiPa {
                                   vertex_t unmapped,
                                   KokkosMemoryStack &mem_stack,
                                   DeviceExecutionSpace &exec_space) {
-        ScopedTimer _t("coarsening", "coarsen_match", "relative");
+        HEIPA_PROFILE_SCOPE("coarsening", "coarsen_match", "relative");
 
         UnmanagedDeviceVertex unmappedVtx((vertex_t *) get_chunk_back(mem_stack, sizeof(vertex_t) * unmapped), unmapped);
         UnmanagedDeviceVertex hashes((vertex_t *) get_chunk_back(mem_stack, sizeof(vertex_t) * unmapped), unmapped);
@@ -577,7 +577,7 @@ namespace GPU_HeiPa {
         TwoHopMatcher thm = initialize_two_hop_matcher(g.n, g.m, partition.k, lmax, mem_stack);
 
         {
-            ScopedTimer _t("coarsening", "coarsen_match", "reset");
+            HEIPA_PROFILE_SCOPE("coarsening", "coarsen_match", "reset");
 
             Kokkos::deep_copy(exec_space, thm.vcmap, SENTINEL);
             Kokkos::deep_copy(exec_space, thm.hn, SENTINEL);
@@ -609,7 +609,7 @@ namespace GPU_HeiPa {
         Mapping mapping;
         //
         {
-            ScopedTimer _t("coarsening", "coarsen_match", "build_mapping");
+            HEIPA_PROFILE_SCOPE("coarsening", "coarsen_match", "build_mapping");
 
             Kokkos::parallel_for("singletons", Kokkos::RangePolicy<DeviceExecutionSpace>(exec_space, 0, g.n), KOKKOS_LAMBDA(vertex_t i) {
                 if (thm.vcmap(i) == SENTINEL) thm.vcmap(i) = i;
@@ -639,7 +639,7 @@ namespace GPU_HeiPa {
         }
 
         {
-            ScopedTimer _t("coarsening", "coarsen_match", "free");
+            HEIPA_PROFILE_SCOPE("coarsening", "coarsen_match", "free");
 
             free_TwoHopMatcher(thm, mem_stack);
         }

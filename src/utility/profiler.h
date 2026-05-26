@@ -41,6 +41,7 @@
 #include <iomanip>
 #include <shared_mutex>
 #include <mutex>
+#include <memory>
 
 #if defined(_WIN32)
 #include <windows.h>
@@ -146,6 +147,12 @@ namespace GPU_HeiPa {
     };
 
     class Profiler {
+    private:
+        struct ThreadData {
+            std::unordered_map<ProfileKey, TimingStats, ProfileKeyHash> stats;
+            TimingStats total;
+        };
+
     public:
         static Profiler &instance() {
             static Profiler profiler;
@@ -157,9 +164,16 @@ namespace GPU_HeiPa {
                  const char *kernel_name,
                  double milliseconds) {
 #if ENABLE_PROFILER
-            std::unique_lock<std::shared_mutex> lock(mutex_);
-            stats_[{group_name, function_name, kernel_name}].add(milliseconds);
-            total_.add(milliseconds);
+            static thread_local ThreadData* local_data = nullptr;
+            if (local_data == nullptr) {
+                auto new_data = std::make_unique<ThreadData>();
+                local_data = new_data.get();
+                std::lock_guard<std::mutex> lock(registry_mutex_);
+                thread_registries_.push_back(std::move(new_data));
+            }
+
+            local_data->stats[{group_name, function_name, kernel_name}].add(milliseconds);
+            local_data->total.add(milliseconds);
 #else
             (void) group_name;
             (void) function_name;
@@ -172,8 +186,7 @@ namespace GPU_HeiPa {
 #if !ENABLE_PROFILER
             return "{}";
 #else
-            std::shared_lock<std::shared_mutex> lock(mutex_);
-            auto groups = get_hierarchy();
+            auto [groups, total_stats] = get_aggregated_hierarchy();
 
             auto escape_json = [](const std::string &text) {
                 std::ostringstream escaped;
@@ -205,7 +218,7 @@ namespace GPU_HeiPa {
             write_indent(output, ++indent_level);
             output << "\"total\": {\n";
             write_indent(output, ++indent_level);
-            output << "\"total_ms\": " << total_.total_ms << "\n";
+            output << "\"total_ms\": " << total_stats.total_ms << "\n";
             write_indent(output, --indent_level);
             output << "},\n";
 
@@ -366,10 +379,9 @@ namespace GPU_HeiPa {
 #if !ENABLE_PROFILER
             return;
 #else
-            std::shared_lock<std::shared_mutex> lock(mutex_);
-            auto groups = get_hierarchy();
+            auto [groups, total_stats] = get_aggregated_hierarchy();
 
-            if (total_.total_ms <= 0.0) {
+            if (total_stats.total_ms <= 0.0) {
                 output_stream << "Profiler: no samples recorded.\n";
                 return;
             }
@@ -379,7 +391,7 @@ namespace GPU_HeiPa {
 
 #ifdef _WIN32
             if (use_colors) {
-                // enable_ansi_on_windows(); // Assuming user handles this if needed or omitted for simple ANSI stream support
+                // enable_ansi_on_windows(); 
             }
 #endif
 
@@ -423,7 +435,7 @@ namespace GPU_HeiPa {
             };
 
             auto percent_of_total = [&](double milliseconds) {
-                return total_.total_ms > 0.0 ? (milliseconds * 100.0 / total_.total_ms) : 0.0;
+                return total_stats.total_ms > 0.0 ? (milliseconds * 100.0 / total_stats.total_ms) : 0.0;
             };
 
             std::vector<std::pair<std::string, const GroupProfile *> > sorted_groups;
@@ -501,7 +513,7 @@ namespace GPU_HeiPa {
                 output_stream << colorize_row(row, false, is_even_row);
             };
 
-            emit_row("TOTAL", "-", format_milliseconds(total_.total_ms), "-", format_percent(100.0));
+            emit_row("TOTAL", "-", format_milliseconds(total_stats.total_ms), "-", format_percent(100.0));
 
             for (const auto &group_entry: sorted_groups) {
                 const std::string &group_name = group_entry.first;
@@ -583,8 +595,7 @@ namespace GPU_HeiPa {
             output_stream << colorize_rule(make_rule_line());
 #endif
         }
-        
-        // Ensure old name print_table works if called
+
         void print_table(std::ostream &output_stream = std::cout,
                          int max_functions_per_group = -1,
                          int max_kernels_per_function = -1,
@@ -597,27 +608,36 @@ namespace GPU_HeiPa {
     private:
         Profiler() = default;
 
-        std::unordered_map<std::string, GroupProfile> get_hierarchy() const {
+        std::pair<std::unordered_map<std::string, GroupProfile>, TimingStats> get_aggregated_hierarchy() const {
             std::unordered_map<std::string, GroupProfile> groups;
-            for (const auto &entry: stats_) {
-                const ProfileKey &key = entry.first;
-                const TimingStats &stats = entry.second;
+            TimingStats total_stats;
 
-                GroupProfile &gp = groups[std::string(key.group)];
-                FunctionProfile &fp = gp.functions[std::string(key.function)];
-                fp.kernels[std::string(key.kernel)] = stats;
+            std::lock_guard<std::mutex> lock(registry_mutex_);
+            for (const auto& registry : thread_registries_) {
+                for (const auto& entry : registry->stats) {
+                    const ProfileKey& key = entry.first;
+                    const TimingStats& stats = entry.second;
 
-                fp.aggregate.total_ms += stats.total_ms;
-                fp.aggregate.calls += stats.calls;
-                gp.aggregate.total_ms += stats.total_ms;
-                gp.aggregate.calls += stats.calls;
+                    GroupProfile& gp = groups[std::string(key.group)];
+                    FunctionProfile& fp = gp.functions[std::string(key.function)];
+                    
+                    TimingStats& kernel_stats = fp.kernels[std::string(key.kernel)];
+                    kernel_stats.total_ms += stats.total_ms;
+                    kernel_stats.calls += stats.calls;
+
+                    fp.aggregate.total_ms += stats.total_ms;
+                    fp.aggregate.calls += stats.calls;
+                    gp.aggregate.total_ms += stats.total_ms;
+                    gp.aggregate.calls += stats.calls;
+                }
+                total_stats.total_ms += registry->total.total_ms;
+                total_stats.calls += registry->total.calls;
             }
-            return groups;
+            return {groups, total_stats};
         }
 
-        mutable std::shared_mutex mutex_;
-        std::unordered_map<ProfileKey, TimingStats, ProfileKeyHash> stats_;
-        TimingStats total_;
+        mutable std::mutex registry_mutex_;
+        std::vector<std::unique_ptr<ThreadData>> thread_registries_;
     };
 
     struct ScopedTimer;
@@ -628,7 +648,7 @@ namespace GPU_HeiPa {
         const char *group = nullptr;
         const char *function = nullptr;
         const char *kernel = nullptr;
-        std::chrono::time_point<std::chrono::steady_clock> start_time;
+        std::chrono::high_resolution_clock::time_point start_time;
         bool stopped = false;
         double child_ms = 0.0;
         ScopedTimer *parent = nullptr;
@@ -639,8 +659,7 @@ namespace GPU_HeiPa {
             group = group_name;
             function = function_name;
             kernel = kernel_name;
-            // Assuming util.h has get_time_point() or we use steady_clock::now()
-            start_time = std::chrono::steady_clock::now();
+            start_time = get_time_point();
             stopped = false;
             child_ms = 0.0;
             parent = current_active_timer;
@@ -655,9 +674,8 @@ namespace GPU_HeiPa {
         void stop() noexcept {
 #if ENABLE_PROFILER
             if (!stopped) {
-                // Assuming util.h has get_milli_seconds(start, end) or we compute it
-                const auto end_time = std::chrono::steady_clock::now();
-                double elapsed_ms = std::chrono::duration<double, std::milli>(end_time - start_time).count();
+                const auto end_time = get_time_point();
+                double elapsed_ms = get_milli_seconds(start_time, end_time);
                 double exclusive_ms = elapsed_ms - child_ms;
                 Profiler::instance().add(group, function, kernel, exclusive_ms);
 
@@ -677,3 +695,13 @@ namespace GPU_HeiPa {
 } // namespace GPU_HeiPa
 
 #endif //GPU_HEIPA_PROFILER_H
+
+#define HEIPA_CONCAT_IMPL(a, b) a##b
+#define HEIPA_CONCAT(a, b) HEIPA_CONCAT_IMPL(a, b)
+
+#if ENABLE_PROFILER
+#define HEIPA_PROFILE_SCOPE(group, function, kernel) \
+    GPU_HeiPa::ScopedTimer HEIPA_CONCAT(_timer_, __LINE__)(group, function, kernel)
+#else
+#define HEIPA_PROFILE_SCOPE(group, function, kernel)
+#endif

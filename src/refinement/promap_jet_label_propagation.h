@@ -71,7 +71,7 @@ namespace GPU_HeiPa {
                                                                       const weight_t t_lmax,
                                                                       KokkosMemoryStack &mem_stack,
                                                                       DeviceExecutionSpace &exec_space) {
-        ScopedTimer _t("refinement", "JetLabelPropagation", "allocate");
+        HEIPA_PROFILE_SCOPE("refinement", "JetLabelPropagation", "allocate");
 
         ProMapLabelPropagation lp;
 
@@ -214,7 +214,7 @@ namespace GPU_HeiPa {
         vertex_t num_pos = 0;
         //
         {
-            ScopedTimer _t("refinement", "jetlp", "best_block");
+            HEIPA_PROFILE_SCOPE("refinement", "jetlp", "best_block");
             Kokkos::deep_copy(exec_space, lp.idx, 0);
 
             Kokkos::parallel_for("best_block", Kokkos::RangePolicy<DeviceExecutionSpace>(exec_space, 0, g.n), KOKKOS_LAMBDA(const vertex_t u) {
@@ -280,7 +280,7 @@ namespace GPU_HeiPa {
 
         // use afterburner
         {
-            ScopedTimer _t("refinement", "jetlp", "afterburner");
+            HEIPA_PROFILE_SCOPE("refinement", "jetlp", "afterburner");
             Kokkos::deep_copy(exec_space, lp.idx, 0);
 
             Kokkos::parallel_for("afterburner heuristic", Kokkos::RangePolicy<DeviceExecutionSpace>(exec_space, 0, num_pos), KOKKOS_LAMBDA(const u32 i) {
@@ -352,7 +352,7 @@ namespace GPU_HeiPa {
 
         // Determine maximum allowed vertex weight
         {
-            ScopedTimer _t("refinement", "jetrs", "find_max_vwgt");
+            HEIPA_PROFILE_SCOPE("refinement", "jetrs", "find_max_vwgt");
 
             Kokkos::parallel_reduce("find max size", Kokkos::RangePolicy<DeviceExecutionSpace>(exec_space, 0, lp.k), KOKKOS_LAMBDA(const partition_t id, weight_t &update) {
                 weight_t size = lp.partition.bweights(id);
@@ -370,7 +370,7 @@ namespace GPU_HeiPa {
         u32 num_moves = 0;
         //
         {
-            ScopedTimer _t("refinement", "jetrs", "score_candidates");
+            HEIPA_PROFILE_SCOPE("refinement", "jetrs", "score_candidates");
 
             Kokkos::deep_copy(exec_space, Kokkos::subview(lp.gain1, std::make_pair((vertex_t) 0, t_minibuckets + 1)), 0);
             Kokkos::deep_copy(exec_space, lp.idx, 0);
@@ -422,7 +422,7 @@ namespace GPU_HeiPa {
 
         //
         {
-            ScopedTimer _t("refinement", "jetrs", "prefix_sum_score_buckets");
+            HEIPA_PROFILE_SCOPE("refinement", "jetrs", "prefix_sum_score_buckets");
 
             if (t_minibuckets < 10000) {
                 Kokkos::parallel_for("prefix_sum_score_buckets", Kokkos::TeamPolicy<DeviceExecutionSpace>(exec_space, 1, 1024), KOKKOS_LAMBDA(const Kokkos::TeamPolicy<DeviceExecutionSpace>::member_type &t) {
@@ -449,7 +449,7 @@ namespace GPU_HeiPa {
 
         //
         {
-            ScopedTimer _t("refinement", "jetrs", "filter_scores");
+            HEIPA_PROFILE_SCOPE("refinement", "jetrs", "filter_scores");
 
             Kokkos::deep_copy(exec_space, lp.evict_adjust, 0);
             Kokkos::deep_copy(exec_space, lp.idx, 0);
@@ -483,7 +483,7 @@ namespace GPU_HeiPa {
         //assign consecutive chunks of vertices to undersized parts using scan result
         //
         {
-            ScopedTimer _t("refinement", "jetrs", "cookie_cutter");
+            HEIPA_PROFILE_SCOPE("refinement", "jetrs", "cookie_cutter");
 
             Kokkos::parallel_for("cookie cutter", Kokkos::TeamPolicy<DeviceExecutionSpace>(exec_space, 1, Kokkos::AUTO), KOKKOS_LAMBDA(const Kokkos::TeamPolicy<DeviceExecutionSpace>::member_type &t) {
                 Kokkos::parallel_scan(Kokkos::TeamThreadRange(t, 0, lp.k), [&](const partition_t p, weight_t &update, const bool final) {
@@ -518,7 +518,7 @@ namespace GPU_HeiPa {
         }
         //
         {
-            ScopedTimer _t("refinement", "jetrs", "adjust_scores");
+            HEIPA_PROFILE_SCOPE("refinement", "jetrs", "adjust_scores");
 
             Kokkos::parallel_for("adjust_scores", Kokkos::RangePolicy<DeviceExecutionSpace>(exec_space, 0, num_moves), KOKKOS_LAMBDA(const u32 i) {
                 vertex_t u = lp.vtx1(i);
@@ -573,7 +573,7 @@ namespace GPU_HeiPa {
 
         // determine underloaded blocks
         {
-            ScopedTimer _t("refinement", "jetrw", "underloaded_blocks");
+            HEIPA_PROFILE_SCOPE("refinement", "jetrw", "underloaded_blocks");
 
             Kokkos::parallel_for("underloaded_blocks", Kokkos::TeamPolicy<DeviceExecutionSpace>(exec_space, 1, Kokkos::AUTO), KOKKOS_LAMBDA(const Kokkos::TeamPolicy<DeviceExecutionSpace>::member_type &t) {
                 //this scan is small so do it within a team instead of an entire grid to save kernel launch time
@@ -595,7 +595,7 @@ namespace GPU_HeiPa {
 
         //
         {
-            ScopedTimer _t("refinement", "jetrw", "reset_minibuckets");
+            HEIPA_PROFILE_SCOPE("refinement", "jetrw", "reset_minibuckets");
 
             Kokkos::deep_copy(exec_space, Kokkos::subview(lp.gain1, std::make_pair((vertex_t) 0, t_minibuckets + 1)), 0);
 
@@ -604,7 +604,7 @@ namespace GPU_HeiPa {
 
         // determine best block
         {
-            ScopedTimer _t("refinement", "jetrw", "best_block");
+            HEIPA_PROFILE_SCOPE("refinement", "jetrw", "best_block");
 
             Kokkos::deep_copy(exec_space, lp.idx, 0);
 
@@ -657,7 +657,7 @@ namespace GPU_HeiPa {
 
         //
         {
-            ScopedTimer _t("refinement", "jetrw", "scan_score_buckets");
+            HEIPA_PROFILE_SCOPE("refinement", "jetrw", "scan_score_buckets");
 
             if (t_minibuckets < 10000) {
                 Kokkos::parallel_for("scan score buckets", Kokkos::TeamPolicy<DeviceExecutionSpace>(exec_space, 1, 1024), KOKKOS_LAMBDA(const Kokkos::TeamPolicy<DeviceExecutionSpace>::member_type &t) {
@@ -684,7 +684,7 @@ namespace GPU_HeiPa {
         }
         //
         {
-            ScopedTimer _t("refinement", "jetrw", "filter_scores");
+            HEIPA_PROFILE_SCOPE("refinement", "jetrw", "filter_scores");
 
             u32 num_moves;
             Kokkos::deep_copy(exec_space, num_moves, lp.idx);
@@ -728,7 +728,7 @@ namespace GPU_HeiPa {
 
         // copy old partition
         {
-            ScopedTimer _t("refinement", "JetLabelPropagation", "copy_old");
+            HEIPA_PROFILE_SCOPE("refinement", "JetLabelPropagation", "copy_old");
 
             Kokkos::deep_copy(exec_space, lp.old_map, lp.partition.map);
 
@@ -737,7 +737,7 @@ namespace GPU_HeiPa {
 
         // first change in cut
         {
-            ScopedTimer _t("refinement", "JetLabelPropagation", "cut_change_1");
+            HEIPA_PROFILE_SCOPE("refinement", "JetLabelPropagation", "cut_change_1");
 
             Kokkos::parallel_for("cut_change_1", Kokkos::RangePolicy<DeviceExecutionSpace>(exec_space, 0, n_moves), KOKKOS_LAMBDA(const u32 &i) {
                 vertex_t u = moves(i);
@@ -758,7 +758,7 @@ namespace GPU_HeiPa {
 
         // update max weight
         {
-            ScopedTimer _t("refinement", "JetLabelPropagation", "update_max_weight");
+            HEIPA_PROFILE_SCOPE("refinement", "JetLabelPropagation", "update_max_weight");
 
             Kokkos::parallel_reduce("update_max_weight", Kokkos::RangePolicy<DeviceExecutionSpace>(exec_space, 0, lp.k), KOKKOS_LAMBDA(const s32 i, weight_t &update) {
                 if (lp.partition.bweights(i) > update) {
@@ -771,7 +771,7 @@ namespace GPU_HeiPa {
 
         // update block conn
         {
-            ScopedTimer _t("refinement", "JetLabelPropagation", "update_block_conn");
+            HEIPA_PROFILE_SCOPE("refinement", "JetLabelPropagation", "update_block_conn");
 
             if (n_moves > (u32) g.n / 10) {
                 update_large<uniform_e_weights>(g, lp.partition, lp.round_moved, lp.round, lp.dest_cache, bc, moves, exec_space);
@@ -784,7 +784,7 @@ namespace GPU_HeiPa {
 
         // change in comm cost
         {
-            ScopedTimer _t("refinement", "JetLabelPropagation", "comm_cost_delta");
+            HEIPA_PROFILE_SCOPE("refinement", "JetLabelPropagation", "comm_cost_delta");
 
             Kokkos::parallel_reduce("comm_cost", Kokkos::RangePolicy<DeviceExecutionSpace>(exec_space, 0, n_moves), KOKKOS_LAMBDA(const u32 i, weight_t &local_delta) {
                 vertex_t u = moves(i);
@@ -845,7 +845,7 @@ namespace GPU_HeiPa {
 
         // copy partition
         {
-            ScopedTimer _t("refinement", "JetLabelPropagation", "copy_partition");
+            HEIPA_PROFILE_SCOPE("refinement", "JetLabelPropagation", "copy_partition");
 
             copy_into(lp.partition, partition, g.n, exec_space);
 
@@ -894,7 +894,7 @@ namespace GPU_HeiPa {
                 if (best_max_weight > lmax && curr_max_weight < best_max_weight) {
                     // copy the partition
                     {
-                        ScopedTimer _t("refinement", "JetLabelPropagation", "copy_partition");
+                        HEIPA_PROFILE_SCOPE("refinement", "JetLabelPropagation", "copy_partition");
 
                         copy_into(partition, lp.partition, g.n, exec_space);
                         best_comm_cost = curr_comm_cost;
@@ -907,7 +907,7 @@ namespace GPU_HeiPa {
                     if ((f64) curr_comm_cost < PHI * (f64) best_comm_cost) { iteration = 0; }
                     //
                     {
-                        ScopedTimer _t("refinement", "JetLabelPropagation", "copy_partition");
+                        HEIPA_PROFILE_SCOPE("refinement", "JetLabelPropagation", "copy_partition");
 
                         copy_into(partition, lp.partition, g.n, exec_space);
                         best_comm_cost = curr_comm_cost;
