@@ -197,8 +197,13 @@ namespace GPU_HeiPa {
                     lp.dest_part(u) = lp.dest_cache(u);
                 } else {
                     partition_t u_id = lp.partition.map(u);
+
                     partition_t best_id = NO_MOVE;
                     weight_t best_conn = 0;
+
+                    partition_t second_best_id = NO_MOVE;
+                    weight_t second_best_conn = 0;
+
                     weight_t own_conn = 0;
 
                     u32 r_beg = bc.row(u);
@@ -217,10 +222,26 @@ namespace GPU_HeiPa {
                         own_conn = is_own ? w : own_conn;
 
                         // Update best if it's a candidate and better
-                        bool better = is_cand & (w > best_conn);
-                        best_conn = better ? w : best_conn;
-                        best_id = better ? id : best_id;
+                        bool better_first = is_cand & (w > best_conn);
+                        bool better_second = is_cand & !better_first & (w > second_best_conn);
+
+                        second_best_conn = better_first ? best_conn : (better_second ? w : second_best_conn);
+                        second_best_id = better_first ? best_id : (better_second ? id : second_best_id);
+
+                        best_conn = better_first ? w : best_conn;
+                        best_id = better_first ? id : best_id;
                     }
+
+                    // With 50% probability, use second-best candidate instead
+                    if (second_best_id != NO_MOVE) {
+                        u32 coin = (u * 2654435761u) ^ (lp.round * 1013904223u);
+                        if ((coin & 1u) != 0u) {
+                            best_id = second_best_id;
+                            best_conn = second_best_conn;
+                        }
+                    }
+
+                    
 
                     weight_t gain = 0;
 

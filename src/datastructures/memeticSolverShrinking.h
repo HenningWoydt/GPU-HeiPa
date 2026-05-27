@@ -28,6 +28,7 @@
 #define GPU_HEIPA_SOLVER_MEMETIC_SHRINKING_H
 
 #include <vector>
+#include <limits>
 
 #include <Kokkos_Core.hpp>
 #include <KokkosSparse_CrsMatrix.hpp>
@@ -780,7 +781,8 @@ namespace GPU_HeiPa {
                     #pragma omp parallel for num_threads(num_cpu_threads)
                     for (size_t i = 0; i < count_active; ++i) {
                         size_t tid = static_cast<size_t>(omp_get_thread_num());
-                        refinement(level, mem_stacks[tid], i, tid);
+                        //refinement(level, mem_stacks[tid], i, tid);
+                        refinement_GRASPstyle(level, mem_stacks[tid], i, tid);
                     }
 
                     refinement_ms += get_milli_seconds(p, get_time_point());
@@ -1050,6 +1052,87 @@ namespace GPU_HeiPa {
 
             curr_edge_cut[individual_id] = pair.first;
             curr_max_block_weight[individual_id] = pair.second;
+
+            exec_spaces[tid].fence();
+
+
+            if (graphs.back().uniform_edge_weights) {
+                ASSERT(curr_edge_cut[individual_id] == edge_cut<true>(graphs.back(), solutions[level % 2][individual_id], exec_spaces[tid]));
+            } else {
+                ASSERT(curr_edge_cut[individual_id] == edge_cut<false>(graphs.back(), solutions[level % 2][individual_id], exec_spaces[tid]));
+            }
+
+            //ASSERT(curr_edge_cut[individual_id] == edge_cut(graphs.back(), solutions[level % 2][individual_id]));
+            ASSERT(curr_max_block_weight[individual_id] == max_weight(solutions[level % 2][individual_id]));
+
+            assert_state_after_partition(graphs.back(), solutions[level % 2][individual_id], config.k, exec_spaces[tid]);
+        }
+
+        void refinement_GRASPstyle(u32 level, KokkosMemoryStack &mem_stack, size_t individual_id, size_t tid) {
+            //auto pair = jet_refine(graphs.back(), solutions[level % 2][individual_id], k, lmax, use_ultra, level, curr_edge_cut[individual_id], curr_max_block_weight[individual_id], mem_stack, exec_spaces[tid]);
+
+            int num_tries = 5;
+            weight_t curr_best_cut = curr_edge_cut[individual_id];
+            weight_t curr_best_balance = curr_max_block_weight[individual_id];
+            Partition tmp_partition = initialize_partition(graphs.back().n, k, lmax, mem_stack, exec_spaces[tid]);
+            Partition original_partition = initialize_partition(graphs.back().n, k, lmax, mem_stack, exec_spaces[tid]);
+
+            deep_copy(exec_spaces[tid], tmp_partition.map, solutions[level % 2][individual_id].map );
+            deep_copy(exec_spaces[tid], tmp_partition.bweights, solutions[level % 2][individual_id].bweights );
+            weight_t tmp_cut = curr_edge_cut[individual_id];
+            weight_t tmp_max_block = curr_max_block_weight[individual_id];
+
+
+            deep_copy(exec_spaces[tid], original_partition.map, solutions[level % 2][individual_id].map );
+            deep_copy(exec_spaces[tid], original_partition.bweights, solutions[level % 2][individual_id].bweights );
+            weight_t original_cut = curr_edge_cut[individual_id];
+            weight_t original_max_block = curr_max_block_weight[individual_id];
+
+
+            exec_spaces[tid].fence();
+
+
+            Graph &cur = graphs.back();
+            std::pair<weight_t, weight_t> pair;
+
+            for( int i = 0; i < num_tries ; ++i) {
+
+                
+                if (cur.uniform_vertex_weights && cur.uniform_edge_weights) {
+                    pair = jet_refine<true, true>(cur, tmp_partition, k, lmax, use_ultra, level, tmp_cut, tmp_max_block , mem_stack, exec_spaces[tid]);
+                } else if (cur.uniform_vertex_weights) {
+                    pair = jet_refine<true, false>(cur, tmp_partition, k, lmax, use_ultra, level, tmp_cut, tmp_max_block , mem_stack, exec_spaces[tid]);
+                } else if (cur.uniform_edge_weights) {
+                    pair = jet_refine<false, true>(cur, tmp_partition, k, lmax, use_ultra, level, tmp_cut, tmp_max_block , mem_stack, exec_spaces[tid]);
+                } else {
+                    pair = jet_refine<false, false>(cur, tmp_partition, k, lmax, use_ultra, level, tmp_cut, tmp_max_block , mem_stack, exec_spaces[tid]);
+                }
+
+                if( pair.first < curr_best_cut ) {
+                    curr_best_cut = pair.first;
+                    curr_best_balance = pair.second;
+                    Kokkos::deep_copy(exec_spaces[tid], solutions[level % 2][individual_id].map, tmp_partition.map );
+                    Kokkos::deep_copy(exec_spaces[tid], solutions[level % 2][individual_id].bweights, tmp_partition.bweights );
+                    exec_spaces[tid].fence();
+
+                }
+
+                // reset for next round:
+                tmp_cut = original_cut;
+                tmp_max_block = original_max_block;
+                deep_copy(exec_spaces[tid], tmp_partition.map, original_partition.map);
+                deep_copy(exec_spaces[tid], tmp_partition.bweights, original_partition.bweights);
+                exec_spaces[tid].fence();
+
+                
+
+            }
+
+            free_partition(original_partition, mem_stack);
+            free_partition(tmp_partition, mem_stack);
+
+            curr_edge_cut[individual_id] = curr_best_cut;
+            curr_max_block_weight[individual_id] = curr_best_balance;
 
             exec_spaces[tid].fence();
 
