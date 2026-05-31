@@ -124,7 +124,9 @@ namespace GPU_HeiPa {
     using MatrixType = KokkosSparse::CrsMatrix<weight_t, s32, Device, void, s32>;
 
     using HostScalarPinnedVertex = Kokkos::View<vertex_t, Kokkos::SharedHostPinnedSpace>;
+    using HostPinnedVertex = Kokkos::View<vertex_t *, Kokkos::SharedHostPinnedSpace>;
     using HostScalarPinnedU32 = Kokkos::View<u32, Kokkos::SharedHostPinnedSpace>;
+    using HostPinnedU32 = Kokkos::View<u32 *, Kokkos::SharedHostPinnedSpace>;
     using HostPinnedWeight = Kokkos::View<weight_t *, Kokkos::SharedHostPinnedSpace>;
     using HostScalarPinnedWeight = Kokkos::View<weight_t, Kokkos::SharedHostPinnedSpace>;
     using Policy = Kokkos::RangePolicy<DeviceExecutionSpace>;

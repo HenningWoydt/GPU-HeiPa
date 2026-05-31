@@ -75,7 +75,6 @@ namespace GPU_HeiPa {
 
     inline void *get_chunk_front(KokkosMemoryStack &stack, size_t n_bytes) {
         const size_t need = align64(n_bytes);
-        if (need == 0) return nullptr;
 
         // total used = front + back; must not exceed allocated
         const size_t total_used = stack.n_bytes_in_use + stack.n_bytes_in_use_back;
@@ -98,7 +97,7 @@ namespace GPU_HeiPa {
         stack.n_bytes_in_use += need;
         stack.reserved_chunks.push_back(need);
 
-        return static_cast<void *>(ptr);
+        return (need == 0) ? nullptr : static_cast<void *>(ptr);
     }
 
     inline void pop_front(KokkosMemoryStack &stack) {
@@ -125,7 +124,6 @@ namespace GPU_HeiPa {
 
     inline void *get_chunk_back(KokkosMemoryStack &stack, size_t n_bytes) {
         const size_t need = align64(n_bytes);
-        if (need == 0) return nullptr;
 
         const size_t total_used = stack.n_bytes_in_use + stack.n_bytes_in_use_back;
 
@@ -149,7 +147,7 @@ namespace GPU_HeiPa {
         stack.n_bytes_in_use_back += need;
         stack.reserved_chunks_back.push_back(need);
 
-        return static_cast<void *>(ptr);
+        return (need == 0) ? nullptr : static_cast<void *>(ptr);
     }
 
     inline void pop_back(KokkosMemoryStack &stack) {

@@ -414,7 +414,7 @@ namespace GPU_HeiPa {
         if (mm.fd >= 0) ::close(mm.fd);
     }
 
-    static inline size_t round_up_64(size_t x, size_t a = 64) {
+    KOKKOS_INLINE_FUNCTION static size_t round_up_64(size_t x, size_t a = 64) {
         return (x + (a - 1)) & ~(a - 1);
     }
 }

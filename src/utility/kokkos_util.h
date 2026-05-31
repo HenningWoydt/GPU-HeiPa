@@ -86,7 +86,7 @@ namespace GPU_HeiPa {
         }
     }
 
-    std::string get_kokkos_execution_space_as_str() {
+    inline std::string get_kokkos_execution_space_as_str() {
         using ExecSpace = Kokkos::DefaultExecutionSpace;
         #if defined(KOKKOS_ENABLE_CUDA)
         if (std::is_same<ExecSpace, Kokkos::Cuda>::value) { return "Cuda"; }

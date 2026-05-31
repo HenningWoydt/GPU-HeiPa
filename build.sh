@@ -5,9 +5,10 @@ set -euo pipefail
 DOWNLOAD_KOKKOS="OFF" # Default to ON, can be overridden by AUTO or OFF
 ENABLE_PROFILER="OFF"
 ASSERT_ENABLED="OFF"
+BUILD_TESTING="OFF"
 MAX_THREADS=""
 KOKKOS_ARCH=""
-SILENT="OFF"
+SILENT="ON"
 
 for arg in "$@"; do
   case "$arg" in
@@ -20,6 +21,9 @@ for arg in "$@"; do
     --download-kokkos=*)
       DOWNLOAD_KOKKOS="${arg#*=}"
       ;;
+    --test)
+      BUILD_TESTING="ON"
+      ;;
     --max-threads=*)
       MAX_THREADS="${arg#*=}"
       ;;
@@ -29,9 +33,12 @@ for arg in "$@"; do
     --silent)
       SILENT="ON"
       ;;
+    --verbose)
+      SILENT="OFF"
+      ;;
     *)
       echo "Unknown argument: $arg"
-      echo "Usage: $0 [--download-kokkos=ON|OFF|AUTO] [--max-threads=N] [--kokkos-arch=ARCH] [--silent]"
+      echo "Usage: $0 [--download-kokkos=ON|OFF|AUTO] [--max-threads=N] [--kokkos-arch=ARCH] [--test] [--verbose]"
       exit 1
       ;;
   esac
@@ -258,8 +265,14 @@ if [ "$SHOULD_DOWNLOAD_KOKKOS" = "true" ]; then
 fi
 mkdir -p "${ROOT}/build"
 cd "${ROOT}/build"
-cmake .. -DCMAKE_BUILD_TYPE=Release -DCMAKE_PREFIX_PATH="${ROOT}/extern/local/kokkos;${ROOT}/extern/local/kokkos-kernels" -DCMAKE_CXX_STANDARD=20 -DCMAKE_CXX_EXTENSIONS=OFF -DENABLE_PROFILER=${ENABLE_PROFILER} -DASSERT_ENABLED=${ASSERT_ENABLED}
+cmake .. -DCMAKE_BUILD_TYPE=Release -DCMAKE_PREFIX_PATH="${ROOT}/extern/local/kokkos;${ROOT}/extern/local/kokkos-kernels" -DCMAKE_CXX_STANDARD=20 -DCMAKE_CXX_EXTENSIONS=OFF -DENABLE_PROFILER=${ENABLE_PROFILER} -DASSERT_ENABLED=${ASSERT_ENABLED} -DBUILD_TESTING=${BUILD_TESTING}
 cmake --build . --parallel "$JOBS" --target GPU-HeiPa
 cmake --build . --parallel "$JOBS" --target GPU-HeiProMap
+
+if [ "$BUILD_TESTING" = "ON" ]; then
+  cmake --build . --parallel "$JOBS" --target unit_tests
+  echo "Running tests..."
+  ./tests/unit_tests
+fi
 
 SUCCESS="true"
