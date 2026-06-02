@@ -88,6 +88,8 @@ namespace GPU_HeiPa {
 
         // probability for mutation: generate random number in [0,1], mutate if HIGHER than mutation_rate
         f32 mutation_rate = 0.5;
+        f64 starting_temp = 8.0;
+        f64 cooling_factor = 0.9;
 
         PopulationManagement pop_management = PopulationManagement::shrinking;
         size_t reduction_factor = 1;
@@ -204,6 +206,8 @@ namespace GPU_HeiPa {
             inactive_percentile = config.inactive_percentile;
             mutation_percentile = config.mutation_percentile;
             mutation_rate = config.mutation_rate;
+            starting_temp = config.starting_temp;
+            cooling_factor = config.cooling_factor;
             parents_curr = config.num_individuals;
 
             if (config.population_management == "steadystate") {
@@ -781,8 +785,9 @@ namespace GPU_HeiPa {
                     #pragma omp parallel for num_threads(num_cpu_threads)
                     for (size_t i = 0; i < count_active; ++i) {
                         size_t tid = static_cast<size_t>(omp_get_thread_num());
-                        //refinement(level, mem_stacks[tid], i, tid);
-                        refinement_GRASPstyle(level, mem_stacks[tid], i, tid);
+                        refinement(level, mem_stacks[tid], i, tid);
+                        refinement_SA(level, mem_stacks[tid], i, tid);
+                        //refinement_GRASPstyle(level, mem_stacks[tid], i, tid);
                     }
 
                     refinement_ms += get_milli_seconds(p, get_time_point());
@@ -1067,6 +1072,45 @@ namespace GPU_HeiPa {
 
             assert_state_after_partition(graphs.back(), solutions[level % 2][individual_id], config.k, exec_spaces[tid]);
         }
+
+        void refinement_SA(u32 level, KokkosMemoryStack &mem_stack, size_t individual_id, size_t tid) {
+            //auto pair = jet_refine(graphs.back(), solutions[level % 2][individual_id], k, lmax, use_ultra, level, curr_edge_cut[individual_id], curr_max_block_weight[individual_id], mem_stack, exec_spaces[tid]);
+
+            Graph &cur = graphs.back();
+            std::pair<weight_t, weight_t> pair;
+            if (cur.uniform_vertex_weights && cur.uniform_edge_weights) {
+                pair = jet_refine<true, true>(cur, solutions[level % 2][individual_id], k, lmax, use_ultra, level, curr_edge_cut[individual_id], curr_max_block_weight[individual_id], mem_stack, exec_spaces[tid], starting_temp, cooling_factor);
+            } else if (cur.uniform_vertex_weights) {
+                pair = jet_refine<true, false>(cur, solutions[level % 2][individual_id], k, lmax, use_ultra, level, curr_edge_cut[individual_id], curr_max_block_weight[individual_id], mem_stack, exec_spaces[tid], starting_temp, cooling_factor);
+            } else if (cur.uniform_edge_weights) {
+                pair = jet_refine<false, true>(cur, solutions[level % 2][individual_id], k, lmax, use_ultra, level, curr_edge_cut[individual_id], curr_max_block_weight[individual_id], mem_stack, exec_spaces[tid], starting_temp, cooling_factor);
+            } else {
+                pair = jet_refine<false, false>(cur, solutions[level % 2][individual_id], k, lmax, use_ultra, level, curr_edge_cut[individual_id], curr_max_block_weight[individual_id], mem_stack, exec_spaces[tid], starting_temp, cooling_factor);
+            }
+
+            curr_edge_cut[individual_id] = pair.first;
+            curr_max_block_weight[individual_id] = pair.second;
+
+            exec_spaces[tid].fence();
+
+
+            if (graphs.back().uniform_edge_weights) {
+                ASSERT(curr_edge_cut[individual_id] == edge_cut<true>(graphs.back(), solutions[level % 2][individual_id], exec_spaces[tid]));
+            } else {
+                ASSERT(curr_edge_cut[individual_id] == edge_cut<false>(graphs.back(), solutions[level % 2][individual_id], exec_spaces[tid]));
+            }
+
+            //ASSERT(curr_edge_cut[individual_id] == edge_cut(graphs.back(), solutions[level % 2][individual_id]));
+            ASSERT(curr_max_block_weight[individual_id] == max_weight(solutions[level % 2][individual_id]));
+
+            assert_state_after_partition(graphs.back(), solutions[level % 2][individual_id], config.k, exec_spaces[tid]);
+        }
+
+
+
+
+
+
 
         void refinement_GRASPstyle(u32 level, KokkosMemoryStack &mem_stack, size_t individual_id, size_t tid) {
             //auto pair = jet_refine(graphs.back(), solutions[level % 2][individual_id], k, lmax, use_ultra, level, curr_edge_cut[individual_id], curr_max_block_weight[individual_id], mem_stack, exec_spaces[tid]);

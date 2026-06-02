@@ -28,6 +28,7 @@
 #define GPU_HEIPA_JET_LABEL_PROPAGATION_H
 
 #include <Kokkos_Core.hpp>
+#include <Kokkos_Random.hpp>
 
 #include "../utility/definitions.h"
 #include "block_conn.h"
@@ -41,6 +42,7 @@ namespace GPU_HeiPa {
     constexpr vertex_t MAX_SECTIONS = 128;
     constexpr int MAX_BUCKETS = 50;
     constexpr int MID_BUCKETS = 25;
+    constexpr f64 MIN_TEMPERATURE = 1e-6;
 
     struct LabelPropagation {
         vertex_t n = 0;
@@ -185,8 +187,11 @@ namespace GPU_HeiPa {
                                         const Graph &g,
                                         const BlockConn &bc,
                                         f64 conn_c,
-                                        DeviceExecutionSpace &exec_space) {
+                                        DeviceExecutionSpace &exec_space,
+                                        f64 Temperatur
+                                    ) {
         vertex_t num_pos = 0;
+        Kokkos::Random_XorShift64_Pool<> random_pool((u64) (Temperatur * 1000000.0) ^ 0x9e3779b97f4a7c15ULL);
         //
         {
             ScopedTimer _t("refinement", "jetlp", "best_block");
@@ -201,8 +206,8 @@ namespace GPU_HeiPa {
                     partition_t best_id = NO_MOVE;
                     weight_t best_conn = 0;
 
-                    partition_t second_best_id = NO_MOVE;
-                    weight_t second_best_conn = 0;
+                    // partition_t second_best_id = NO_MOVE;
+                    // weight_t second_best_conn = 0;
 
                     weight_t own_conn = 0;
 
@@ -223,37 +228,53 @@ namespace GPU_HeiPa {
 
                         // Update best if it's a candidate and better
                         bool better_first = is_cand & (w > best_conn);
-                        bool better_second = is_cand & !better_first & (w > second_best_conn);
+                        // bool better_second = is_cand & !better_first & (w > second_best_conn);
 
-                        second_best_conn = better_first ? best_conn : (better_second ? w : second_best_conn);
-                        second_best_id = better_first ? best_id : (better_second ? id : second_best_id);
+                        // second_best_conn = better_first ? best_conn : (better_second ? w : second_best_conn);
+                        // second_best_id = better_first ? best_id : (better_second ? id : second_best_id);
 
                         best_conn = better_first ? w : best_conn;
                         best_id = better_first ? id : best_id;
                     }
 
                     // With 50% probability, use second-best candidate instead
-                    if (second_best_id != NO_MOVE) {
-                        u32 coin = (u * 2654435761u) ^ (lp.round * 1013904223u);
-                        if ((coin & 1u) != 0u) {
-                            best_id = second_best_id;
-                            best_conn = second_best_conn;
-                        }
-                    }
+                    // if (second_best_id != NO_MOVE) {
+                    //     u32 coin = (u * 2654435761u) ^ (lp.round * 1013904223u);
+                    //     if ((coin & 1u) != 0u) {
+                    //         best_id = second_best_id;
+                    //         best_conn = second_best_conn;
+                    //     }
+                    // }
 
                     
 
-                    weight_t gain = 0;
+                    weight_t gain = best_conn - own_conn;
+                    bool accept_move = false;
 
                     if (best_id != NO_MOVE) {
-                        if (best_conn >= own_conn || ((f64) own_conn - (f64) best_conn) < floor(conn_c * (f64) own_conn)) {
-                            gain = best_conn - own_conn;
-                        } else {
+                        if (best_conn >= own_conn ||
+                            ((f64) own_conn - (f64) best_conn) < floor(conn_c * (f64) own_conn)) {
+                            accept_move = true;
+                        } else if (Temperatur > 0.0) {
+                            auto gen = random_pool.get_state();
+                            const f64 random_value = gen.drand(0.0, 1.0);
+                            random_pool.free_state(gen);
+
+                            const f64 acceptance_probability = Kokkos::exp((f64) gain / Temperatur);
+                            accept_move = random_value < acceptance_probability;
+                        }
+
+                        if (!accept_move) {
                             best_id = NO_MOVE;
+                            gain = 0;
+                        } else {
+                            lp.gain_cache(u) = gain;
                         }
                     }
 
-                    lp.gain_cache(u) = gain;
+                    if (best_id == NO_MOVE) {
+                        lp.gain_cache(u) = 0;
+                    }
                     lp.dest_cache(u) = best_id;
                     lp.dest_part(u) = best_id;
                 }
@@ -306,9 +327,24 @@ namespace GPU_HeiPa {
                     change += w * ((v_new_id == new_u_id) - (v_new_id == old_u_id) + (v_old_id == old_u_id) - (v_old_id == new_u_id));
                 }
 
+                //! TODO: change to SA
                 if (u_gain + change >= 0) {
                     lp.lock(u) = 1;
+                } else{
+                    if (Temperatur > 0.0) {
+                            auto gen = random_pool.get_state();
+                            const f64 random_value = gen.drand(0.0, 1.0);
+                            random_pool.free_state(gen);
+
+                            const f64 acceptance_probability = Kokkos::exp((f64) (u_gain + change) / Temperatur);
+                            bool accept_move = random_value < acceptance_probability;
+                            if(accept_move) {
+                                lp.lock(u) = 1;
+                            }
+                        }
+                    
                 }
+
             });
 
             KOKKOS_PROFILE_FENCE(exec_space);
@@ -345,7 +381,21 @@ namespace GPU_HeiPa {
                 Kokkos::single(Kokkos::PerTeam(team), [&]() {
                     if (u_gain + change >= 0) {
                         lp.lock(u) = 1;
+                    } else{
+                        if (Temperatur > 0.0) {
+                                auto gen = random_pool.get_state();
+                                const f64 random_value = gen.drand(0.0, 1.0);
+                                random_pool.free_state(gen);
+
+                                const f64 acceptance_probability = Kokkos::exp((f64) (u_gain + change) / Temperatur);
+                                bool accept_move = random_value < acceptance_probability;
+                                if(accept_move) {
+                                    lp.lock(u) = 1;
+                                }
+                            }
+                        
                     }
+
                 });
             });
 
@@ -950,7 +1000,9 @@ namespace GPU_HeiPa {
                                                     weight_t curr_edge_cut,
                                                     weight_t curr_max_weight,
                                                     KokkosMemoryStack &mem_stack,
-                                                    DeviceExecutionSpace &exec_space) {
+                                                    DeviceExecutionSpace &exec_space,
+                                                    f64 starting_temperatur = 8.0f,
+                                                    f64 cooling_factor = 0.9f) {
         LabelPropagation lp = initialize_label_propagation(g.n, g.m, k, lmax, mem_stack, exec_space);
 
         // copy partition
@@ -979,7 +1031,11 @@ namespace GPU_HeiPa {
             }
         }
 
+        
+        f64 curr_temperatur = starting_temperatur;
+
         for (auto filter_ratio: filter_ratios) {
+            curr_temperatur = starting_temperatur;
             u32 balance_iteration = 0;
             u32 iteration = 0;
             while (iteration < N_MAX_ITERATIONS) {
@@ -987,7 +1043,7 @@ namespace GPU_HeiPa {
 
                 UnmanagedDeviceVertex moves;
                 if (curr_max_weight <= lmax) {
-                    moves = jet_lp<uniform_v_weights, uniform_e_weights>(lp, g, bc, filter_ratio, exec_space);
+                    moves = jet_lp<uniform_v_weights, uniform_e_weights>(lp, g, bc, filter_ratio, exec_space, curr_temperatur);
                     balance_iteration = 0;
 
                     // if lp found 0 moves, it will find 0 moves in the next iteration so skip
@@ -1039,6 +1095,10 @@ namespace GPU_HeiPa {
                         KOKKOS_PROFILE_FENCE(exec_space);
                     }
                 }
+
+                curr_temperatur = std::max(curr_temperatur * cooling_factor, MIN_TEMPERATURE);
+
+
             }
         }
 

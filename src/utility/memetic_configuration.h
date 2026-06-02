@@ -73,6 +73,8 @@ namespace GPU_HeiPa {
             {"--inactive-percentile", "", "Disable crossover below this normalized level percentile in range [0, 1].", "0.1", "", false},
             {"--mutation-percentile", "", "Enable mutation below this normalized level percentile in range [0, 1].", "0.1", "", false},
             {"--mutation-rate", "", "Mutation probability threshold in range [0, 1].", "0.5", "", false},
+            {"--starting-temp", "", "Starting temperature for simulated annealing.", "8.0", "", false},
+            {"--cooling-factor", "", "Cooling factor for simulated annealing in range (0, 1].", "0.9", "", false},
         };
 
     public:
@@ -106,6 +108,8 @@ namespace GPU_HeiPa {
         f32 inactive_percentile = 0.0f;
         f32 mutation_percentile = 0.2f;
         f32 mutation_rate = 0.5f;
+        f64 starting_temp = 8.0;
+        f64 cooling_factor = 0.9;
 
         MemeticConfiguration() = default;
 
@@ -185,6 +189,12 @@ namespace GPU_HeiPa {
             }
             if (is_set("--mutation-rate")) {
                 mutation_rate = (f32) std::stof(get("--mutation-rate"));
+            }
+            if (is_set("--starting-temp")) {
+                starting_temp = std::stod(get("--starting-temp"));
+            }
+            if (is_set("--cooling-factor")) {
+                cooling_factor = std::stod(get("--cooling-factor"));
             }
 
             validate_memetic_parameters();
@@ -346,6 +356,18 @@ namespace GPU_HeiPa {
                 mutation_rate = 0.5f;
             }
 
+            if (starting_temp <= 0.0) {
+                std::cerr << "Warning: starting_temp (" << starting_temp
+                        << ") must be positive, setting to 8.0." << std::endl;
+                starting_temp = 8.0;
+            }
+
+            if (cooling_factor <= 0.0 || cooling_factor > 1.0) {
+                std::cerr << "Warning: cooling_factor (" << cooling_factor
+                        << ") must be in (0, 1], setting to 0.9." << std::endl;
+                cooling_factor = 0.9;
+            }
+
             if (extent < 1) {
                 std::cerr << "Warning: extent is < 1, setting to 1." << std::endl;
                 extent = 1;
@@ -385,6 +407,8 @@ namespace GPU_HeiPa {
             s += tabs + to_JSON_MACRO(inactive_percentile);
             s += tabs + to_JSON_MACRO(mutation_percentile);
             s += tabs + to_JSON_MACRO(mutation_rate);
+            s += tabs + to_JSON_MACRO(starting_temp);
+            s += tabs + to_JSON_MACRO(cooling_factor);
 
             s.pop_back();
             s.pop_back();
