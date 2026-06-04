@@ -30,7 +30,7 @@
 #include "host_graph.h"
 #include "kokkos_memory_stack.h"
 #include "mapping.h"
-#include "../utility/definitions.h"
+#include "../definitions.h"
 #include "../utility/util.h"
 #include "../utility/kokkos_util.h"
 #include "../utility/profiler.h"

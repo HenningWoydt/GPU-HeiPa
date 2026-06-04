@@ -33,7 +33,7 @@
 #include <vector>
 #include <cctype>
 
-#include "definitions.h"
+#include "../definitions.h"
 #include "JSON_util.h"
 #include "kokkos_util.h"
 

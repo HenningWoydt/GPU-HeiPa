@@ -27,7 +27,7 @@
 #ifndef GPU_HEIPA_DISTANCE_ORACLE_HELPERS_H
 #define GPU_HEIPA_DISTANCE_ORACLE_HELPERS_H
 
-#include "../utility/definitions.h"
+#include "../definitions.h"
 #include "../datastructures/kokkos_memory_stack.h"
 #include "distance_oracle_matrix.h"
 

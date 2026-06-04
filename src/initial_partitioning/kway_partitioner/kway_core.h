@@ -37,7 +37,7 @@
 #include "kway_graph.h"
 #include "kway_block_conn.h"
 
-#include "../../utility/definitions.h"
+#include "../../definitions.h"
 #include "../../datastructures/graph.h"
 
 

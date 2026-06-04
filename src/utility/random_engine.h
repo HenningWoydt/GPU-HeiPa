@@ -29,7 +29,7 @@
 
 #include <random>
 
-#include "definitions.h"
+#include "../definitions.h"
 
 namespace GPU_HeiPa {
     class RandomEngine {

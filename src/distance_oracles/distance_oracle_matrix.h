@@ -28,7 +28,7 @@
 #define GPU_HEIPA_DISTANCE_ORACLE_MATRIX_H
 
 #include "../datastructures/kokkos_memory_stack.h"
-#include "../utility/definitions.h"
+#include "../definitions.h"
 #include "../utility/util.h"
 
 namespace GPU_HeiPa {

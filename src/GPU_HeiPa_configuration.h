@@ -24,28 +24,38 @@
  * SOFTWARE.
  ******************************************************************************/
 
-#ifndef GPU_HEIPA_PROMAP_CONFIGURATION_H
-#define GPU_HEIPA_PROMAP_CONFIGURATION_H
+#ifndef GPU_HEIPA_CONFIGURATION_H
+#define GPU_HEIPA_CONFIGURATION_H
 
+#include <iostream>
+#include <random>
 #include <string>
 #include <vector>
 
-#include "GPU_HeiPa_configuration.h"
-#include "util.h"
+#include "definitions.h"
+#include "utility/JSON_util.h"
+#include "utility/kokkos_util.h"
 
 namespace GPU_HeiPa {
-    class ProMapConfiguration {
+    struct CommandLineOption {
+        std::string large_key;
+        std::string small_key;
+        std::string description;
+        std::string default_val;
+        std::string input;
+        bool is_set;
+    };
+
+    class Configuration {
         std::vector<CommandLineOption> options = {
             {"--help", "", "Produces the help message", "", "", false},
             {"--graph", "-g", "Filepath to the graph.", "", "", false},
-            {"--mapping", "-m", "Output filepath to the generated mapping.", "GPU-HeiProMap_par.txt", "", false},
-            {"--hierarchy", "-h", "Hierarchy in the form a1:a2:...:al .", "", "", false},
-            {"--distance", "-d", "Distance in the form d1:d2:...:dl .", "", "", false},
+            {"--mapping", "-m", "Output filepath to the generated mapping.", "GPU-HeiPa_par.txt", "", false},
+            {"--k", "-k", "Number of blocks k", "", "", false},
             {"--imbalance", "-e", "Allowed imbalance (for example 0.03).", "0.03", "", false},
-            {"--config", "-c", "Algorithm Config {IM, HM, HM-ultra}.", "", "", false},
+            {"--coarsening", "", "Coarsening Config {two-hop, independent-edge-set}.", "two-hop", "", false},
+            {"--config", "-c", "Algorithm Config {default, ultra}.", "", "", false},
             {"--verbose-level", "", "Whether to print.", "1", "", false},
-            {"--n-bytes-requested", "", "Total bytes requested from device.", "8589934592", "", false},
-            {"--initial-partitioning", "", "Initial partitioning algorithm {global_multisection, gpu_bisection}", "gpu_bisection", "", false},
         };
 
     public:
@@ -54,38 +64,24 @@ namespace GPU_HeiPa {
         std::string mapping_out;
 
         // partition information
-        std::string hierarchy_string;
-        std::vector<partition_t> hierarchy;
         partition_t k = 0;
-
-        // distance information
-        std::string distance_string;
-        std::vector<weight_t> distance;
-
-        // balancing information
         f64 imbalance = 0.0;
 
         // partitioning algorithm
         std::string config;
-        
-        // initial partitioning algorithm
-        std::string initial_partitioning = "gpu_bisection";
 
         // random initialization
         u64 seed = 0;
 
         int verbose_level = 1;
 
-        // distance oracle
-        std::string distance_oracle_string = "matrix";
-
         // device space info
         std::string device_space;
-        u64 n_bytes_requested = 1024ul * 1024ul * 1024ul * 10ul;
+        u64 n_bytes_requested = 1024ul * 1024ul * 1024ul * 12ul;
 
-        ProMapConfiguration() = default;
+        Configuration() = default;
 
-        ProMapConfiguration(int argc, char *argv[]) {
+        Configuration(int argc, char *argv[]) {
             // read command lines into vector
             std::vector<std::string> args(argv, argv + argc);
 
@@ -113,32 +109,20 @@ namespace GPU_HeiPa {
             graph_in = get("--graph");
             mapping_out = get("--mapping");
 
-            hierarchy_string = get("--hierarchy");
-            hierarchy = convert<partition_t>(split(hierarchy_string, ':'));
-            k = prod<partition_t>(hierarchy);
-
-            distance_string = get("--distance");
-            distance = convert<weight_t>(split(distance_string, ':'));
+            k = (partition_t) std::stoul(get("--k"));
 
             imbalance = std::stod(get("--imbalance"));
 
             // partitioning algorithm
             config = get("--config");
 
-            initial_partitioning = get("--initial-partitioning");
-
             // random initialization
             seed = std::random_device{}();
 
+            verbose_level = 1;
             if (is_set("--verbose-level")) {
                 verbose_level = std::stoi(get("--verbose-level"));
             }
-
-            if (is_set("--n-bytes-requested")) {
-                n_bytes_requested = std::stoull(get("--n-bytes-requested"));
-            }
-
-            // distance_oracle_string = get("--distance-oracle");
 
             device_space = get_kokkos_execution_space_as_str();
         }
@@ -222,4 +206,4 @@ namespace GPU_HeiPa {
     };
 }
 
-#endif //GPU_HEIPA_PROMAP_CONFIGURATION_H
+#endif //GPU_HEIPA_CONFIGURATION_H

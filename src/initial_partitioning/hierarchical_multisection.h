@@ -30,7 +30,7 @@
 #include <vector>
 #include <algorithm>
 
-#include "../utility/definitions.h"
+#include "../definitions.h"
 #include "../datastructures/graph.h"
 #include "../datastructures/GPU_HeiPa_solver.h"
 

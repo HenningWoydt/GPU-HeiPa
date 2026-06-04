@@ -29,7 +29,7 @@
 
 #include <iostream>
 
-#include "../utility/definitions.h"
+#include "../definitions.h"
 #include "../utility/macros.h"
 
 namespace GPU_HeiPa {

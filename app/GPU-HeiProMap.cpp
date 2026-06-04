@@ -29,7 +29,7 @@
 #include <Kokkos_Core.hpp>
 
 #include "../src/datastructures/GPU_HeiProMap_solver.h"
-#include "../src/utility/GPU_HeiProMap_configuration.h"
+#include "../src/GPU_HeiProMap_configuration.h"
 
 using namespace GPU_HeiPa;
 

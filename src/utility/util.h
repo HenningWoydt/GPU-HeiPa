@@ -45,7 +45,7 @@
 #include <cstdint>
 #include <cstring>
 
-#include "definitions.h"
+#include "../definitions.h"
 
 namespace GPU_HeiPa {
     inline u32 floor_log2(u32 n) {

@@ -29,7 +29,7 @@
 
 #include "mapping.h"
 #include "graph.h"
-#include "../utility/definitions.h"
+#include "../definitions.h"
 #include "../utility/util.h"
 #include "../utility/profiler.h"
 

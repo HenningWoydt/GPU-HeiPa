@@ -30,7 +30,7 @@
 #include <vector>
 #include <algorithm>
 
-#include "../utility/definitions.h"
+#include "../definitions.h"
 #include "../datastructures/graph.h"
 #include "../datastructures/partition.h"
 #include "kway_partitioner/kway_core.h"

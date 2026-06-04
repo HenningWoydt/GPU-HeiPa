@@ -29,7 +29,7 @@
 
 #include <Kokkos_Core_fwd.hpp>
 
-#include "definitions.h"
+#include "../definitions.h"
 
 namespace GPU_HeiPa {
     template<typename T>

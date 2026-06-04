@@ -27,7 +27,7 @@
 #ifndef GPU_HEIPA_COMM_COST_H
 #define GPU_HEIPA_COMM_COST_H
 
-#include "definitions.h"
+#include "../definitions.h"
 #include "../datastructures/graph.h"
 #include "../datastructures/partition.h"
 #include "../distance_oracles/distance_oracle_helpers.h"

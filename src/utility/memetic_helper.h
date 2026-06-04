@@ -1,7 +1,7 @@
 #ifndef GPU_HEIPA_HELPERS_H
 #define GPU_HEIPA_HELPERS_H
 
-#include "definitions.h"
+#include "../definitions.h"
 #include "../datastructures/partition.h"
 #include "../utility/hungarian_algorithm.h"
 

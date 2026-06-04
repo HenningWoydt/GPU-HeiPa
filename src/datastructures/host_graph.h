@@ -30,7 +30,7 @@
 #include <iostream>
 #include <cstdlib>
 
-#include "../utility/definitions.h"
+#include "../definitions.h"
 #include "../utility/util.h"
 #include "../utility/profiler.h"
 

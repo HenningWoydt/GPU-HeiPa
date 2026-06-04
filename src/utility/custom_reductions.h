@@ -5,7 +5,7 @@
 #include <KokkosSparse_CrsMatrix.hpp>
 #include <KokkosSparse_StaticCrsGraph.hpp>
 
-#include "definitions.h"
+#include "../definitions.h"
 
 namespace GPU_HeiPa {
     struct Accumulators {

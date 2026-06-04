@@ -29,7 +29,7 @@
 
 #include <Kokkos_Core.hpp>
 
-#include "../utility/definitions.h"
+#include "../definitions.h"
 #include "jet_label_propagation.h"
 #include "block_conn.h"
 

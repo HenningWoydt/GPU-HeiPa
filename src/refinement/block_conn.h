@@ -29,7 +29,7 @@
 
 #include <Kokkos_Core.hpp>
 
-#include "../utility/definitions.h"
+#include "../definitions.h"
 #include "../datastructures/graph.h"
 #include "../datastructures/partition.h"
 

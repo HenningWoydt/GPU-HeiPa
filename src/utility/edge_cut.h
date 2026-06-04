@@ -27,7 +27,7 @@
 #ifndef GPU_HEIPA_EDGE_CUT_H
 #define GPU_HEIPA_EDGE_CUT_H
 
-#include "definitions.h"
+#include "../definitions.h"
 #include "../datastructures/graph.h"
 #include "../datastructures/partition.h"
 

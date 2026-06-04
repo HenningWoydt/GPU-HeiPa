@@ -26,7 +26,7 @@
 
 #ifndef GPU_HEIPA_MAPPING_H
 #define GPU_HEIPA_MAPPING_H
-#include "../utility/definitions.h"
+#include "../definitions.h"
 
 namespace GPU_HeiPa {
     /**

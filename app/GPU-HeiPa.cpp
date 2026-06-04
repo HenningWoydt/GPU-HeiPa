@@ -29,7 +29,7 @@
 #include <Kokkos_Core.hpp>
 
 #include "../src/datastructures/GPU_HeiPa_solver.h"
-#include "../src/utility/GPU_HeiPa_configuration.h"
+#include "../src/GPU_HeiPa_configuration.h"
 
 using namespace GPU_HeiPa;
 
@@ -65,7 +65,7 @@ int main(int argc, char *argv[]) {
                 // {"--graph", "../../GPU-HeiPa-Experiments/data/SuiteSparse/indochina-2004.graph"},
                 // {"--graph", "../../GPU-HeiPa-Experiments/data/SuiteSparse/hugebubbles-00000.graph"},
                 {"--graph", "../../GPU-HeiPa-Experiments/data/SuiteSparse/com-LiveJournal.graph"},
-                {"--k", "2"},
+                {"--k", "31"},
                 {"--imbalance", "0.03"},
                 {"--config", "default"},
                 {"--verbose-level", "1"}

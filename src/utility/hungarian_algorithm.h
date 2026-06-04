@@ -5,7 +5,7 @@
 #include <algorithm>
 #include <limits>
 #include <queue>
-#include "definitions.h"
+#include "../definitions.h"
 
 namespace GPU_HeiPa {
     /*

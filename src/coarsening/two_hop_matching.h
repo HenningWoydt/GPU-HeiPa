@@ -31,7 +31,7 @@
 #include <Kokkos_Sort.hpp>
 #include <Kokkos_Functional.hpp>
 
-#include "../utility/definitions.h"
+#include "../definitions.h"
 #include "../utility/util.h"
 #include "../utility/kokkos_util.h"
 #include "../utility/profiler.h"
