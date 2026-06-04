@@ -64,7 +64,7 @@ int main(int argc, char *argv[]) {
                 {"--distance", "1:10:100"},
                 {"--imbalance", "0.03"},
                 {"--config", "IM"},
-                {"--verbose-level", "2"}
+                {"--verbose-level", "2"},
             };
 
             std::vector<std::string> args = {"GPU-HeiProMap"};

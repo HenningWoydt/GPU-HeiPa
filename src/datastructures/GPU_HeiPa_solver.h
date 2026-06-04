@@ -40,6 +40,7 @@
 #include "../coarsening/two_hop_matching.h"
 #include "../refinement/jet_label_propagation.h"
 #include "../initial_partitioning/kway_partitioner/kway_core.h"
+#include "../initial_partitioning/gpu_recursive_bisection.h"
 #include "../definitions.h"
 #include "../GPU_HeiPa_configuration.h"
 #include "../utility/profiler.h"
@@ -65,8 +66,12 @@ namespace GPU_HeiPa {
 
         weight_t curr_edge_cut = 0;
         weight_t curr_max_block_weight = 0;
+
         weight_t initial_edge_cut = 0;
         weight_t initial_max_block_weight = 0;
+        partition_t initial_empty_partitions = 0;
+        partition_t initial_oload_partitions = 0;
+        weight_t initial_sum_oload_weight = 0;
 
         f64 down_up_load_ms = 0.0;
         f64 misc_ms = 0.0;
@@ -301,6 +306,9 @@ namespace GPU_HeiPa {
                 std::cout << "------- Stat -------" << std::endl;
                 std::cout << "Init. edge-cut    : " << initial_edge_cut << std::endl;
                 std::cout << "Init. max block w : " << initial_max_block_weight << std::endl;
+                std::cout << "Init. #empty part : " << initial_empty_partitions << std::endl;
+                std::cout << "Init. #oload part : " << initial_oload_partitions << std::endl;
+                std::cout << "Init. #oload sumw : " << initial_sum_oload_weight << std::endl;
                 std::cout << "Final edge-cut    : " << curr_edge_cut << std::endl;
                 std::cout << "Final max block w : " << curr_max_block_weight << std::endl;
                 std::cout << "#empty partitions : " << n_empty_partitions << std::endl;
@@ -469,8 +477,15 @@ namespace GPU_HeiPa {
             auto p = get_time_point();
 
 
-            // Use METIS for initial partitioning
-            kway_partition(graphs.back(), (int) k, config.imbalance, config.seed, partition, exec_space);
+            // Use configured initial partitioning algorithm
+            if (config.initial_partitioning == "kway") {
+                kway_partition(graphs.back(), (int) k, config.imbalance, config.seed, partition, exec_space);
+            } else if (config.initial_partitioning == "gpu_bisection") {
+                gpu_recursive_bisection(graphs.back(), k, config.imbalance, config.seed, 24, partition, mem_stack, exec_space);
+            } else {
+                std::cerr << "Unknown initial partitioning config: " << config.initial_partitioning << std::endl;
+                exit(EXIT_FAILURE);
+            }
 
             if (graphs.back().uniform_vertex_weights) {
                 recalculate_weights<true>(partition, graphs.back(), exec_space);
@@ -485,8 +500,12 @@ namespace GPU_HeiPa {
             } else {
                 initial_edge_cut = edge_cut<false>(graphs.back(), partition, exec_space);
             }
-            curr_edge_cut = initial_edge_cut;
             initial_max_block_weight = max_weight(partition);
+            initial_empty_partitions = n_empty_blocks(partition);
+            initial_oload_partitions = n_oload_blocks(partition);
+            initial_sum_oload_weight = sum_oload_weight(partition);
+
+            curr_edge_cut = initial_edge_cut;
             curr_max_block_weight = initial_max_block_weight;
 
             exec_space.fence();

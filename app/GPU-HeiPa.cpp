@@ -68,7 +68,9 @@ int main(int argc, char *argv[]) {
                 {"--k", "31"},
                 {"--imbalance", "0.03"},
                 {"--config", "default"},
-                {"--verbose-level", "1"}
+                {"--verbose-level", "1"},
+                // {"--initial-partitioning", "kway"},
+                {"--initial-partitioning", "gpu_bisection"}
             };
 
             std::vector<std::string> args = {"GPU-HeiPa"};
