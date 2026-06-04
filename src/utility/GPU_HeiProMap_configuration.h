@@ -30,7 +30,7 @@
 #include <string>
 #include <vector>
 
-#include "configuration.h"
+#include "GPU_HeiPa_configuration.h"
 #include "util.h"
 
 namespace GPU_HeiPa {

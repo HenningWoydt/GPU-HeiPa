@@ -28,8 +28,8 @@
 
 #include <Kokkos_Core.hpp>
 
-#include "../src/datastructures/solver.h"
-#include "../src/utility/configuration.h"
+#include "../src/datastructures/GPU_HeiPa_solver.h"
+#include "../src/utility/GPU_HeiPa_configuration.h"
 
 using namespace GPU_HeiPa;
 
@@ -46,9 +46,9 @@ int main(int argc, char *argv[]) {
 
     Configuration config;
     if (argc == 1) {
-        config.print_help_message();
-        Kokkos::finalize();
-        return 0;
+        // config.print_help_message();
+        // Kokkos::finalize();
+        // return 0;
         {
             HEIPA_PROFILE_SCOPE("io", "main", "parse_args");
             std::vector<std::pair<std::string, std::string> > input = {

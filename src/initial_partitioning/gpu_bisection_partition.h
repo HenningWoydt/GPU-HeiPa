@@ -39,7 +39,6 @@
 #include "../datastructures/kokkos_memory_stack.h"
 #include "../coarsening/two_hop_matching.h"
 #include "../coarsening/independent_edge_set.h"
-#include "gpu_progressive_partition.h"
 #include "../utility/definitions.h"
 #include "../utility/kokkos_util.h"
 #include "../utility/profiler.h"
@@ -47,6 +46,207 @@
 #include "../utility/custom_reductions.h"
 
 namespace GPU_HeiPa {
+    struct BestBisectConfig {
+        u64 penalty = 0xFFFFFFFFFFFFFFFFULL;
+        weight_t cut = 0x7FFFFFFF;
+        u64 config = 0;
+
+        KOKKOS_INLINE_FUNCTION BestBisectConfig() = default;
+    };
+
+    struct BestBisectReducer {
+        using reducer = BestBisectReducer;
+        using value_type = BestBisectConfig;
+        using result_view_type = Kokkos::View<value_type, HostMemory, Kokkos::MemoryTraits<Kokkos::Unmanaged> >;
+
+        KOKKOS_INLINE_FUNCTION void join(value_type &dst, const value_type &src) const {
+            if (src.penalty < dst.penalty) {
+                dst = src;
+            } else if (src.penalty == dst.penalty) {
+                if (src.cut < dst.cut) {
+                    dst = src;
+                }
+            }
+        }
+
+        KOKKOS_INLINE_FUNCTION void init(value_type &dst) const {
+            dst.penalty = 0xFFFFFFFFFFFFFFFFULL;
+            dst.cut = 0x7FFFFFFF;
+            dst.config = 0;
+        }
+
+        value_type *value;
+
+        KOKKOS_INLINE_FUNCTION BestBisectReducer(value_type &val) : value(&val) {
+        }
+
+        KOKKOS_INLINE_FUNCTION BestBisectReducer(result_view_type view) : value(view.data()) {
+        }
+
+        KOKKOS_INLINE_FUNCTION value_type &reference() const { return *value; }
+
+        KOKKOS_INLINE_FUNCTION result_view_type view() const { return result_view_type(value); }
+
+        KOKKOS_INLINE_FUNCTION bool references_scalar() const { return true; }
+    };
+
+    template<bool uvw, bool uew, int CHUNK>
+    inline void brute_force_bisect_async(const Graph &g,
+                                         weight_t lmax_left,
+                                         weight_t lmax_right,
+                                         UnmanagedDevicePartition &partition_map,
+                                         Kokkos::View<BestBisectConfig, HostMemory, Kokkos::MemoryTraits<Kokkos::Unmanaged> > result_view,
+                                         DeviceExecutionSpace &exec_space) {
+        if (g.n == 0) return;
+        if (g.n == 1) {
+            Kokkos::parallel_for("bisect1", Kokkos::RangePolicy<DeviceExecutionSpace>(exec_space, 0, 1), KOKKOS_LAMBDA(int) {
+                partition_map(0) = 0;
+            });
+            return;
+        }
+
+        const vertex_t gn = g.n;
+        const u32 gm = g.m;
+        const vertex_t last = gn - 1;
+        const u64 num_configs = 1ULL << last;
+
+        const int team_size = 256;
+        const u64 configs_per_team = (u64) team_size * CHUNK;
+        const u32 num_teams = (u32) ((num_configs + configs_per_team - 1) / configs_per_team);
+
+        size_t shmem_size = (gn + 1) * sizeof(u32); // neighborhood
+        shmem_size += gm * sizeof(vertex_t); // edges_u
+        shmem_size += gm * sizeof(vertex_t); // edges_v
+        if (!uvw) shmem_size += gn * sizeof(weight_t); // weights
+        if (!uew) shmem_size += gm * sizeof(weight_t); // edges_w
+
+        auto policy = Kokkos::TeamPolicy<DeviceExecutionSpace>(exec_space, num_teams, team_size)
+                .set_scratch_size(0, Kokkos::PerTeam(shmem_size));
+
+        Kokkos::parallel_reduce("brute_force_bisect_reduction", policy, KOKKOS_LAMBDA(const Kokkos::TeamPolicy<DeviceExecutionSpace>::member_type &team, BestBisectConfig &team_best) {
+            typedef Kokkos::View<u32 *, DeviceExecutionSpace::scratch_memory_space, Kokkos::MemoryTraits<Kokkos::Unmanaged> > ScratchU32;
+            typedef Kokkos::View<vertex_t *, DeviceExecutionSpace::scratch_memory_space, Kokkos::MemoryTraits<Kokkos::Unmanaged> > ScratchVertex;
+            typedef Kokkos::View<weight_t *, DeviceExecutionSpace::scratch_memory_space, Kokkos::MemoryTraits<Kokkos::Unmanaged> > ScratchWeight;
+
+            ScratchU32 s_neigh(team.team_scratch(0), gn + 1);
+            ScratchVertex s_edges_u(team.team_scratch(0), gm);
+            ScratchVertex s_edges_v(team.team_scratch(0), gm);
+            ScratchWeight s_weights;
+            if (!uvw) s_weights = ScratchWeight(team.team_scratch(0), gn);
+            ScratchWeight s_edges_w;
+            if (!uew) s_edges_w = ScratchWeight(team.team_scratch(0), gm);
+
+            // Load graph data into shared memory
+            Kokkos::parallel_for(Kokkos::TeamThreadRange(team, gn + 1), [&](const u32 i) {
+                s_neigh(i) = g.neighborhood(i);
+            });
+            Kokkos::parallel_for(Kokkos::TeamThreadRange(team, gm), [&](const u32 i) {
+                s_edges_u(i) = g.edges_u(i);
+                s_edges_v(i) = g.edges_v(i);
+            });
+            if (!uvw) {
+                Kokkos::parallel_for(Kokkos::TeamThreadRange(team, gn), [&](const vertex_t i) {
+                    s_weights(i) = g.weights(i);
+                });
+            }
+            if (!uew) {
+                Kokkos::parallel_for(Kokkos::TeamThreadRange(team, gm), [&](const u32 i) {
+                    s_edges_w(i) = g.edges_w(i);
+                });
+            }
+            team.team_barrier();
+
+            BestBisectConfig best_in_team;
+            BestBisectReducer reducer(best_in_team);
+            reducer.init(best_in_team);
+
+            Kokkos::parallel_reduce(Kokkos::TeamThreadRange(team, team_size), [&](const int tid, BestBisectConfig &local_best) {
+                const u64 chunk_id = (u64) team.league_rank() * team_size + tid;
+                const u64 begin = chunk_id * CHUNK;
+                if (begin >= num_configs) return;
+                const u64 end = begin + CHUNK < num_configs ? begin + CHUNK : num_configs;
+
+                u64 gray = begin ^ (begin >> 1);
+                weight_t wr = 0;
+                for (vertex_t u = 0; u < last; ++u) {
+                    if ((gray >> u) & 1ULL) {
+                        wr += uvw ? 1 : s_weights(u);
+                    }
+                }
+
+                weight_t cut = 0;
+                for (u32 e = 0; e < gm; ++e) {
+                    const vertex_t u = s_edges_u(e);
+                    const vertex_t v = s_edges_v(e);
+                    if (u < v) {
+                        const u64 pu = (gray >> u) & 1ULL;
+                        const u64 pv = (gray >> v) & 1ULL;
+                        if (pu != pv) {
+                            cut += uew ? 1 : s_edges_w(e);
+                        }
+                    }
+                }
+
+                auto evaluate_current = [&](const u64 config, const weight_t wr_cur, const weight_t cut_cur, BestBisectConfig &best_cur) {
+                    const weight_t wl = g.g_weight - wr_cur;
+                    const u64 p_l = wl > lmax_left ? (u64) (wl - lmax_left) : 0;
+                    const u64 p_r = wr_cur > lmax_right ? (u64) (wr_cur - lmax_right) : 0;
+                    u64 penalty = p_l * p_l + p_r * p_r;
+
+                    if (wl == 0 || wr_cur == 0) {
+                        penalty += 1000000000000ULL;
+                    }
+
+                    if (penalty < best_cur.penalty || (penalty == best_cur.penalty && cut_cur < best_cur.cut)) {
+                        best_cur.penalty = penalty;
+                        best_cur.cut = cut_cur;
+                        best_cur.config = config;
+                    }
+                };
+
+                evaluate_current(gray, wr, cut, local_best);
+
+                for (u64 i = begin + 1; i < end; i++) {
+                    const u64 next_gray = i ^ (i >> 1);
+                    const u64 diff = gray ^ next_gray;
+
+                    #if defined(__CUDA_ARCH__) || defined(__HIP_DEVICE_COMPILE__)
+                    const vertex_t flip_u = (vertex_t) __ffsll(diff) - 1;
+                    #else
+                    const vertex_t flip_u = (vertex_t) __builtin_ctzll(diff);
+                    #endif
+
+                    const u64 old_part_u = (gray >> flip_u) & 1ULL;
+                    const u64 new_part_u = old_part_u ^ 1ULL;
+                    const weight_t wu = uvw ? 1 : s_weights(flip_u);
+
+                    if (new_part_u) wr += wu;
+                    else wr -= wu;
+
+                    for (u32 e = s_neigh(flip_u); e < s_neigh(flip_u + 1); ++e) {
+                        const vertex_t v = s_edges_v(e);
+                        const u64 part_v = (gray >> v) & 1ULL;
+                        const bool was_cut = old_part_u != part_v;
+                        const bool now_cut = new_part_u != part_v;
+                        const weight_t ew = uew ? 1 : s_edges_w(e);
+                        if (was_cut && !now_cut) cut -= ew;
+                        else if (!was_cut && now_cut) cut += ew;
+                    }
+                    gray = next_gray;
+                    evaluate_current(gray, wr, cut, local_best);
+                }
+            }, reducer);
+
+            Kokkos::single(Kokkos::PerTeam(team), [&]() {
+                BestBisectReducer(team_best).join(team_best, best_in_team);
+            });
+        }, BestBisectReducer(result_view));
+
+        Kokkos::parallel_for("apply_best_config", Kokkos::RangePolicy<DeviceExecutionSpace>(exec_space, 0, gn), KOKKOS_LAMBDA(const vertex_t u) {
+            partition_map(u) = (partition_t) ((result_view().config >> u) & 1ULL);
+        });
+    }
+
     struct GraphBatch {
         vertex_t n = 0;
         vertex_t m = 0;

@@ -32,7 +32,7 @@
 
 #include "../utility/definitions.h"
 #include "../datastructures/graph.h"
-#include "../datastructures/solver.h"
+#include "../datastructures/GPU_HeiPa_solver.h"
 
 namespace GPU_HeiPa {
     inline void gpu_heipa_partition(Graph &device_g,
