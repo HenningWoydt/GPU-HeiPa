@@ -255,7 +255,7 @@ namespace GPU_HeiPa {
                         if (best_conn >= own_conn ||
                             ((f64) own_conn - (f64) best_conn) < floor(conn_c * (f64) own_conn)) {
                             accept_move = true;
-                        } else if (Temperatur > 0.0) {
+                        } else if (Temperatur > 0.01) {
                             auto gen = random_pool.get_state();
                             const f64 random_value = gen.drand(0.0, 1.0);
                             random_pool.free_state(gen);
@@ -331,7 +331,7 @@ namespace GPU_HeiPa {
                 if (u_gain + change >= 0) {
                     lp.lock(u) = 1;
                 } else{
-                    if (Temperatur > 0.0) {
+                    if (Temperatur > 0.01) {
                             auto gen = random_pool.get_state();
                             const f64 random_value = gen.drand(0.0, 1.0);
                             random_pool.free_state(gen);
@@ -382,7 +382,7 @@ namespace GPU_HeiPa {
                     if (u_gain + change >= 0) {
                         lp.lock(u) = 1;
                     } else{
-                        if (Temperatur > 0.0) {
+                        if (Temperatur > 0.01) {
                                 auto gen = random_pool.get_state();
                                 const f64 random_value = gen.drand(0.0, 1.0);
                                 random_pool.free_state(gen);
@@ -1001,8 +1001,8 @@ namespace GPU_HeiPa {
                                                     weight_t curr_max_weight,
                                                     KokkosMemoryStack &mem_stack,
                                                     DeviceExecutionSpace &exec_space,
-                                                    f64 starting_temperatur = 8.0f,
-                                                    f64 cooling_factor = 0.9f) {
+                                                    f64 starting_temperatur = 0.001f,
+                                                    f64 cooling_factor = 1.0f) {
         LabelPropagation lp = initialize_label_propagation(g.n, g.m, k, lmax, mem_stack, exec_space);
 
         // copy partition

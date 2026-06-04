@@ -785,7 +785,7 @@ namespace GPU_HeiPa {
                     #pragma omp parallel for num_threads(num_cpu_threads)
                     for (size_t i = 0; i < count_active; ++i) {
                         size_t tid = static_cast<size_t>(omp_get_thread_num());
-                        refinement(level, mem_stacks[tid], i, tid);
+                        // refinement(level, mem_stacks[tid], i, tid);
                         refinement_SA(level, mem_stacks[tid], i, tid);
                         //refinement_GRASPstyle(level, mem_stacks[tid], i, tid);
                     }
