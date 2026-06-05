@@ -339,7 +339,8 @@ namespace GPU_HeiPa {
         void internal_solve(HostGraph &host_g, KokkosMemoryStack &mem_stack) {
             initialize(host_g, mem_stack);
 
-            const partition_t c = 32;
+            partition_t c = 64;
+            if (config.initial_partitioning == "kway") { c = 8; }
             const partition_t max_n = c * k;
 
             u32 level = 0;
@@ -480,7 +481,7 @@ namespace GPU_HeiPa {
             if (config.initial_partitioning == "kway") {
                 kway_partition(graphs.back(), (int) k, config.imbalance, config.seed, partition, exec_space);
             } else if (config.initial_partitioning == "gpu_bisection") {
-                gpu_recursive_bisection(graphs.back(), k, config.imbalance, config.seed, 24, partition, mem_stack, exec_space);
+                gpu_recursive_bisection(graphs.back(), k, config.imbalance, config.seed, 40, partition, mem_stack, exec_space);
             } else {
                 std::cerr << "Unknown initial partitioning config: " << config.initial_partitioning << std::endl;
                 exit(EXIT_FAILURE);
@@ -516,7 +517,6 @@ namespace GPU_HeiPa {
         void refinement(u32 level, KokkosMemoryStack &mem_stack) {
             auto p = get_time_point();
 
-            
 
             Graph &cur = graphs.back();
             std::pair<weight_t, weight_t> pair;

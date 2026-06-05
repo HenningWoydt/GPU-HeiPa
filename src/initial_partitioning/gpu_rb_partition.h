@@ -149,6 +149,8 @@ namespace GPU_HeiPa {
                             weight_t lmax_l = lmax_global * lk;
                             weight_t lmax_r = lmax_global * rk;
 
+                            // std::cout << "splitting " << id << " into " << lk << " " << rk << std::endl;
+
                             if (sub_g.uniform_vertex_weights && sub_g.uniform_edge_weights) brute_force_bisect_async<true, true, 64>(sub_g, lmax_l, lmax_r, sub_part, result_view, instances[id]);
                             else if (sub_g.uniform_vertex_weights) brute_force_bisect_async<true, false, 64>(sub_g, lmax_l, lmax_r, sub_part, result_view, instances[id]);
                             else if (sub_g.uniform_edge_weights) brute_force_bisect_async<false, true, 64>(sub_g, lmax_l, lmax_r, sub_part, result_view, instances[id]);
@@ -166,15 +168,17 @@ namespace GPU_HeiPa {
 
                             Graph sub_g = get_Graph(batch, id);
                             UnmanagedDevicePartition sub_part = get_partition(batch, id);
-                            UnmanagedDevicePartition tt = get_global_ids(batch, id);
 
+                            // std::cout << "saving " << id << " split " << lk << " " << rk << " to " << id << " and " << id + lk << std::endl;
+
+                            UnmanagedDeviceVertex sub_global_ids = get_global_ids(batch, id);
                             Kokkos::parallel_for("rb_map_update", Kokkos::RangePolicy<DeviceExecutionSpace>(exec_space, 0, sub_g.n), KOKKOS_LAMBDA(const vertex_t u) {
                                 partition_t u_id = sub_part(u);
-                                vertex_t l_u = tt(u);
+                                vertex_t g_u = sub_global_ids(u);
                                 if (u_id == 0) {
-                                    partition.map(l_u) = id;
+                                    partition.map(g_u) = id;
                                 } else {
-                                    partition.map(l_u) = id + rk;
+                                    partition.map(g_u) = id + lk;
                                 }
                             });
                             exec_space.fence();

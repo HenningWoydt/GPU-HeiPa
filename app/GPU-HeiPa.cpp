@@ -65,7 +65,7 @@ int main(int argc, char *argv[]) {
                 // {"--graph", "../../GPU-HeiPa-Experiments/data/SuiteSparse/indochina-2004.graph"},
                 // {"--graph", "../../GPU-HeiPa-Experiments/data/SuiteSparse/hugebubbles-00000.graph"},
                 {"--graph", "../../GPU-HeiPa-Experiments/data/SuiteSparse/com-LiveJournal.graph"},
-                {"--k", "32"},
+                {"--k", "31"},
                 {"--imbalance", "0.03"},
                 {"--config", "default"},
                 {"--verbose-level", "1"},
