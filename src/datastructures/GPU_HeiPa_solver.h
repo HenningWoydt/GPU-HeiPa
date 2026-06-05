@@ -339,7 +339,7 @@ namespace GPU_HeiPa {
         void internal_solve(HostGraph &host_g, KokkosMemoryStack &mem_stack) {
             initialize(host_g, mem_stack);
 
-            const partition_t c = 8;
+            const partition_t c = 32;
             const partition_t max_n = c * k;
 
             u32 level = 0;
@@ -475,7 +475,6 @@ namespace GPU_HeiPa {
 
         void initial_partitioning(KokkosMemoryStack &mem_stack) {
             auto p = get_time_point();
-
 
             // Use configured initial partitioning algorithm
             if (config.initial_partitioning == "kway") {
