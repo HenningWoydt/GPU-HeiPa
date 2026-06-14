@@ -33,6 +33,40 @@
 #include "../utility/definitions.h"
 #include "block_conn.h"
 
+// Custom reduction struct for temperature determination: (sum_uphill, count_uphill)
+namespace GPU_HeiPa {
+    namespace detail {
+        template< class ScalarType >
+        struct UphillStats {
+            ScalarType total;
+            u32 count;
+
+            KOKKOS_INLINE_FUNCTION
+            UphillStats() : total(0), count(0) {}
+
+            KOKKOS_INLINE_FUNCTION
+            UphillStats(const UphillStats& rhs) : total(rhs.total), count(rhs.count) {}
+
+            KOKKOS_INLINE_FUNCTION
+            UphillStats& operator+=(const UphillStats& src) {
+                total += src.total;
+                count += src.count;
+                return *this;
+            }
+        };
+    }
+}
+
+// Register reduction identity in Kokkos namespace
+namespace Kokkos {
+    template<>
+    struct reduction_identity< GPU_HeiPa::detail::UphillStats<GPU_HeiPa::weight_t> > {
+        KOKKOS_FORCEINLINE_FUNCTION static GPU_HeiPa::detail::UphillStats<GPU_HeiPa::weight_t> sum() {
+            return GPU_HeiPa::detail::UphillStats<GPU_HeiPa::weight_t>();
+        }
+    };
+}
+
 namespace GPU_HeiPa {
     constexpr u32 N_MAX_ITERATIONS = 12;
     constexpr u32 N_MAX_WEAK_ITERATIONS = 2;
@@ -180,6 +214,74 @@ namespace GPU_HeiPa {
         }
 
         return (vertex_t) b;
+    }
+
+
+    inline f64 determine_temperatur(LabelPropagation &lp,
+                                        const Graph &g,
+                                        const BlockConn &bc,
+                                        f64 conn_c,
+                                        DeviceExecutionSpace &exec_space
+                                        ) {
+        int sample_size = (int)((double)g.n * 0.05);
+        if (sample_size <= 0) sample_size = 1;
+
+        Kokkos::Random_XorShift64_Pool<> random_pool((u64)0x9e3779b97f4a7c15ULL);
+
+        // Custom reduction: accumulate (total_uphill, count_uphill)
+        detail::UphillStats<weight_t> uphill_stats;
+
+        Kokkos::parallel_reduce("determine_T0",
+            Kokkos::RangePolicy<DeviceExecutionSpace>(exec_space, 0, sample_size),
+            KOKKOS_LAMBDA(const vertex_t i, detail::UphillStats<weight_t>& local_stats) {
+                
+                auto gen = random_pool.get_state();
+                vertex_t u = static_cast<vertex_t>(gen.urand64() % static_cast<u64>(g.n));
+                random_pool.free_state(gen);
+
+                partition_t u_id = lp.partition.map(u);
+                weight_t best_conn = 0;
+                weight_t own_conn = 0;
+
+                u32 r_beg = bc.row(u);
+                u32 r_len = bc.sizes(u);
+                u32 r_end = r_beg + r_len;
+
+                for (u32 j = r_beg; j < r_end; ++j) {
+                    partition_t id = bc.ids(j);
+                    weight_t w = bc.weights(j);
+
+                    bool valid = (id != NULL_PART) & (id != HASH_RECLAIM);
+                    bool is_own = valid & (id == u_id);
+                    own_conn = is_own ? w : own_conn;
+                    
+                    bool is_cand = valid & !is_own;
+                    bool better = is_cand & (w > best_conn);
+                    best_conn = better ? w : best_conn;
+                }
+
+                weight_t gain = best_conn - own_conn;
+                if (gain < (weight_t)0) {
+                    local_stats.total += -gain;
+                    local_stats.count++;
+                }
+            },
+            Kokkos::Sum<detail::UphillStats<weight_t>>(uphill_stats));
+
+        exec_space.fence();
+
+        // Compute T0 on host
+        double avg_uphill = (uphill_stats.count > 0) ? ((double)uphill_stats.total / (double)uphill_stats.count) : 0.0;
+        double p0 = 0.2;  // desired initial acceptance probability
+        f64 starting_temperatur;
+
+        if (avg_uphill > 0.0) {
+            starting_temperatur = avg_uphill / -std::log(p0);
+        } else {
+            starting_temperatur = std::max(1e-3, (f64)MIN_TEMPERATURE * 100.0);
+        }
+
+        return starting_temperatur;
     }
 
     template<bool uniform_v_weights, bool uniform_e_weights>
@@ -1032,7 +1134,9 @@ namespace GPU_HeiPa {
         }
 
         
-        f64 curr_temperatur = starting_temperatur;
+        //f64 curr_temperatur = starting_temperatur;
+
+        starting_temperatur = determine_temperatur(lp, g, bc, filter_ratios[0], exec_space);
 
         for (auto filter_ratio: filter_ratios) {
             curr_temperatur = starting_temperatur;
@@ -1096,7 +1200,8 @@ namespace GPU_HeiPa {
                     }
                 }
 
-                curr_temperatur = std::max(curr_temperatur * cooling_factor, MIN_TEMPERATURE);
+                // curr_temperatur = std::max(curr_temperatur * cooling_factor, MIN_TEMPERATURE);
+                curr_temperatur = std::max(curr_temperatur * 0.9, MIN_TEMPERATURE);
 
 
             }
