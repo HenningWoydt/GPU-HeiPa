@@ -80,8 +80,11 @@ namespace GPU_HeiPa {
             GraphBatch batch;
             init_GraphBatch(batch, g, k, mem_stack);
 
-            std::vector<partition_t> current_targets(k, 0);
-            current_targets[0] = k;
+            HostU32 current_targets_host("current_targets_host", k);
+            DeviceU32 current_targets_dev("current_targets_dev", k);
+            Kokkos::deep_copy(exec_space, current_targets_host, 0);
+            current_targets_host(0) = k;
+            Kokkos::deep_copy(exec_space, current_targets_dev, current_targets_host);
 
             // Initialize partition map on coarsest graph to all 0
             auto map = partition.map;
@@ -95,40 +98,38 @@ namespace GPU_HeiPa {
             UnmanagedDeviceVertex projected_bsizes((vertex_t *) get_chunk_back(mem_stack, sizeof(vertex_t) * batch.max_blocks), batch.max_blocks);
 
             DeviceU8 active_mask("active_mask", batch.max_blocks);
-            std::vector<u8> h_batch_active(batch.max_blocks, 0);
+            HostU8 active_mask_host("active_mask_host", batch.max_blocks);
 
             while (true) {
                 HEIPA_PROFILE_SCOPE("initial_partitioning", "gpu_rb_partition", "get_active");
                 calculate_block_sizes(graphs.back(), mappings.empty() ? nullptr : &mappings.back(), partition.map, bsizes, projected_bsizes, exec_space);
-                auto h_bsizes = Kokkos::create_mirror_view_and_copy(HostMemory(), bsizes);
-                auto h_proj_bsizes = Kokkos::create_mirror_view_and_copy(HostMemory(), projected_bsizes);
 
-                bool split_needed = false;
-                std::fill(h_batch_active.begin(), h_batch_active.end(), 0);
-                for (partition_t id = 0; id < k; ++id) {
-                    if (current_targets[id] > 1) {
-                        // We split now if n_sub <= threshold AND n_sub >= 2
-                        if (mappings.empty()) {
-                            if (h_bsizes(id) >= 2 && h_bsizes(id) <= threshold) {
-                                h_batch_active[id] = 1;
-                                split_needed = true;
+                u32 split_needed_int = 0;
+                bool is_mapping_empty = mappings.empty();
+                Kokkos::parallel_reduce("check_split_needed", Kokkos::RangePolicy<DeviceExecutionSpace>(exec_space, 0, k), KOKKOS_LAMBDA(const partition_t id, u32 &local_split) {
+                    bool active = false;
+                    if (current_targets_dev(id) > 1) {
+                        if (is_mapping_empty) {
+                            if (bsizes(id) >= 2 && bsizes(id) <= threshold) {
+                                active = true;
                             }
                         } else {
-                            if (h_proj_bsizes(id) > threshold) {
-                                h_batch_active[id] = 1;
-                                split_needed = true;
+                            if (projected_bsizes(id) > threshold) {
+                                active = true;
                             }
                         }
                     }
-                }
+                    active_mask(id) = active ? 1 : 0;
+                    if (active) local_split = 1;
+                }, Kokkos::Max<u32>(split_needed_int));
+                exec_space.fence();
+                bool split_needed = split_needed_int != 0;
 
-                // print(h_bsizes, "pre:");
-                // print(h_proj_bsizes, "aft:");
-                // print(h_batch_active, "act:");
+                Kokkos::deep_copy(exec_space, active_mask_host, active_mask);
+                exec_space.fence();
 
                 if (split_needed) {
                     HEIPA_PROFILE_SCOPE("initial_partitioning", "gpu_rb_partition", "extract_graphs");
-                    Kokkos::deep_copy(exec_space, active_mask, Kokkos::View<u8 *, HostMemory>(h_batch_active.data(), batch.max_blocks));
                     extract_all_subgraphs(graphs.back(), batch, partition, active_mask, local_ids, local_degree, exec_space);
                     exec_space.fence();
 
@@ -137,8 +138,8 @@ namespace GPU_HeiPa {
                     auto d_results = batch.d_bisection_results;
                     std::vector<DeviceExecutionSpace> instances = Kokkos::Experimental::partition_space(exec_space, std::vector<int>(k, 1));
                     for (partition_t id = 0; id < k; ++id) {
-                        if (h_batch_active[id]) {
-                            partition_t tk = current_targets[id];
+                        if (active_mask_host(id)) {
+                            partition_t tk = current_targets_host(id);
                             partition_t lk = tk / 2;
                             partition_t rk = tk - lk;
 
@@ -151,8 +152,6 @@ namespace GPU_HeiPa {
                             weight_t lmax_l = lmax_global * lk;
                             weight_t lmax_r = lmax_global * rk;
 
-                            // std::cout << "splitting " << id << " into " << lk << " " << rk << std::endl;
-
                             if (sub_g.uniform_vertex_weights && sub_g.uniform_edge_weights) brute_force_bisect_async<true, true, 64>(sub_g, lmax_l, lmax_r, sub_part, result_view, instances[id]);
                             else if (sub_g.uniform_vertex_weights) brute_force_bisect_async<true, false, 64>(sub_g, lmax_l, lmax_r, sub_part, result_view, instances[id]);
                             else if (sub_g.uniform_edge_weights) brute_force_bisect_async<false, true, 64>(sub_g, lmax_l, lmax_r, sub_part, result_view, instances[id]);
@@ -163,15 +162,13 @@ namespace GPU_HeiPa {
 
                     // insert all solutions
                     for (partition_t id = 0; id < k; ++id) {
-                        if (h_batch_active[id]) {
-                            partition_t tk = current_targets[id];
+                        if (active_mask_host(id)) {
+                            partition_t tk = current_targets_host(id);
                             partition_t lk = tk / 2;
                             partition_t rk = tk - lk;
 
                             Graph sub_g = get_Graph(batch, id);
                             UnmanagedDevicePartition sub_part = get_partition(batch, id);
-
-                            // std::cout << "saving " << id << " split " << lk << " " << rk << " to " << id << " and " << id + lk << std::endl;
 
                             UnmanagedDeviceVertex sub_global_ids = get_global_ids(batch, id);
                             Kokkos::parallel_for("rb_map_update", Kokkos::RangePolicy<DeviceExecutionSpace>(exec_space, 0, sub_g.n), KOKKOS_LAMBDA(const vertex_t u) {
@@ -185,11 +182,12 @@ namespace GPU_HeiPa {
                             });
                             exec_space.fence();
 
-                            current_targets[id] = lk;
-                            current_targets[id + lk] = rk;
+                            current_targets_host(id) = lk;
+                            current_targets_host(id + lk) = rk;
                         }
                     }
 
+                    Kokkos::deep_copy(exec_space, current_targets_dev, current_targets_host);
                     recalculate_block_weights(graphs.back(), partition.map, partition.bweights, exec_space);
                     continue;
                 }
