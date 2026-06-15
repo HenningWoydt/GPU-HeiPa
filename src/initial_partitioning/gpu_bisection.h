@@ -38,7 +38,6 @@
 #include "../utility/asserts.h"
 
 namespace GPU_HeiPa {
-
     struct BestBisectConfig {
         u64 penalty = 0xFFFFFFFFFFFFFFFFULL;
         weight_t cut = 0x7FFFFFFF;
@@ -120,8 +119,7 @@ namespace GPU_HeiPa {
         if (!uvw) shmem_size += gn * sizeof(weight_t); // weights
         if (!uew) shmem_size += gm * sizeof(weight_t); // edges_w
 
-        auto policy = Kokkos::TeamPolicy<DeviceExecutionSpace>(exec_space, num_teams, team_size)
-                .set_scratch_size(0, Kokkos::PerTeam(shmem_size));
+        auto policy = Kokkos::TeamPolicy<DeviceExecutionSpace>(exec_space, num_teams, team_size).set_scratch_size(0, Kokkos::PerTeam(shmem_size));
 
         Kokkos::parallel_reduce("brute_force_bisect_reduction", policy, KOKKOS_LAMBDA(const Kokkos::TeamPolicy<DeviceExecutionSpace>::member_type &team, BestBisectConfig &team_best) {
             typedef Kokkos::View<u32 *, DeviceExecutionSpace::scratch_memory_space, Kokkos::MemoryTraits<Kokkos::Unmanaged> > ScratchU32;
@@ -591,7 +589,6 @@ namespace GPU_HeiPa {
         }
         exec_space.fence();
     }
-
 } // namespace GPU_HeiPa
 
 #endif //GPU_HEIPA_GPU_BISECTION_H

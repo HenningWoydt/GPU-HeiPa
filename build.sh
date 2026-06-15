@@ -3,6 +3,7 @@ set -euo pipefail
 
 # Parse arguments
 DOWNLOAD_KOKKOS="OFF" # Default to ON, can be overridden by AUTO or OFF
+DOWNLOAD_METIS="OFF"
 ENABLE_PROFILER="OFF"
 ASSERT_ENABLED="OFF"
 BUILD_TESTING="OFF"
@@ -21,6 +22,9 @@ for arg in "$@"; do
     --download-kokkos=*)
       DOWNLOAD_KOKKOS="${arg#*=}"
       ;;
+    --download-metis=*)
+      DOWNLOAD_METIS="${arg#*=}"
+      ;;
     --test)
       BUILD_TESTING="ON"
       ;;
@@ -38,7 +42,7 @@ for arg in "$@"; do
       ;;
     *)
       echo "Unknown argument: $arg"
-      echo "Usage: $0 [--download-kokkos=ON|OFF|AUTO] [--max-threads=N] [--kokkos-arch=ARCH] [--test] [--verbose]"
+      echo "Usage: $0 [--download-kokkos=ON|OFF|AUTO] [--download-metis=ON|OFF|AUTO] [--max-threads=N] [--kokkos-arch=ARCH] [--test] [--verbose]"
       exit 1
       ;;
   esac
@@ -115,7 +119,28 @@ else
   exit 1
 fi
 
+SHOULD_DOWNLOAD_METIS="false"
+if [ "$DOWNLOAD_METIS" = "ON" ]; then
+  SHOULD_DOWNLOAD_METIS="true"
+elif [ "$DOWNLOAD_METIS" = "AUTO" ]; then
+  METIS_LOCAL_DIR="${ROOT}/extern/local/METIS"
+  if [ -d "${METIS_LOCAL_DIR}/lib" ] && [ -d "${METIS_LOCAL_DIR}/include" ]; then
+    echo "Existing METIS installation detected (AUTO mode). Skipping download and build."
+    SHOULD_DOWNLOAD_METIS="false"
+  else
+    echo "Existing METIS installation not detected (AUTO mode). Proceeding with download and build."
+    SHOULD_DOWNLOAD_METIS="true"
+  fi
+elif [ "$DOWNLOAD_METIS" = "OFF" ]; then
+  SHOULD_DOWNLOAD_METIS="false"
+else
+  echo "Error: Invalid value for --download-metis. Must be ON, OFF, or AUTO." >&2
+  exit 1
+fi
+
 echo "==> Download Kokkos: ${DOWNLOAD_KOKKOS} (Effective: $SHOULD_DOWNLOAD_KOKKOS)"
+echo "==> Download METIS: ${DOWNLOAD_METIS} (Effective: $SHOULD_DOWNLOAD_METIS)"
+
 # ---- detect GPU arch and map to Kokkos flag ----
 detect_kokkos_arch() {
   # Use command-line argument if provided
@@ -176,18 +201,85 @@ else
 fi
 echo "Building with $JOBS parallel jobs."
 
+# make local folder for all includes if it doesn't exist
+mkdir -p extern/local
+
+if [ "$SHOULD_DOWNLOAD_METIS" = "true" ]; then
+  # ---- Download and build METIS dependencies ----
+  rm -rf extern/METIS
+  rm -rf extern/GKlib
+  rm -rf extern/local/METIS
+  rm -rf extern/local/GKlib
+
+  # --- Download GKlib (latest release) ---
+  echo "Downloading GKlib..."
+  if (
+    cd extern \
+    && rm -f gklib.tar.gz \
+    && rm -rf GKlib \
+    && wget -q https://github.com/KarypisLab/GKlib/archive/refs/heads/master.tar.gz -O gklib.tar.gz \
+    && tar -xzf gklib.tar.gz \
+    && mv GKlib-master GKlib \
+    && rm -f gklib.tar.gz
+  ); then
+    echo "GKlib downloaded and extracted successfully."
+  else
+    echo "Failed to download GKlib!" >&2
+    exit 1
+  fi
+
+  # --- Download METIS 5.2.1 ---
+  echo "Downloading METIS 5.2.1..."
+  if (
+    cd extern \
+    && rm -f metis-5.2.1.tar.gz \
+    && rm -rf METIS \
+    && wget -q https://github.com/KarypisLab/METIS/archive/refs/tags/v5.2.1.tar.gz -O metis-5.2.1.tar.gz \
+    && tar -xzf metis-5.2.1.tar.gz \
+    && mv METIS-5.2.1 METIS \
+    && rm -f metis-5.2.1.tar.gz
+  ); then
+    echo "METIS 5.2.1 downloaded and extracted successfully."
+  else
+    echo "Failed to download METIS v5.2.1!" >&2
+    exit 1
+  fi
+
+  # --- Build GKlib ---
+  echo "Building GKlib..."
+  if cd "${ROOT}/extern/GKlib" && rm -rf build \
+    && make config prefix="${ROOT}/extern/local/GKlib" cc="${GCC}" > /dev/null 2>&1 \
+    && make install > /dev/null 2>&1; then
+    echo "GKlib build completed successfully."
+  else
+    echo "GKlib build failed!" >&2
+    exit 1
+  fi
+  cd "${ROOT}"
+
+  # --- Build METIS ---
+  echo "Building METIS..."
+  if cd "${ROOT}/extern/METIS" \
+    && rm -rf build \
+    && make config prefix="${ROOT}/extern/local/METIS" gklib_path="${ROOT}/extern/local/GKlib" cc="${GCC}" > /dev/null 2>&1 \
+    && make install > /dev/null 2>&1; then
+    echo "METIS build completed successfully."
+  else
+    echo "METIS build failed!" >&2
+    exit 1
+  fi
+  cd "${ROOT}"
+fi
+
 
 if [ "$SHOULD_DOWNLOAD_KOKKOS" = "true" ]; then
   # ---- Download and build Kokkos dependencies ----
   
   # clean previous externals
-  rm -rf extern/local
+  rm -rf extern/local/kokkos
+  rm -rf extern/local/kokkos-kernels
   rm -rf extern/kokkos-5.0.0
   rm -rf extern/kokkos-kernels-5.0.0
-
-  # make local folder for all includes
-  mkdir -p extern
-  cd extern && rm -rf local && mkdir local && cd "${ROOT}"
 
   # --- Download Kokkos-Kernels 5.0.0 ---
   echo "Downloading Kokkos-Kernels 5.0.0..."
@@ -254,6 +346,11 @@ if [ "$SHOULD_DOWNLOAD_KOKKOS" = "true" ]; then
   cd "${ROOT}"
 else
   echo "Skipping Kokkos download and build (using existing installation)."
+  # Still try to set CXX if it's there
+  if [ -x "${ROOT}/extern/kokkos-5.0.0/bin/nvcc_wrapper" ]; then
+    export CXX="${ROOT}/extern/kokkos-5.0.0/bin/nvcc_wrapper"
+    echo "Using C++ compiler: ${CXX}"
+  fi
 fi
 
 # --- build GPU-HeiPa ---

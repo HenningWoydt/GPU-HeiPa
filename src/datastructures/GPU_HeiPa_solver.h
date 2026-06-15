@@ -41,6 +41,7 @@
 #include "../refinement/jet_label_propagation.h"
 #include "../initial_partitioning/kway_partitioner/kway_core.h"
 #include "../initial_partitioning/gpu_recursive_bisection.h"
+#include "../initial_partitioning/metis_wrapper.h"
 #include "../definitions.h"
 #include "../GPU_HeiPa_configuration.h"
 #include "../utility/profiler.h"
@@ -339,8 +340,9 @@ namespace GPU_HeiPa {
         void internal_solve(HostGraph &host_g, KokkosMemoryStack &mem_stack) {
             initialize(host_g, mem_stack);
 
-            partition_t c = 64;
+            partition_t c = 32;
             if (config.initial_partitioning == "kway") { c = 8; }
+            if (config.initial_partitioning == "metis") { c = 8; }
             const partition_t max_n = c * k;
 
             u32 level = 0;
@@ -405,7 +407,6 @@ namespace GPU_HeiPa {
         void initialize(HostGraph &host_g, KokkosMemoryStack &mem_stack) {
             auto p = get_time_point();
 
-
             n = host_g.n;
             m = host_g.m;
             k = config.k;
@@ -426,7 +427,6 @@ namespace GPU_HeiPa {
 
         void coarsening(u32 level, KokkosMemoryStack &mem_stack) {
             auto p = get_time_point();
-
 
             if (graphs.back().uniform_vertex_weights && graphs.back().uniform_edge_weights) {
                 mappings.emplace_back(two_hop_matcher_get_mapping<true, true>(graphs.back(), partition, lmax, mem_stack, exec_space));
@@ -450,7 +450,6 @@ namespace GPU_HeiPa {
 
         void contraction(u32 level, KokkosMemoryStack &mem_stack) {
             auto p = get_time_point();
-
 
             const Graph &cur = graphs.back();
             if (cur.uniform_vertex_weights && cur.uniform_edge_weights) {
@@ -481,7 +480,9 @@ namespace GPU_HeiPa {
             if (config.initial_partitioning == "kway") {
                 kway_partition(graphs.back(), (int) k, config.imbalance, config.seed, partition, exec_space);
             } else if (config.initial_partitioning == "gpu_bisection") {
-                gpu_recursive_bisection(graphs.back(), k, config.imbalance, config.seed, 40, partition, mem_stack, exec_space);
+                gpu_recursive_bisection(graphs.back(), k, config.imbalance, config.seed, 24, partition, mem_stack, exec_space);
+            } else if (config.initial_partitioning == "metis") {
+                metis_partition(graphs.back(), (int) k, config.imbalance, config.seed, partition, exec_space);
             } else {
                 std::cerr << "Unknown initial partitioning config: " << config.initial_partitioning << std::endl;
                 exit(EXIT_FAILURE);
@@ -516,7 +517,6 @@ namespace GPU_HeiPa {
 
         void refinement(u32 level, KokkosMemoryStack &mem_stack) {
             auto p = get_time_point();
-
 
             Graph &cur = graphs.back();
             std::pair<weight_t, weight_t> pair;

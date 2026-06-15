@@ -56,13 +56,11 @@ namespace GPU_HeiPa {
         HEIPA_PROFILE_SCOPE("initial_partitioning", "gpu_rb_partition", "gpu_rb_partition");
 
         // --- Phase 1: Coarsening ---
-        // We MUST coarsen until the graph is small enough for brute-force (max 24)
-        const u32 max_bf_n = 24;
         std::vector<Graph> graphs = {g};
         std::vector<Mapping> mappings;
         weight_t lmax_global = (weight_t) std::ceil((1.0 + imbalance) * (f64) g.g_weight / (f64) k);
 
-        while (graphs.back().n > max_bf_n) {
+        while (graphs.back().n > threshold) {
             HEIPA_PROFILE_SCOPE("initial_partitioning", "gpu_rb_partition", "coarsening");
             assert_state_pre_partition(graphs.back(), exec_space);
             mappings.push_back(two_hop_matcher_get_mapping<false, false>(graphs.back(), partition, lmax_global, mem_stack, exec_space));
@@ -109,20 +107,24 @@ namespace GPU_HeiPa {
                 std::fill(h_batch_active.begin(), h_batch_active.end(), 0);
                 for (partition_t id = 0; id < k; ++id) {
                     if (current_targets[id] > 1) {
-                        // We split now if n_sub <= 24 AND n_sub >= 2
+                        // We split now if n_sub <= threshold AND n_sub >= 2
                         if (mappings.empty()) {
-                            if (h_bsizes(id) >= 2 && h_bsizes(id) <= max_bf_n) {
+                            if (h_bsizes(id) >= 2 && h_bsizes(id) <= threshold) {
                                 h_batch_active[id] = 1;
                                 split_needed = true;
                             }
                         } else {
-                            if (h_proj_bsizes(id) > 24) {
+                            if (h_proj_bsizes(id) > threshold) {
                                 h_batch_active[id] = 1;
                                 split_needed = true;
                             }
                         }
                     }
                 }
+
+                // print(h_bsizes, "pre:");
+                // print(h_proj_bsizes, "aft:");
+                // print(h_batch_active, "act:");
 
                 if (split_needed) {
                     HEIPA_PROFILE_SCOPE("initial_partitioning", "gpu_rb_partition", "extract_graphs");
