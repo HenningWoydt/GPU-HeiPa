@@ -84,8 +84,9 @@ namespace GPU_HeiPa {
 
     template<bool uvw, bool uew, int CHUNK>
     inline void brute_force_bisect_async(const Graph &g,
-                                         weight_t lmax_left,
-                                         weight_t lmax_right,
+                                         UnmanagedDeviceWeight left_lmax,
+                                         UnmanagedDeviceWeight right_lmax,
+                                         partition_t id,
                                          UnmanagedDevicePartition &partition_map,
                                          Kokkos::View<BestBisectConfig, DeviceMemorySpace, Kokkos::MemoryTraits<Kokkos::Unmanaged> > result_view,
                                          DeviceExecutionSpace &exec_space) {
@@ -122,6 +123,8 @@ namespace GPU_HeiPa {
         auto policy = Kokkos::TeamPolicy<DeviceExecutionSpace>(exec_space, num_teams, team_size).set_scratch_size(0, Kokkos::PerTeam(shmem_size));
 
         Kokkos::parallel_reduce("brute_force_bisect_reduction", policy, KOKKOS_LAMBDA(const Kokkos::TeamPolicy<DeviceExecutionSpace>::member_type &team, BestBisectConfig &team_best) {
+            const weight_t lmax_left = left_lmax(id);
+            const weight_t lmax_right = right_lmax(id);
             typedef Kokkos::View<u32 *, DeviceExecutionSpace::scratch_memory_space, Kokkos::MemoryTraits<Kokkos::Unmanaged> > ScratchU32;
             typedef Kokkos::View<vertex_t *, DeviceExecutionSpace::scratch_memory_space, Kokkos::MemoryTraits<Kokkos::Unmanaged> > ScratchVertex;
             typedef Kokkos::View<weight_t *, DeviceExecutionSpace::scratch_memory_space, Kokkos::MemoryTraits<Kokkos::Unmanaged> > ScratchWeight;
@@ -204,18 +207,17 @@ namespace GPU_HeiPa {
 
                 evaluate_current(gray, wr, cut, local_best);
 
+                #pragma unroll
                 for (u64 i = begin + 1; i < end; i++) {
-                    const u64 next_gray = i ^ (i >> 1);
-                    const u64 diff = gray ^ next_gray;
-
                     #if defined(__CUDA_ARCH__) || defined(__HIP_DEVICE_COMPILE__)
-                    const vertex_t flip_u = (vertex_t) __ffsll(diff) - 1;
+                    const vertex_t flip_u = (vertex_t) __ffsll(i) - 1;
                     #else
-                    const vertex_t flip_u = (vertex_t) __builtin_ctzll(diff);
+                    const vertex_t flip_u = (vertex_t) __builtin_ctzll(i);
                     #endif
 
-                    const u64 old_part_u = (gray >> flip_u) & 1ULL;
-                    const u64 new_part_u = old_part_u ^ 1ULL;
+                    gray ^= (1ULL << flip_u);
+                    const u64 new_part_u = (gray >> flip_u) & 1ULL;
+                    const u64 old_part_u = new_part_u ^ 1ULL;
                     const weight_t wu = uvw ? 1 : s_weights(flip_u);
 
                     if (new_part_u) wr += wu;
@@ -230,7 +232,6 @@ namespace GPU_HeiPa {
                         if (was_cut && !now_cut) cut -= ew;
                         else if (!was_cut && now_cut) cut += ew;
                     }
-                    gray = next_gray;
                     evaluate_current(gray, wr, cut, local_best);
                 }
             }, reducer);
@@ -275,13 +276,26 @@ namespace GPU_HeiPa {
         HostWeight h_lmax_r;
         HostPartition h_left_strides;
         HostPartition h_right_strides;
+
+        KOKKOS_INLINE_FUNCTION
+        partition_t* get_partition_ptr(partition_t id) const {
+            u64 n_bytes_partition = round_up_64(n) * sizeof(partition_t);
+            u64 memory_offset = (u64) id * n_bytes_partition;
+            return (partition_t *)(partition_memory.data() + memory_offset);
+        }
+
+        KOKKOS_INLINE_FUNCTION
+        vertex_t* get_global_ids_ptr(partition_t id) const {
+            u64 n_bytes_global_ids = round_up_64(n) * sizeof(vertex_t);
+            u64 memory_offset = (u64) id * n_bytes_global_ids;
+            return (vertex_t *)(global_ids_memory.data() + memory_offset);
+        }
     };
 
     inline void init_GraphBatch(GraphBatch &batch,
                                 Graph &g,
                                 partition_t k,
                                 KokkosMemoryStack &mem_stack) {
-        HEIPA_PROFILE_SCOPE("initial_partitioning", "gpu_bisection", "init_GraphBatch");
         batch.n = g.n;
         batch.m = g.m;
         batch.k = k;
@@ -395,7 +409,6 @@ namespace GPU_HeiPa {
                                       UnmanagedDeviceVertex &local_ids,
                                       UnmanagedDeviceVertex &local_degree,
                                       DeviceExecutionSpace &exec_space) {
-        HEIPA_PROFILE_SCOPE("initial_partitioning", "gpu_bisection", "extract_all_subgraphs");
         auto map = partition.map;
         partition_t k = (partition_t) batch.max_blocks;
         bool use_mask = active_mask.extent(0) > 0;
@@ -536,10 +549,10 @@ namespace GPU_HeiPa {
             if (sub_g.n == 1) {
                 Kokkos::parallel_for("bisect1", Kokkos::RangePolicy<DeviceExecutionSpace>(instances[s], 0, 1), KOKKOS_LAMBDA(int) { sub_part(0) = 0; });
             } else {
-                if (sub_g.uniform_vertex_weights && sub_g.uniform_edge_weights) brute_force_bisect_async<true, true, 64>(sub_g, l_l, l_r, sub_part, result_view, instances[s]);
-                else if (sub_g.uniform_vertex_weights) brute_force_bisect_async<true, false, 64>(sub_g, l_l, l_r, sub_part, result_view, instances[s]);
-                else if (sub_g.uniform_edge_weights) brute_force_bisect_async<false, true, 64>(sub_g, l_l, l_r, sub_part, result_view, instances[s]);
-                else brute_force_bisect_async<false, false, 64>(sub_g, l_l, l_r, sub_part, result_view, instances[s]);
+                // if (sub_g.uniform_vertex_weights && sub_g.uniform_edge_weights) brute_force_bisect_async<true, true, 64>(sub_g, l_l, l_r, sub_part, result_view, instances[s]);
+                // else if (sub_g.uniform_vertex_weights) brute_force_bisect_async<true, false, 64>(sub_g, l_l, l_r, sub_part, result_view, instances[s]);
+                // else if (sub_g.uniform_edge_weights) brute_force_bisect_async<false, true, 64>(sub_g, l_l, l_r, sub_part, result_view, instances[s]);
+                // else brute_force_bisect_async<false, false, 64>(sub_g, l_l, l_r, sub_part, result_view, instances[s]);
             }
         }
         for (auto &inst: instances) inst.fence();
@@ -555,15 +568,14 @@ namespace GPU_HeiPa {
         }
         Kokkos::View<BestBisectConfig, DeviceMemorySpace> device_result("result_view");
         BestBisectReducer::result_view_type result_view(device_result.data());
-        if (g.uniform_vertex_weights && g.uniform_edge_weights) brute_force_bisect_async<true, true, 64>(g, lmax_1, lmax_2, partition, result_view, exec_space);
-        else if (g.uniform_vertex_weights) brute_force_bisect_async<true, false, 64>(g, lmax_1, lmax_2, partition, result_view, exec_space);
-        else if (g.uniform_edge_weights) brute_force_bisect_async<false, true, 64>(g, lmax_1, lmax_2, partition, result_view, exec_space);
-        else brute_force_bisect_async<false, false, 64>(g, lmax_1, lmax_2, partition, result_view, exec_space);
+        // if (g.uniform_vertex_weights && g.uniform_edge_weights) brute_force_bisect_async<true, true, 64>(g, lmax_1, lmax_2, partition, result_view, exec_space);
+        // else if (g.uniform_vertex_weights) brute_force_bisect_async<true, false, 64>(g, lmax_1, lmax_2, partition, result_view, exec_space);
+        // else if (g.uniform_edge_weights) brute_force_bisect_async<false, true, 64>(g, lmax_1, lmax_2, partition, result_view, exec_space);
+        // else brute_force_bisect_async<false, false, 64>(g, lmax_1, lmax_2, partition, result_view, exec_space);
         exec_space.fence();
     }
 
     inline void recalculate_block_weights(const Graph &g, const UnmanagedDevicePartition &map, UnmanagedDeviceWeight &bweights, DeviceExecutionSpace &exec_space) {
-        HEIPA_PROFILE_SCOPE("initial_partitioning", "gpu_bisection", "recalculate_block_weights");
         Kokkos::deep_copy(exec_space, bweights, 0);
         Kokkos::parallel_for("recalculate_block_weights", Kokkos::RangePolicy<DeviceExecutionSpace>(exec_space, 0, g.n), KOKKOS_LAMBDA(const vertex_t u) {
             partition_t id = map(u);
@@ -573,20 +585,32 @@ namespace GPU_HeiPa {
     }
 
     inline void calculate_block_sizes(const Graph &g, const Mapping *mapping, const UnmanagedDevicePartition &map, UnmanagedDeviceVertex &bsizes, UnmanagedDeviceVertex &projected_sizes, DeviceExecutionSpace &exec_space) {
-        HEIPA_PROFILE_SCOPE("initial_partitioning", "gpu_bisection", "calculate_block_sizes");
-        Kokkos::deep_copy(exec_space, bsizes, 0);
-        Kokkos::parallel_for("calculate_block_sizes", Kokkos::RangePolicy<DeviceExecutionSpace>(exec_space, 0, g.n), KOKKOS_LAMBDA(const vertex_t u) {
-            partition_t id = map(u);
-            Kokkos::atomic_add(&bsizes(id), 1);
-        });
-        if (mapping != nullptr) {
-            Kokkos::deep_copy(exec_space, projected_sizes, 0);
-            Kokkos::parallel_for("calculate_projected_block_sizes", Kokkos::RangePolicy<DeviceExecutionSpace>(exec_space, 0, mapping->old_n), KOKKOS_LAMBDA(const vertex_t u) {
-                vertex_t new_v = mapping->mapping(u);
-                partition_t id = map(new_v);
-                Kokkos::atomic_add(&projected_sizes(id), 1);
+        bool has_mapping = (mapping != nullptr);
+        vertex_t old_n = has_mapping ? mapping->old_n : 0;
+        UnmanagedDeviceVertex mapping_view = has_mapping ? mapping->mapping : UnmanagedDeviceVertex();
+        u32 k = bsizes.extent(0);
+
+        Kokkos::parallel_for("calculate_block_sizes_fused", Kokkos::TeamPolicy<DeviceExecutionSpace>(exec_space, 1, Kokkos::AUTO()), KOKKOS_LAMBDA(const Kokkos::TeamPolicy<DeviceExecutionSpace>::member_type &team) {
+            Kokkos::parallel_for(Kokkos::TeamThreadRange(team, k), [&](const int i) {
+                bsizes(i) = 0;
+                if (has_mapping) projected_sizes(i) = 0;
             });
-        }
+            
+            team.team_barrier();
+
+            Kokkos::parallel_for(Kokkos::TeamThreadRange(team, g.n), [&](const vertex_t u) {
+                partition_t id = map(u);
+                Kokkos::atomic_add(&bsizes(id), 1);
+            });
+
+            if (has_mapping) {
+                Kokkos::parallel_for(Kokkos::TeamThreadRange(team, old_n), [&](const vertex_t u) {
+                    vertex_t new_v = mapping_view(u);
+                    partition_t id = map(new_v);
+                    Kokkos::atomic_add(&projected_sizes(id), 1);
+                });
+            }
+        });
         exec_space.fence();
     }
 } // namespace GPU_HeiPa
