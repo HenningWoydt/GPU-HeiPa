@@ -290,8 +290,10 @@ namespace GPU_HeiPa {
                                         const BlockConn &bc,
                                         f64 conn_c,
                                         DeviceExecutionSpace &exec_space,
-                                        f64 Temperatur
+                                        f64 Temperatur,
+                                        int TOP_X
                                     ) {
+                                        
         vertex_t num_pos = 0;
         Kokkos::Random_XorShift64_Pool<> random_pool((u64) (Temperatur * 1000000.0) ^ 0x9e3779b97f4a7c15ULL);
         //
@@ -305,11 +307,19 @@ namespace GPU_HeiPa {
                 } else {
                     partition_t u_id = lp.partition.map(u);
 
+                    // get two GPU arrays: best_ids and best_conns + initialize
+                    constexpr int MAX_K = 8;
+
+                    partition_t best_ids[MAX_K];
+                    weight_t best_conns[MAX_K];
+
+                    for (int i = 0; i < TOP_X; ++i) {
+                        best_ids[i] = NO_MOVE;
+                        best_conns[i] = 0;
+                    }
+
                     partition_t best_id = NO_MOVE;
                     weight_t best_conn = 0;
-
-                    // partition_t second_best_id = NO_MOVE;
-                    // weight_t second_best_conn = 0;
 
                     weight_t own_conn = 0;
 
@@ -329,54 +339,58 @@ namespace GPU_HeiPa {
                         own_conn = is_own ? w : own_conn;
 
                         // Update best if it's a candidate and better
-                        bool better_first = is_cand & (w > best_conn);
-                        // bool better_second = is_cand & !better_first & (w > second_best_conn);
+                        // bool better_first = is_cand & (w > best_conn);
+                        // best_conn = better_first ? w : best_conn;
+                        // best_id = better_first ? id : best_id;
 
-                        // second_best_conn = better_first ? best_conn : (better_second ? w : second_best_conn);
-                        // second_best_id = better_first ? best_id : (better_second ? id : second_best_id);
+                        if (is_cand && w > best_conns[TOP_X - 1]) {
+                            // Insert at the end
+                            best_conns[TOP_X - 1] = w;
+                            best_ids[TOP_X - 1] = id;
 
-                        best_conn = better_first ? w : best_conn;
-                        best_id = better_first ? id : best_id;
+                            // Bubble it upward until the array is sorted again
+                            for (int j = TOP_X - 1; j > 0 && best_conns[j] > best_conns[j - 1]; --j) {
+
+                                weight_t tmp_w = best_conns[j];
+                                best_conns[j] = best_conns[j - 1];
+                                best_conns[j - 1] = tmp_w;
+
+                                partition_t tmp_id = best_ids[j];
+                                best_ids[j] = best_ids[j - 1];
+                                best_ids[j - 1] = tmp_id;
+                            }
+                        }
+                    }
+                    
+                    weight_t gain = 0;
+                    u32 valid_count = 0;
+                    for (u32 i = 0; i < TOP_X; ++i) {
+                        if (best_ids[i] != NO_MOVE) {
+                            valid_count++;
+                        } else {
+                            break; // since sorted, rest will be empty
+                        }
+                    }
+                    if( valid_count != 0) {
+
+                        u32 seed = (u * 2654435761u) ^ (lp.round * 1013904223u);
+                        u32 r = seed % valid_count;
+                        
+                        best_conn = best_conns[r];
+                        best_id = best_ids[r];
+                    
                     }
 
-                    // With 50% probability, use second-best candidate instead
-                    // if (second_best_id != NO_MOVE) {
-                    //     u32 coin = (u * 2654435761u) ^ (lp.round * 1013904223u);
-                    //     if ((coin & 1u) != 0u) {
-                    //         best_id = second_best_id;
-                    //         best_conn = second_best_conn;
-                    //     }
-                    // }
-
-                    
-
-                    weight_t gain = best_conn - own_conn;
-                    bool accept_move = false;
 
                     if (best_id != NO_MOVE) {
-                        if (best_conn >= own_conn ||
-                            ((f64) own_conn - (f64) best_conn) < floor(conn_c * (f64) own_conn)) {
-                            accept_move = true;
-                        } else if (Temperatur > 0.01) {
-                            auto gen = random_pool.get_state();
-                            const f64 random_value = gen.drand(0.0, 1.0);
-                            random_pool.free_state(gen);
-
-                            const f64 acceptance_probability = Kokkos::exp((f64) gain / Temperatur);
-                            accept_move = random_value < acceptance_probability;
-                        }
-
-                        if (!accept_move) {
-                            best_id = NO_MOVE;
-                            gain = 0;
+                        if (best_conn >= own_conn || ((f64) own_conn - (f64) best_conn) < floor(conn_c * (f64) own_conn)) {
+                            gain = best_conn - own_conn;
                         } else {
-                            lp.gain_cache(u) = gain;
+                            best_id = NO_MOVE;
                         }
                     }
 
-                    if (best_id == NO_MOVE) {
-                        lp.gain_cache(u) = 0;
-                    }
+                    lp.gain_cache(u) = gain;
                     lp.dest_cache(u) = best_id;
                     lp.dest_part(u) = best_id;
                 }
@@ -432,7 +446,7 @@ namespace GPU_HeiPa {
                 //! TODO: change to SA
                 if (u_gain + change >= 0) {
                     lp.lock(u) = 1;
-                } else{
+                } /* else{
                     if (Temperatur > 0.01) {
                             auto gen = random_pool.get_state();
                             const f64 random_value = gen.drand(0.0, 1.0);
@@ -445,7 +459,7 @@ namespace GPU_HeiPa {
                             }
                         }
                     
-                }
+                } */
 
             });
 
@@ -483,7 +497,7 @@ namespace GPU_HeiPa {
                 Kokkos::single(Kokkos::PerTeam(team), [&]() {
                     if (u_gain + change >= 0) {
                         lp.lock(u) = 1;
-                    } else{
+                    } /*  else{
                         if (Temperatur > 0.01) {
                                 auto gen = random_pool.get_state();
                                 const f64 random_value = gen.drand(0.0, 1.0);
@@ -496,7 +510,7 @@ namespace GPU_HeiPa {
                                 }
                             }
                         
-                    }
+                    }*/
 
                 });
             });
@@ -1107,6 +1121,9 @@ namespace GPU_HeiPa {
                                                     f64 cooling_factor = 1.0f) {
         LabelPropagation lp = initialize_label_propagation(g.n, g.m, k, lmax, mem_stack, exec_space);
 
+
+        int TOP_K = static_cast<int>(starting_temperatur);
+
         // copy partition
         {
             ScopedTimer _t("refinement", "JetLabelPropagation", "copy_partition");
@@ -1134,12 +1151,12 @@ namespace GPU_HeiPa {
         }
 
         
-        //f64 curr_temperatur = starting_temperatur;
+        f64 curr_temperatur = 0.00001;
 
-        starting_temperatur = determine_temperatur(lp, g, bc, filter_ratios[0], exec_space);
+        //starting_temperatur = determine_temperatur(lp, g, bc, filter_ratios[0], exec_space);
 
         for (auto filter_ratio: filter_ratios) {
-            curr_temperatur = starting_temperatur;
+            //curr_temperatur = starting_temperatur;
             u32 balance_iteration = 0;
             u32 iteration = 0;
             while (iteration < N_MAX_ITERATIONS) {
@@ -1147,8 +1164,15 @@ namespace GPU_HeiPa {
 
                 UnmanagedDeviceVertex moves;
                 if (curr_max_weight <= lmax) {
-                    moves = jet_lp<uniform_v_weights, uniform_e_weights>(lp, g, bc, filter_ratio, exec_space, curr_temperatur);
+                    moves = jet_lp<uniform_v_weights, uniform_e_weights>(lp, g, bc, filter_ratio, exec_space, curr_temperatur, TOP_K);
                     balance_iteration = 0;
+
+                    /*
+                    lieber nach jeder lp verringern?   
+                    if (TOP_K > 1) {
+                        TOP_K -= 1;
+                    }
+                    */
 
                     // if lp found 0 moves, it will find 0 moves in the next iteration so skip
                     if (moves.extent(0) == 0) { break; }
@@ -1201,9 +1225,11 @@ namespace GPU_HeiPa {
                 }
 
                 // curr_temperatur = std::max(curr_temperatur * cooling_factor, MIN_TEMPERATURE);
-                curr_temperatur = std::max(curr_temperatur * 0.9, MIN_TEMPERATURE);
+                //curr_temperatur = std::max(curr_temperatur * 0.9, MIN_TEMPERATURE);
 
-
+                if (TOP_K > 1) {
+                    TOP_K -= 1;
+                }
             }
         }
 
