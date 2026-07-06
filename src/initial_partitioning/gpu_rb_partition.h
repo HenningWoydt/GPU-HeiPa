@@ -123,18 +123,11 @@ namespace GPU_HeiPa {
 
             auto sp3 = get_time_point();
 
-            contract(partition, mappings.back(), exec_space);
-            KOKKOS_PROFILE_FENCE(exec_space);
-
-            auto sp4 = get_time_point();
-
-            std::cout << mappings.back().old_n << " " << mappings.back().coarse_n << " - " << get_milli_seconds(sp1, sp2) << " ms " << get_milli_seconds(sp2, sp3) << " ms " << get_milli_seconds(sp3, sp4) << " ms" << std::endl;
+            std::cout << mappings.back().old_n << " " << mappings.back().coarse_n << " - " << get_milli_seconds(sp1, sp2) << " ms " << get_milli_seconds(sp2, sp3) << " ms " << std::endl;
 
             assert_coarsening(graphs[graphs.size() - 2], graphs.back(), mappings.back(), exec_space);
             assert_state_pre_partition(graphs.back(), exec_space);
         }
-
-        recalculate_block_weights(graphs.back(), partition.map, partition.bweights, exec_space);
 
         auto ep_coarsen = get_time_point();
         std::cout << "time coarsen: " << get_milli_seconds(sp_coarsen, ep_coarsen) << " ms" << std::endl;
@@ -145,27 +138,33 @@ namespace GPU_HeiPa {
         GraphBatch batch;
         init_GraphBatch(batch, g, k, mem_stack);
 
-        DeviceU32 current_targets_dev("current_targets_dev", k);
-        Kokkos::deep_copy(exec_space, current_targets_dev, 0);
-        Kokkos::parallel_for("init_targets", Kokkos::RangePolicy<DeviceExecutionSpace>(exec_space, 0, 1), KOKKOS_LAMBDA(const int) {
-            current_targets_dev(0) = k;
-        });
-
         // Scratch for extraction
         UnmanagedDeviceVertex local_ids((vertex_t *) get_chunk_back(mem_stack, sizeof(vertex_t) * g.n), g.n);
         UnmanagedDeviceVertex local_degree((vertex_t *) get_chunk_back(mem_stack, sizeof(vertex_t) * g.n), g.n);
         UnmanagedDeviceVertex bsizes((vertex_t *) get_chunk_back(mem_stack, sizeof(vertex_t) * batch.k), batch.k);
-        UnmanagedDeviceVertex projected_bsizes((vertex_t *) get_chunk_back(mem_stack, sizeof(vertex_t) * batch.k), batch.k);
 
         UnmanagedDeviceU8 active_mask((u8 *) get_chunk_back(mem_stack, sizeof(u8) * batch.k), batch.k);
-        UnmanagedDevicePartition left_k((partition_t *) get_chunk_back(mem_stack, sizeof(partition_t) * batch.k), batch.k);
-        UnmanagedDevicePartition right_k((partition_t *) get_chunk_back(mem_stack, sizeof(partition_t) * batch.k), batch.k);
         UnmanagedDeviceWeight left_lmax((weight_t *) get_chunk_back(mem_stack, sizeof(weight_t) * batch.k), batch.k);
         UnmanagedDeviceWeight right_lmax((weight_t *) get_chunk_back(mem_stack, sizeof(weight_t) * batch.k), batch.k);
+        UnmanagedDeviceU32 current_targets_dev((u32 *) get_chunk_back(mem_stack, sizeof(u32) * batch.k), batch.k);
+
+        HEIPA_PROFILE_SCOPE("initial_partitioning", "gpu_rb_partition", "recalculate_block_weights");
+        recalculate_block_weights(graphs.back(), partition.map, partition.bweights, exec_space);
+        KOKKOS_PROFILE_FENCE(exec_space);
+
+        HEIPA_PROFILE_SCOPE("initial_partitioning", "gpu_rb_partition", "init_targets");
+        Kokkos::parallel_for("init_targets", Kokkos::RangePolicy<DeviceExecutionSpace>(exec_space, 0, k), KOKKOS_LAMBDA(const int id) {
+            if (id == 0) {
+                current_targets_dev(id) = k;
+            } else {
+                current_targets_dev(id) = 0;
+            }
+        });
+        KOKKOS_PROFILE_FENCE(exec_space);
 
         while (true) {
             HEIPA_PROFILE_SCOPE("initial_partitioning", "gpu_rb_partition", "calculate_block_sizes");
-            calculate_block_sizes(graphs.back(), mappings.empty() ? nullptr : &mappings.back(), partition.map, bsizes, projected_bsizes, exec_space);
+            calculate_block_sizes(graphs.back(), mappings.empty() ? nullptr : &mappings.back(), partition.map, bsizes, exec_space);
             KOKKOS_PROFILE_FENCE(exec_space);
 
             HEIPA_PROFILE_SCOPE("initial_partitioning", "gpu_rb_partition", "get_active");
@@ -179,7 +178,7 @@ namespace GPU_HeiPa {
                             active = true;
                         }
                     } else {
-                        if (projected_bsizes(id) > threshold) {
+                        if (bsizes(id) > threshold) {
                             active = true;
                         }
                     }
@@ -188,10 +187,10 @@ namespace GPU_HeiPa {
 
                 if (active) {
                     partition_t tk = current_targets_dev(id);
-                    left_k(id) = tk / 2;
-                    right_k(id) = tk - left_k(id);
-                    left_lmax(id) = lmax_global * left_k(id);
-                    right_lmax(id) = lmax_global * right_k(id);
+                    partition_t lk = tk / 2;
+                    partition_t rk = tk - lk;
+                    left_lmax(id) = lmax_global * lk;
+                    right_lmax(id) = lmax_global * rk;
                 }
 
                 if (active) local_split = 1;
@@ -281,12 +280,10 @@ namespace GPU_HeiPa {
         std::cout << "time uncoarsen: " << get_milli_seconds(ep_coarsen, ep_uncoarsen) << " ms" << std::endl;
 
         // Cleanup
+        pop_back(mem_stack); // current_targets_dev
         pop_back(mem_stack); // right_lmax
         pop_back(mem_stack); // left_lmax
-        pop_back(mem_stack); // right_k
-        pop_back(mem_stack); // left_k
         pop_back(mem_stack); // active_mask
-        pop_back(mem_stack); // projected_bsizes
         pop_back(mem_stack); // bsizes
         pop_back(mem_stack); // local_degree
         pop_back(mem_stack); // local_ids

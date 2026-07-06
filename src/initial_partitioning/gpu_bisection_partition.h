@@ -130,7 +130,7 @@ namespace GPU_HeiPa {
             HEIPA_PROFILE_SCOPE("initial_partitioning", "gpu_bisection_partition", "initial_partitioning_phase");
             partition_t l_k, r_k;
             split_into(manager, 0, l_k, r_k);
-            UnmanagedDevicePartition temp_partition = get_partition(batch, 0);
+            UnmanagedDevicePartition temp_partition(batch.get_partition_ptr(0), batch.n);
             bisect(graphs.back(), l_k * lmax_global, r_k * lmax_global, temp_partition, exec_space);
             partition_t left_id = 0;
             partition_t right_id = l_k;
@@ -142,6 +142,12 @@ namespace GPU_HeiPa {
             exec_space.fence();
             recalculate_block_weights(graphs.back(), map, partition.bweights, exec_space);
         }
+        HostU8 h_active_mask("h_active_mask", batch.k);
+        HostVertex h_bsizes("h_bsizes", batch.k);
+        HostWeight h_lmax_l("h_lmax_l", batch.k);
+        HostWeight h_lmax_r("h_lmax_r", batch.k);
+        HostPartition h_left_strides("h_left_strides", batch.k);
+        HostPartition h_right_strides("h_right_strides", batch.k);
         DeviceU8 active_mask("active_mask", batch.k);
         DeviceWeight lmax_l("lmax_l", batch.k);
         DeviceWeight lmax_r("lmax_r", batch.k);
@@ -150,7 +156,6 @@ namespace GPU_HeiPa {
         UnmanagedDeviceVertex local_ids((vertex_t *) get_chunk_back(mem_stack, sizeof(vertex_t) * g.n), g.n);
         UnmanagedDeviceVertex local_degree((vertex_t *) get_chunk_back(mem_stack, sizeof(vertex_t) * g.n), g.n);
         UnmanagedDeviceVertex bsizes((vertex_t *) get_chunk_back(mem_stack, sizeof(vertex_t) * batch.k), batch.k);
-        UnmanagedDeviceVertex projected_bsizes((vertex_t *) get_chunk_back(mem_stack, sizeof(vertex_t) * batch.k), batch.k);
         std::vector<u8> iteration_active(batch.k);
         while (true) {
             HEIPA_PROFILE_SCOPE("initial_partitioning", "gpu_bisection_partition", "uncontraction_extraction_loop");
@@ -159,25 +164,24 @@ namespace GPU_HeiPa {
                 HEIPA_PROFILE_SCOPE("initial_partitioning", "gpu_bisection_partition", "extraction_inner_loop");
                 do_extract = false;
                 const Mapping *mapping_ptr = mappings.empty() ? nullptr : &mappings.back();
-                calculate_block_sizes(graphs.back(), mapping_ptr, partition.map, bsizes, projected_bsizes, exec_space);
-                Kokkos::deep_copy(exec_space, batch.h_bsizes, bsizes);
-                if (!mappings.empty()) Kokkos::deep_copy(exec_space, batch.h_projected_bsizes, projected_bsizes);
+                calculate_block_sizes(graphs.back(), mapping_ptr, partition.map, bsizes, exec_space);
+                Kokkos::deep_copy(exec_space, h_bsizes, bsizes);
                 exec_space.fence();
-                Kokkos::deep_copy(exec_space, batch.h_active_mask, (u8) 0);
+                Kokkos::deep_copy(exec_space, h_active_mask, (u8) 0);
                 bool any_active = false;
                 std::copy(manager.active.begin(), manager.active.end(), iteration_active.begin());
                 for (partition_t id = 0; id < (partition_t) batch.k; id++) {
                     if (iteration_active[id]) {
                         if (manager.curr_load[id] > 1) {
-                            vertex_t projected_n = mappings.empty() ? batch.h_bsizes(id) : batch.h_projected_bsizes(id);
+                            vertex_t projected_n = h_bsizes(id);
                             if (mappings.empty() || projected_n > threshold) {
                                 partition_t l_k, r_k;
                                 split_into(manager, id, l_k, r_k);
-                                batch.h_active_mask(id) = 1;
-                                batch.h_lmax_l(id) = l_k * lmax_global;
-                                batch.h_lmax_r(id) = r_k * lmax_global;
-                                batch.h_left_strides(id) = id;
-                                batch.h_right_strides(id) = id + l_k;
+                                h_active_mask(id) = 1;
+                                h_lmax_l(id) = l_k * lmax_global;
+                                h_lmax_r(id) = r_k * lmax_global;
+                                h_left_strides(id) = id;
+                                h_right_strides(id) = id + l_k;
                                 split(manager, id, l_k, r_k);
                                 any_active = true;
                                 do_extract = true;
@@ -189,11 +193,11 @@ namespace GPU_HeiPa {
                     }
                 }
                 if (any_active) {
-                    Kokkos::deep_copy(exec_space, active_mask, batch.h_active_mask);
-                    Kokkos::deep_copy(exec_space, lmax_l, batch.h_lmax_l);
-                    Kokkos::deep_copy(exec_space, lmax_r, batch.h_lmax_r);
-                    Kokkos::deep_copy(exec_space, left_strides, batch.h_left_strides);
-                    Kokkos::deep_copy(exec_space, right_strides, batch.h_right_strides);
+                    Kokkos::deep_copy(exec_space, active_mask, h_active_mask);
+                    Kokkos::deep_copy(exec_space, lmax_l, h_lmax_l);
+                    Kokkos::deep_copy(exec_space, lmax_r, h_lmax_r);
+                    Kokkos::deep_copy(exec_space, left_strides, h_left_strides);
+                    Kokkos::deep_copy(exec_space, right_strides, h_right_strides);
                     exec_space.fence();
                     extract_all_subgraphs(graphs.back(), batch, partition, active_mask, local_ids, local_degree, exec_space);
                     // batched_bisect(batch, active_mask, lmax_l, lmax_r, exec_space);
@@ -224,10 +228,9 @@ namespace GPU_HeiPa {
             recalculate_block_weights(graphs.back(), partition.map, partition.bweights, exec_space);
         }
         recalculate_block_weights(graphs.back(), partition.map, partition.bweights, exec_space);
-        pop_back(mem_stack);
-        pop_back(mem_stack);
-        pop_back(mem_stack);
-        pop_back(mem_stack);
+        pop_back(mem_stack); // bsizes
+        pop_back(mem_stack); // local_degree
+        pop_back(mem_stack); // local_ids
         free_GraphBatch(batch, mem_stack);
     }
 }

@@ -137,7 +137,7 @@ namespace GPU_HeiPa {
         Graph coarse_g;
         // initialize graphs
         {
-            HEIPA_PROFILE_SCOPE("contraction", "from_Graph_Mapping_small", "initialize_graph");
+            HEIPA_PROFILE_SCOPE("initial_partitioning", "from_Graph_Mapping_small", "initialize_graph");
 
             coarse_g.n = mapping.coarse_n;
             coarse_g.g_weight = old_g.g_weight;
@@ -154,14 +154,14 @@ namespace GPU_HeiPa {
         UnmanagedDeviceU32 degrees;
 
         {
-            HEIPA_PROFILE_SCOPE("contraction", "from_Graph_Mapping_small", "initialize_helpers");
+            HEIPA_PROFILE_SCOPE("initial_partitioning", "from_Graph_Mapping_small", "initialize_helpers");
             dense_adj = UnmanagedDeviceWeight((weight_t *) get_chunk_back(mem_stack, sizeof(weight_t) * coarse_g.n * coarse_g.n), coarse_g.n * coarse_g.n);
             degrees = UnmanagedDeviceU32((u32 *) get_chunk_back(mem_stack, sizeof(u32) * (coarse_g.n + 1)), coarse_g.n + 1);
             KOKKOS_PROFILE_FENCE(exec_space);
         }
 
         {
-            HEIPA_PROFILE_SCOPE("contraction", "from_Graph_Mapping_small", "initialize_set_0");
+            HEIPA_PROFILE_SCOPE("initial_partitioning", "from_Graph_Mapping_small", "initialize_set_0");
             Kokkos::deep_copy(exec_space, coarse_g.weights, 0);
             Kokkos::deep_copy(exec_space, dense_adj, 0);
             Kokkos::deep_copy(exec_space, degrees, 0);
@@ -169,7 +169,7 @@ namespace GPU_HeiPa {
         }
 
         {
-            HEIPA_PROFILE_SCOPE("contraction", "from_Graph_Mapping_small", "coarse_weights");
+            HEIPA_PROFILE_SCOPE("initial_partitioning", "from_Graph_Mapping_small", "coarse_weights");
             Kokkos::parallel_for("coarse_weights", Kokkos::RangePolicy<DeviceExecutionSpace>(exec_space, 0, old_g.n), KOKKOS_LAMBDA(const vertex_t u) {
                 weight_t u_w = uniform_vw ? 1 : old_g.weights(u);
                 vertex_t v = mapping.mapping(u);
@@ -179,7 +179,7 @@ namespace GPU_HeiPa {
         }
 
         {
-            HEIPA_PROFILE_SCOPE("contraction", "from_Graph_Mapping_small", "fill_dense");
+            HEIPA_PROFILE_SCOPE("initial_partitioning", "from_Graph_Mapping_small", "fill_dense");
             Kokkos::parallel_for("fill_dense", Kokkos::RangePolicy<DeviceExecutionSpace>(exec_space, 0, old_g.m), KOKKOS_LAMBDA(const u32 i) {
                 vertex_t u = old_g.edges_u(i);
                 vertex_t v = old_g.edges_v(i);
@@ -196,7 +196,7 @@ namespace GPU_HeiPa {
         }
 
         {
-            HEIPA_PROFILE_SCOPE("contraction", "from_Graph_Mapping_small", "count_degrees");
+            HEIPA_PROFILE_SCOPE("initial_partitioning", "from_Graph_Mapping_small", "count_degrees");
             Kokkos::parallel_for("count_degrees", Kokkos::RangePolicy<DeviceExecutionSpace>(exec_space, 0, coarse_g.n), KOKKOS_LAMBDA(const vertex_t u) {
                 u32 count = 0;
                 for (vertex_t v = 0; v < coarse_g.n; ++v) {
@@ -208,7 +208,7 @@ namespace GPU_HeiPa {
         }
 
         if (SORT_BY_DEGREE) {
-            HEIPA_PROFILE_SCOPE("contraction", "from_Graph_Mapping_small", "sort_by_degree");
+            HEIPA_PROFILE_SCOPE("initial_partitioning", "from_Graph_Mapping_small", "sort_by_degree");
             
             auto h_degrees = Kokkos::create_mirror_view_and_copy(Kokkos::HostSpace(), degrees);
             
@@ -266,7 +266,7 @@ namespace GPU_HeiPa {
         }
 
         {
-            HEIPA_PROFILE_SCOPE("contraction", "from_Graph_Mapping_small", "prefix_sum_offsets");
+            HEIPA_PROFILE_SCOPE("initial_partitioning", "from_Graph_Mapping_small", "prefix_sum_offsets");
             Kokkos::parallel_for("prefix_sum_offsets", Kokkos::TeamPolicy<DeviceExecutionSpace>(exec_space, 1, Kokkos::AUTO), KOKKOS_LAMBDA(const Kokkos::TeamPolicy<DeviceExecutionSpace>::member_type &team) {
                 Kokkos::parallel_scan(Kokkos::TeamThreadRange(team, coarse_g.n + 1), [&](const u32 i, u32 &running, const bool final) {
                     if (final) coarse_g.neighborhood(i) = running;
@@ -282,7 +282,7 @@ namespace GPU_HeiPa {
         }
 
         {
-            HEIPA_PROFILE_SCOPE("contraction", "from_Graph_Mapping_small", "allocate_edges");
+            HEIPA_PROFILE_SCOPE("initial_partitioning", "from_Graph_Mapping_small", "allocate_edges");
             coarse_g.edges_u = UnmanagedDeviceVertex((vertex_t *) get_chunk_front(mem_stack, sizeof(vertex_t) * coarse_g.m), coarse_g.m);
             coarse_g.edges_v = UnmanagedDeviceVertex((vertex_t *) get_chunk_front(mem_stack, sizeof(vertex_t) * coarse_g.m), coarse_g.m);
             coarse_g.edges_w = UnmanagedDeviceWeight((weight_t *) get_chunk_front(mem_stack, sizeof(weight_t) * coarse_g.m), coarse_g.m);
@@ -290,7 +290,7 @@ namespace GPU_HeiPa {
         }
 
         {
-            HEIPA_PROFILE_SCOPE("contraction", "from_Graph_Mapping_small", "compact_edges_small");
+            HEIPA_PROFILE_SCOPE("initial_partitioning", "from_Graph_Mapping_small", "compact_edges_small");
             Kokkos::parallel_for("compact_edges_small", Kokkos::RangePolicy<DeviceExecutionSpace>(exec_space, 0, coarse_g.n), KOKKOS_LAMBDA(const vertex_t u) {
                 u32 write_idx = coarse_g.neighborhood(u);
                 for (vertex_t v = 0; v < coarse_g.n; ++v) {
@@ -307,7 +307,7 @@ namespace GPU_HeiPa {
         }
 
         {
-            HEIPA_PROFILE_SCOPE("contraction", "from_Graph_Mapping_small", "deallocate");
+            HEIPA_PROFILE_SCOPE("initial_partitioning", "from_Graph_Mapping_small", "deallocate");
             pop_back(mem_stack); // degrees
             pop_back(mem_stack); // dense_adj
             KOKKOS_PROFILE_FENCE(exec_space);

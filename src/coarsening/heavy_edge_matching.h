@@ -15,7 +15,7 @@ namespace GPU_HeiPa {
                                           const weight_t &lmax,
                                           KokkosMemoryStack &mem_stack,
                                           DeviceExecutionSpace &exec_space) {
-        HEIPA_PROFILE_SCOPE("coarsening", "coarsen_match", "heavy_edge_matching_small");
+        HEIPA_PROFILE_SCOPE("initial_partitioning", "coarsen_match", "heavy_edge_matching_small");
 
         u32 seed = 0;
         TwoHopMatcher thm = initialize_two_hop_matcher(g.n, g.m, partition.k, lmax, mem_stack);
@@ -121,7 +121,7 @@ namespace GPU_HeiPa {
 
         Mapping mapping;
         {
-            HEIPA_PROFILE_SCOPE("coarsening", "coarsen_match_small", "build_mapping_fused");
+            HEIPA_PROFILE_SCOPE("initial_partitioning", "coarsen_match_small", "build_mapping_fused");
 
             UnmanagedDeviceU32 d_nc = UnmanagedDeviceU32((u32 *) get_chunk_back(mem_stack, sizeof(u32) * 1), 1);
 
@@ -168,78 +168,6 @@ namespace GPU_HeiPa {
 
         free_TwoHopMatcher(thm, mem_stack);
         
-        return mapping;
-    }
-
-    template<bool uniform_v_weights, bool uniform_e_weights>
-    inline Mapping two_hop_matcher_get_mapping_small(const Graph &g,
-                                                     const Partition &partition,
-                                                     const weight_t &lmax,
-                                                     KokkosMemoryStack &mem_stack,
-                                                     DeviceExecutionSpace &exec_space) {
-        TwoHopMatcher thm = initialize_two_hop_matcher(g.n, g.m, partition.k, lmax, mem_stack);
-
-        {
-            HEIPA_PROFILE_SCOPE("coarsening", "coarsen_match_small", "reset");
-            Kokkos::deep_copy(exec_space, thm.vcmap, SENTINEL);
-            Kokkos::deep_copy(exec_space, thm.hn, SENTINEL);
-        }
-
-        heavy_edge_matching_small<uniform_e_weights>(g, thm, 12345u, exec_space);
-
-        Mapping mapping;
-        {
-            HEIPA_PROFILE_SCOPE("coarsening", "coarsen_match_small", "build_mapping_fused");
-
-            // For small graphs, we can fuse singletons, set_coarse_ids, prop_coarse_ids, and mapping copy
-            // Since set_coarse_ids needs a prefix sum, we can do it in a single TeamPolicy kernel
-            UnmanagedDeviceU32 d_nc = UnmanagedDeviceU32((u32 *) get_chunk_back(mem_stack, sizeof(u32) * 1), 1);
-
-            Kokkos::parallel_for("build_mapping_fused", Kokkos::TeamPolicy<DeviceExecutionSpace>(exec_space, 1, Kokkos::AUTO), KOKKOS_LAMBDA(const TeamMember &team) {
-                // 1. Singletons
-                Kokkos::parallel_for(Kokkos::TeamThreadRange(team, g.n), [&](const vertex_t i) {
-                    if (thm.vcmap(i) == SENTINEL) thm.vcmap(i) = i;
-                });
-                team.team_barrier();
-
-                // 2. Set coarse ids (block scan)
-                Kokkos::parallel_scan(Kokkos::TeamThreadRange(team, g.n), [&](const vertex_t i, vertex_t &update, const bool final) {
-                    if (thm.vcmap(i) == i) {
-                        if (final) thm.vcmap(i) = update;
-                        update++;
-                    } else if (final) {
-                        thm.vcmap(i) += g.n;
-                    }
-                    if (final && i == g.n - 1) {
-                        if (thm.vcmap(i) < g.n) d_nc(0) = update;
-                        else d_nc(0) = update; // update has the total count of coarse vertices
-                    }
-                });
-                team.team_barrier();
-
-                // 3. Propagate coarse ids
-                Kokkos::parallel_for(Kokkos::TeamThreadRange(team, g.n), [&](const vertex_t i) {
-                    if (thm.vcmap(i) >= g.n) thm.vcmap(i) = thm.vcmap(thm.vcmap(i) - g.n);
-                });
-            });
-
-            u32 nc;
-            Kokkos::deep_copy(exec_space, nc, Kokkos::subview(d_nc, 0));
-
-            mapping = initialize_mapping(g.n, nc, mem_stack);
-
-            Kokkos::parallel_for("copy_mapping_small", Kokkos::RangePolicy<DeviceExecutionSpace>(exec_space, 0, g.n), KOKKOS_LAMBDA(const vertex_t u) {
-                mapping.mapping(u) = thm.vcmap(u);
-            });
-
-            pop_back(mem_stack); // d_nc
-        }
-
-        {
-            HEIPA_PROFILE_SCOPE("coarsening", "coarsen_match_small", "free");
-            free_TwoHopMatcher(thm, mem_stack);
-        }
-
         return mapping;
     }
 }
