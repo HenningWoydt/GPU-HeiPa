@@ -144,8 +144,7 @@ namespace GPU_HeiPa {
         UnmanagedDeviceVertex bsizes((vertex_t *) get_chunk_back(mem_stack, sizeof(vertex_t) * batch.k), batch.k);
 
         UnmanagedDeviceU8 active_mask((u8 *) get_chunk_back(mem_stack, sizeof(u8) * batch.k), batch.k);
-        UnmanagedDeviceWeight left_lmax((weight_t *) get_chunk_back(mem_stack, sizeof(weight_t) * batch.k), batch.k);
-        UnmanagedDeviceWeight right_lmax((weight_t *) get_chunk_back(mem_stack, sizeof(weight_t) * batch.k), batch.k);
+
         UnmanagedDeviceU32 current_targets_dev((u32 *) get_chunk_back(mem_stack, sizeof(u32) * batch.k), batch.k);
 
         HEIPA_PROFILE_SCOPE("initial_partitioning", "gpu_rb_partition", "recalculate_block_weights");
@@ -167,6 +166,15 @@ namespace GPU_HeiPa {
             calculate_block_sizes(graphs.back(), mappings.empty() ? nullptr : &mappings.back(), partition.map, bsizes, exec_space);
             KOKKOS_PROFILE_FENCE(exec_space);
 
+            auto offset_n = batch.offset_n;
+            Kokkos::parallel_scan("scan_offsets", Kokkos::RangePolicy<DeviceExecutionSpace>(exec_space, 0, k), KOKKOS_LAMBDA(const partition_t id, vertex_t &running, bool final) {
+                if (final) {
+                    offset_n(id) = running;
+                }
+                running += bsizes(id);
+            });
+            KOKKOS_PROFILE_FENCE(exec_space);
+
             HEIPA_PROFILE_SCOPE("initial_partitioning", "gpu_rb_partition", "get_active");
             u32 split_needed_int = 0;
             bool is_mapping_empty = mappings.empty();
@@ -185,13 +193,7 @@ namespace GPU_HeiPa {
                 }
                 active_mask(id) = active ? 1 : 0;
 
-                if (active) {
-                    partition_t tk = current_targets_dev(id);
-                    partition_t lk = tk / 2;
-                    partition_t rk = tk - lk;
-                    left_lmax(id) = lmax_global * lk;
-                    right_lmax(id) = lmax_global * rk;
-                }
+
 
                 if (active) local_split = 1;
             }, Kokkos::Max<u32>(split_needed_int));
@@ -208,10 +210,10 @@ namespace GPU_HeiPa {
                 bool g_uvw = graphs.back().uniform_vertex_weights;
                 bool g_uew = graphs.back().uniform_edge_weights;
 
-                if (g_uvw && g_uew) batched_brute_force_bisect<true, true>(batch, active_mask, left_lmax, right_lmax, mem_stack, exec_space);
-                else if (g_uvw) batched_brute_force_bisect<true, false>(batch, active_mask, left_lmax, right_lmax, mem_stack, exec_space);
-                else if (g_uew) batched_brute_force_bisect<false, true>(batch, active_mask, left_lmax, right_lmax, mem_stack, exec_space);
-                else batched_brute_force_bisect<false, false>(batch, active_mask, left_lmax, right_lmax, mem_stack, exec_space);
+                if (g_uvw && g_uew) batched_brute_force_bisect<true, true>(batch, active_mask, current_targets_dev, lmax_global, mem_stack, exec_space);
+                else if (g_uvw) batched_brute_force_bisect<true, false>(batch, active_mask, current_targets_dev, lmax_global, mem_stack, exec_space);
+                else if (g_uew) batched_brute_force_bisect<false, true>(batch, active_mask, current_targets_dev, lmax_global, mem_stack, exec_space);
+                else batched_brute_force_bisect<false, false>(batch, active_mask, current_targets_dev, lmax_global, mem_stack, exec_space);
                 KOKKOS_PROFILE_FENCE(exec_space);
 
                 HEIPA_PROFILE_SCOPE("initial_partitioning", "gpu_rb_partition", "insert_solution");
@@ -227,7 +229,7 @@ namespace GPU_HeiPa {
                         partition_t lk = tk / 2;
                         partition_t rk = tk - lk;
 
-                        vertex_t sub_n = d_actual_n(id) > 0 ? d_actual_n(id) : batch.n;
+                        vertex_t sub_n = d_actual_n(id);
                         partition_t *sub_part_ptr = batch.get_partition_ptr(id);
                         vertex_t *sub_global_ids_ptr = batch.get_global_ids_ptr(id);
 
@@ -281,8 +283,6 @@ namespace GPU_HeiPa {
 
         // Cleanup
         pop_back(mem_stack); // current_targets_dev
-        pop_back(mem_stack); // right_lmax
-        pop_back(mem_stack); // left_lmax
         pop_back(mem_stack); // active_mask
         pop_back(mem_stack); // bsizes
         pop_back(mem_stack); // local_degree

@@ -72,7 +72,7 @@ namespace GPU_HeiPa {
         KOKKOS_INLINE_FUNCTION BestBisectReducer(value_type &val) : value(&val) {
         }
 
-        KOKKOS_INLINE_FUNCTION BestBisectReducer(result_view_type view) : value(view.data()) {
+        KOKKOS_INLINE_FUNCTION BestBisectReducer(const result_view_type& view) : value(view.data()) {
         }
 
         KOKKOS_INLINE_FUNCTION value_type &reference() const { return *value; }
@@ -84,11 +84,11 @@ namespace GPU_HeiPa {
 
     template<bool uvw, bool uew, int CHUNK>
     inline void brute_force_bisect_async(const Graph &g,
-                                         UnmanagedDeviceWeight left_lmax,
-                                         UnmanagedDeviceWeight right_lmax,
+                                         const UnmanagedDeviceWeight& left_lmax,
+                                         const UnmanagedDeviceWeight& right_lmax,
                                          partition_t id,
                                          UnmanagedDevicePartition &partition_map,
-                                         Kokkos::View<BestBisectConfig, DeviceMemorySpace, Kokkos::MemoryTraits<Kokkos::Unmanaged> > result_view,
+                                         const Kokkos::View<BestBisectConfig, DeviceMemorySpace, Kokkos::MemoryTraits<Kokkos::Unmanaged> >& result_view,
                                          DeviceExecutionSpace &exec_space) {
         if (g.n == 0) return;
         if (g.n == 1) {
@@ -257,6 +257,7 @@ namespace GPU_HeiPa {
 
 
         UnmanagedDeviceVertex d_actual_n;
+        UnmanagedDeviceVertex offset_n;
         UnmanagedDeviceVertex d_actual_m;
         UnmanagedDeviceWeight d_actual_g_weight;
 
@@ -264,15 +265,13 @@ namespace GPU_HeiPa {
         Kokkos::View<BestBisectConfig *, DeviceMemorySpace> d_bisection_results;
         KOKKOS_INLINE_FUNCTION
         partition_t *get_partition_ptr(partition_t id) const {
-            u64 n_bytes_partition = round_up_64(n) * sizeof(partition_t);
-            u64 memory_offset = (u64) id * n_bytes_partition;
+            u64 memory_offset = (u64) offset_n(id) * sizeof(partition_t);
             return (partition_t *) (partition_memory.data() + memory_offset);
         }
 
         KOKKOS_INLINE_FUNCTION
         vertex_t *get_global_ids_ptr(partition_t id) const {
-            u64 n_bytes_global_ids = round_up_64(n) * sizeof(vertex_t);
-            u64 memory_offset = (u64) id * n_bytes_global_ids;
+            u64 memory_offset = (u64) offset_n(id) * sizeof(vertex_t);
             return (vertex_t *) (global_ids_memory.data() + memory_offset);
         }
     };
@@ -284,7 +283,7 @@ namespace GPU_HeiPa {
         batch.n = g.n;
         batch.m = g.m;
         batch.k = k;
-        
+
 
         u64 n_bytes_weights = round_up_64(g.n) * sizeof(weight_t);
         u64 n_bytes_neighborhood = round_up_64(g.n + 1) * sizeof(u32);
@@ -295,21 +294,19 @@ namespace GPU_HeiPa {
         u64 n_bytes_graph_total = (u64) batch.k * n_bytes_one_graph;
         batch.graph_memory = UnmanagedDeviceU8((u8 *) get_chunk_front(mem_stack, sizeof(u8) * n_bytes_graph_total), n_bytes_graph_total);
 
-        u64 n_bytes_partition = round_up_64(g.n) * sizeof(partition_t);
-        u64 n_bytes_partition_total = (u64) batch.k * n_bytes_partition;
+        u64 n_bytes_partition_total = round_up_64(g.n) * sizeof(partition_t);
         batch.partition_memory = UnmanagedDeviceU8((u8 *) get_chunk_front(mem_stack, sizeof(u8) * n_bytes_partition_total), n_bytes_partition_total);
 
-        u64 n_bytes_global_ids = round_up_64(g.n) * sizeof(vertex_t);
-        u64 n_bytes_global_ids_total = (u64) batch.k * n_bytes_global_ids;
+        u64 n_bytes_global_ids_total = round_up_64(g.n) * sizeof(vertex_t);
         batch.global_ids_memory = UnmanagedDeviceU8((u8 *) get_chunk_front(mem_stack, sizeof(u8) * n_bytes_global_ids_total), n_bytes_global_ids_total);
 
 
         batch.d_actual_n = UnmanagedDeviceVertex((vertex_t *) get_chunk_front(mem_stack, sizeof(vertex_t) * batch.k), batch.k);
+        batch.offset_n = UnmanagedDeviceVertex((vertex_t *) get_chunk_front(mem_stack, sizeof(vertex_t) * batch.k), batch.k);
         batch.d_actual_m = UnmanagedDeviceVertex((vertex_t *) get_chunk_front(mem_stack, sizeof(vertex_t) * batch.k), batch.k);
         batch.d_actual_g_weight = UnmanagedDeviceWeight((weight_t *) get_chunk_front(mem_stack, sizeof(weight_t) * batch.k), batch.k);
 
         batch.d_bisection_results = Kokkos::View<BestBisectConfig *, DeviceMemorySpace>("d_bisection_results", batch.k);
-
     }
 
     inline void free_GraphBatch(GraphBatch &batch,
@@ -320,10 +317,8 @@ namespace GPU_HeiPa {
         pop_front(mem_stack);
         pop_front(mem_stack);
         pop_front(mem_stack);
+        pop_front(mem_stack);
     }
-
-
-
 
 
     inline void extract_all_subgraphs(const Graph &g,
@@ -361,7 +356,7 @@ namespace GPU_HeiPa {
             if (use_mask && !active_mask(id)) return;
             vertex_t local_u = Kokkos::atomic_fetch_add(&d_actual_n(id), 1);
             local_ids(u) = local_u;
-            vertex_t *g_ids_ptr = (vertex_t *) (global_ids_memory.data() + (u64) id * n_bytes_global_ids);
+            vertex_t *g_ids_ptr = batch.get_global_ids_ptr(id);
             g_ids_ptr[local_u] = u;
             weight_t *weights_ptr = (weight_t *) (graph_memory.data() + (u64) id * n_bytes_one_graph);
             weights_ptr[local_u] = g_uvw ? 1 : g_weights(u);
@@ -384,22 +379,22 @@ namespace GPU_HeiPa {
         // 1. Batched block neighborhood scan
         typedef Kokkos::TeamPolicy<DeviceExecutionSpace> TeamPolicy;
         typedef TeamPolicy::member_type TeamMember;
-        
+
         Kokkos::parallel_for("batched_block_neighborhood_scan", TeamPolicy(exec_space, k, Kokkos::AUTO), KOKKOS_LAMBDA(const TeamMember &team) {
             partition_t id = team.league_rank();
             vertex_t sub_n = d_actual_n(id);
             if (sub_n == 0) return;
-            
+
             u32 *sub_g_neighborhood = (u32 *) (graph_memory.data() + (u64) id * n_bytes_one_graph + n_bytes_weights);
-            vertex_t *g_ids_ptr = (vertex_t *) (global_ids_memory.data() + (u64) id * n_bytes_global_ids);
-            
+            vertex_t *g_ids_ptr = batch.get_global_ids_ptr(id);
+
             u32 total_m = 0;
             Kokkos::parallel_scan(Kokkos::TeamThreadRange(team, sub_n), [&](const vertex_t local_u, u32 &running, bool final) {
                 u32 deg = local_degree(g_ids_ptr[local_u]);
                 if (final) sub_g_neighborhood[local_u] = running;
                 running += deg;
             }, total_m);
-            
+
             if (team.team_rank() == 0) {
                 sub_g_neighborhood[sub_n] = total_m;
                 d_actual_m(id) = total_m;
@@ -428,20 +423,20 @@ namespace GPU_HeiPa {
                 }
             }
         });
-        
+
         // 2. Batched subgraph weight sum
         Kokkos::parallel_for("batched_sum_subgraph_weight", TeamPolicy(exec_space, k, Kokkos::AUTO), KOKKOS_LAMBDA(const TeamMember &team) {
             partition_t id = team.league_rank();
             vertex_t sub_n = d_actual_n(id);
             if (sub_n == 0) return;
-            
+
             weight_t *sub_g_weights = (weight_t *) (graph_memory.data() + (u64) id * n_bytes_one_graph);
-            
+
             weight_t local_sum = 0;
             Kokkos::parallel_reduce(Kokkos::TeamThreadRange(team, sub_n), [&](const vertex_t local_u, weight_t &lsum) {
                 lsum += sub_g_weights[local_u];
             }, local_sum);
-            
+
             if (team.team_rank() == 0) {
                 d_actual_g_weight(id) = local_sum;
             }
@@ -454,25 +449,25 @@ namespace GPU_HeiPa {
     template<bool uvw, bool uew>
     inline void batched_brute_force_bisect(const GraphBatch &batch,
                                            const DeviceU8 &active_mask,
-                                           const DeviceWeight &left_lmax,
-                                           const DeviceWeight &right_lmax,
+                                           const DeviceU32 &current_targets_dev,
+                                           weight_t lmax_global,
                                            KokkosMemoryStack &mem_stack,
                                            DeviceExecutionSpace &exec_space) {
         HEIPA_PROFILE_SCOPE("initial_partitioning", "gpu_rb_partition", "batched_brute_force_bisect");
-        
+
         // --- Hyperparameters ---
         // Number of threads per Kokkos team on the GPU. Affects parallelism and register/shared memory usage.
-        const int TEAM_SIZE = 256;
+        constexpr int TEAM_SIZE = 256;
         // High penalty added to configurations that result in an empty partition block (0 weight on one side).
-        const u64 EMPTY_BLOCK_PENALTY = 1000000000000ULL;
+        constexpr u64 EMPTY_BLOCK_PENALTY = 1000000000000ULL;
         // The number of partition configurations (Gray code steps) each thread evaluates sequentially.
-        const int CHUNK = 128 * 4;
+        constexpr int CHUNK = 128 * 4;
         // -----------------------
         const u32 k = batch.k;
 
-        UnmanagedDeviceU32 teams_per_graph((u32*) get_chunk_back(mem_stack, sizeof(u32) * k), k);
-        UnmanagedDeviceU32 teams_offset((u32*) get_chunk_back(mem_stack, sizeof(u32) * (k + 1)), k + 1);
-        UnmanagedDeviceU32 max_sizes((u32*) get_chunk_back(mem_stack, sizeof(u32) * 2), 2);
+        UnmanagedDeviceU32 teams_per_graph((u32 *) get_chunk_back(mem_stack, sizeof(u32) * k), k);
+        UnmanagedDeviceU32 teams_offset((u32 *) get_chunk_back(mem_stack, sizeof(u32) * (k + 1)), k + 1);
+        UnmanagedDeviceU32 max_sizes((u32 *) get_chunk_back(mem_stack, sizeof(u32) * 2), 2);
         Kokkos::deep_copy(exec_space, max_sizes, 0);
 
         auto d_actual_n = batch.d_actual_n;
@@ -532,7 +527,7 @@ namespace GPU_HeiPa {
             return;
         }
 
-        Kokkos::View<BestBisectConfig*, DeviceMemorySpace, Kokkos::MemoryTraits<Kokkos::Unmanaged>> team_results((BestBisectConfig*) get_chunk_back(mem_stack, sizeof(BestBisectConfig) * total_teams), total_teams);
+        Kokkos::View<BestBisectConfig *, DeviceMemorySpace, Kokkos::MemoryTraits<Kokkos::Unmanaged> > team_results((BestBisectConfig *) get_chunk_back(mem_stack, sizeof(BestBisectConfig) * total_teams), total_teams);
 
         HEIPA_PROFILE_SCOPE("initial_partitioning", "gpu_rb_partition", "bisect_kernel");
         typedef Kokkos::View<u32 *, DeviceExecutionSpace::scratch_memory_space, Kokkos::MemoryTraits<Kokkos::Unmanaged> > ScratchU32;
@@ -586,15 +581,16 @@ namespace GPU_HeiPa {
             const u32 local_team_rank = global_rank - teams_offset(graph_id);
             const vertex_t gn = d_actual_n(graph_id);
             const u32 gm = d_actual_m(graph_id);
-            const weight_t lmax_left = left_lmax(graph_id);
-            const weight_t lmax_right = right_lmax(graph_id);
+            const partition_t tk = current_targets_dev(graph_id);
+            const weight_t lmax_left = lmax_global * (tk / 2);
+            const weight_t lmax_right = lmax_global * (tk - tk / 2);
             const weight_t g_weight = d_actual_g_weight(graph_id);
             const vertex_t last = gn - 1;
             const u64 num_configs = 1ULL << last;
 
-        typedef Kokkos::View<u32 *, DeviceExecutionSpace::scratch_memory_space, Kokkos::MemoryTraits<Kokkos::Unmanaged> > ScratchU32;
-        typedef Kokkos::View<vertex_t *, DeviceExecutionSpace::scratch_memory_space, Kokkos::MemoryTraits<Kokkos::Unmanaged> > ScratchVertex;
-        typedef Kokkos::View<weight_t *, DeviceExecutionSpace::scratch_memory_space, Kokkos::MemoryTraits<Kokkos::Unmanaged> > ScratchWeight;
+            typedef Kokkos::View<u32 *, DeviceExecutionSpace::scratch_memory_space, Kokkos::MemoryTraits<Kokkos::Unmanaged> > ScratchU32;
+            typedef Kokkos::View<vertex_t *, DeviceExecutionSpace::scratch_memory_space, Kokkos::MemoryTraits<Kokkos::Unmanaged> > ScratchVertex;
+            typedef Kokkos::View<weight_t *, DeviceExecutionSpace::scratch_memory_space, Kokkos::MemoryTraits<Kokkos::Unmanaged> > ScratchWeight;
 
             ScratchU32 s_neigh(team.team_scratch(0), gn + 1);
             ScratchVertex s_edges_u(team.team_scratch(0), gm);
