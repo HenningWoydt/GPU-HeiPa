@@ -39,6 +39,8 @@
 #include "../datastructures/kokkos_memory_stack.h"
 #include "../coarsening/two_hop_matching.h"
 #include "../coarsening/dumb_matching.h"
+#include "../coarsening/heavy_edge_matching.h"
+#include "../coarsening/independent_edge_set.h"
 #include "../refinement/greedy_refinement.h"
 #include "../refinement/jet_label_propagation.h"
 #include "../utility/edge_cut.h"
@@ -109,26 +111,20 @@ namespace GPU_HeiPa {
 
             auto sp1 = get_time_point();
 
-            // if (graphs.back().n <= 2000) {
-            //     mappings.push_back(dumb_matcher_get_mapping<false>(graphs.back(), partition, lmax_global, mem_stack, exec_space));
-            // } else {
-            mappings.push_back(two_hop_matcher_get_mapping<false, false>(graphs.back(), partition, lmax_global, mem_stack, exec_space));
-            // }
-            exec_space.fence();
+            mappings.push_back(heavy_edge_matching_small_get_mapping<false, false>(graphs.back(), partition, lmax_global, mem_stack, exec_space));
+            // mappings.push_back(independent_edge_set_get_mapping<false, false>(graphs.back(), partition, lmax_global, mem_stack, exec_space));
+            KOKKOS_PROFILE_FENCE(exec_space);
 
             auto sp2 = get_time_point();
 
-            if (graphs.back().n <= 2000) {
-                graphs.push_back(from_Graph_Mapping_small<false, false>(graphs.back(), mappings.back(), mem_stack, exec_space));
-            } else {
-                graphs.push_back(from_Graph_Mapping<false, false>(graphs.back(), mappings.back(), mem_stack, exec_space));
-            }
-            exec_space.fence();
+            graphs.push_back(from_Graph_Mapping_small<false, false>(graphs.back(), mappings.back(), mem_stack, exec_space));
+
+            KOKKOS_PROFILE_FENCE(exec_space);
 
             auto sp3 = get_time_point();
 
             contract(partition, mappings.back(), exec_space);
-            exec_space.fence();
+            KOKKOS_PROFILE_FENCE(exec_space);
 
             auto sp4 = get_time_point();
 
@@ -154,10 +150,6 @@ namespace GPU_HeiPa {
         Kokkos::parallel_for("init_targets", Kokkos::RangePolicy<DeviceExecutionSpace>(exec_space, 0, 1), KOKKOS_LAMBDA(const int) {
             current_targets_dev(0) = k;
         });
-
-        // Initialize partition map on coarsest graph to all 0
-        auto map = partition.map;
-        Kokkos::deep_copy(exec_space, map, 0);
 
         // Scratch for extraction
         UnmanagedDeviceVertex local_ids((vertex_t *) get_chunk_back(mem_stack, sizeof(vertex_t) * g.n), g.n);
@@ -208,7 +200,6 @@ namespace GPU_HeiPa {
             KOKKOS_PROFILE_FENCE(exec_space);
 
             if (split_needed) {
-
                 HEIPA_PROFILE_SCOPE("initial_partitioning", "gpu_rb_partition", "extract_graphs");
                 extract_all_subgraphs(graphs.back(), batch, partition, active_mask, local_ids, local_degree, exec_space);
                 KOKKOS_PROFILE_FENCE(exec_space);
@@ -280,12 +271,8 @@ namespace GPU_HeiPa {
 
                 assert_state_after_partition(graphs.back(), partition, k, exec_space);
 
-                // refine_small_graph(graphs.back(), partition, small_graph_refinement, lmax_global, mem_stack, exec_space);
-
                 continue;
             }
-
-            // refine_small_graph(graphs.back(), partition, small_graph_refinement, lmax_global, mem_stack, exec_space);
 
             break;
         }

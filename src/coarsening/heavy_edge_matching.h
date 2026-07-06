@@ -9,16 +9,20 @@
 #include "two_hop_matching.h"
 
 namespace GPU_HeiPa {
-
-    template<bool uniform_e_weights>
-    inline void heavy_edge_matching_small(const Graph &g,
-                                          TwoHopMatcher &thm,
-                                          u32 seed,
+    template<bool uniform_v_weights, bool uniform_e_weights>
+    inline Mapping heavy_edge_matching_small_get_mapping(const Graph &g,
+                                          const Partition &partition,
+                                          const weight_t &lmax,
+                                          KokkosMemoryStack &mem_stack,
                                           DeviceExecutionSpace &exec_space) {
         HEIPA_PROFILE_SCOPE("coarsening", "coarsen_match", "heavy_edge_matching_small");
 
+        u32 seed = 0;
+        TwoHopMatcher thm = initialize_two_hop_matcher(g.n, g.m, partition.k, lmax, mem_stack);
+        Kokkos::deep_copy(exec_space, thm.vcmap, SENTINEL);
+        Kokkos::deep_copy(exec_space, thm.hn, SENTINEL);
+
         Kokkos::parallel_for("hem_small", Kokkos::TeamPolicy<DeviceExecutionSpace>(exec_space, 1, Kokkos::AUTO), KOKKOS_LAMBDA(const TeamMember &team) {
-            
             // 1. Initial pick
             Kokkos::parallel_for(Kokkos::TeamThreadRange(team, g.n), [&](const vertex_t u) {
                 vertex_t h = SENTINEL;
@@ -50,9 +54,9 @@ namespace GPU_HeiPa {
             team.team_barrier();
 
             // Main matching loop - fixed 10 iterations max for small graphs
-            for(u32 round = 0; round < 10; ++round) {
+            for (u32 round = 0; round < 10; ++round) {
                 u32 round_seed = seed ^ (round * 0x9e3779b1u);
-                
+
                 // 4 sub-rounds of commit
                 for (u32 r = 0; r < 4; r++) {
                     Kokkos::parallel_for(Kokkos::TeamThreadRange(team, g.n), [&](const vertex_t u) {
@@ -84,7 +88,7 @@ namespace GPU_HeiPa {
                 // Repick for unmatched
                 Kokkos::parallel_for(Kokkos::TeamThreadRange(team, g.n), [&](const vertex_t u) {
                     if (thm.vcmap(u) != SENTINEL || thm.hn(u) == SENTINEL || thm.vcmap(thm.hn(u)) == SENTINEL) return;
-                    
+
                     vertex_t h = SENTINEL;
                     weight_t max_ewt = 0;
                     u32 r = xorshiftHash(u ^ round_seed);
@@ -114,6 +118,57 @@ namespace GPU_HeiPa {
                 team.team_barrier();
             }
         });
+
+        Mapping mapping;
+        {
+            HEIPA_PROFILE_SCOPE("coarsening", "coarsen_match_small", "build_mapping_fused");
+
+            UnmanagedDeviceU32 d_nc = UnmanagedDeviceU32((u32 *) get_chunk_back(mem_stack, sizeof(u32) * 1), 1);
+
+            Kokkos::parallel_for("build_mapping_fused", Kokkos::TeamPolicy<DeviceExecutionSpace>(exec_space, 1, Kokkos::AUTO), KOKKOS_LAMBDA(const TeamMember &team) {
+                // 1. Singletons
+                Kokkos::parallel_for(Kokkos::TeamThreadRange(team, g.n), [&](const vertex_t i) {
+                    if (thm.vcmap(i) == SENTINEL) thm.vcmap(i) = i;
+                });
+                team.team_barrier();
+
+                // 2. Set coarse ids (block scan)
+                Kokkos::parallel_scan(Kokkos::TeamThreadRange(team, g.n), [&](const vertex_t i, vertex_t &update, const bool final) {
+                    if (thm.vcmap(i) == i) {
+                        if (final) thm.vcmap(i) = update;
+                        update++;
+                    } else if (final) {
+                        thm.vcmap(i) += g.n;
+                    }
+                    if (final && i == g.n - 1) {
+                        d_nc(0) = update;
+                    }
+                });
+                team.team_barrier();
+
+                // 3. Propagate coarse ids
+                Kokkos::parallel_for(Kokkos::TeamThreadRange(team, g.n), [&](const vertex_t i) {
+                    if (thm.vcmap(i) >= g.n) thm.vcmap(i) = thm.vcmap(thm.vcmap(i) - g.n);
+                });
+            });
+
+            u32 nc;
+            Kokkos::deep_copy(exec_space, nc, Kokkos::subview(d_nc, 0));
+
+            mapping = initialize_mapping(g.n, nc, mem_stack);
+
+            Kokkos::parallel_for("copy_mapping_small", Kokkos::RangePolicy<DeviceExecutionSpace>(exec_space, 0, g.n), KOKKOS_LAMBDA(const vertex_t u) {
+                mapping.mapping(u) = thm.vcmap(u);
+            });
+
+            pop_back(mem_stack); // d_nc
+        }
+
+        KOKKOS_PROFILE_FENCE(exec_space);
+
+        free_TwoHopMatcher(thm, mem_stack);
+        
+        return mapping;
     }
 
     template<bool uniform_v_weights, bool uniform_e_weights>
@@ -135,11 +190,11 @@ namespace GPU_HeiPa {
         Mapping mapping;
         {
             HEIPA_PROFILE_SCOPE("coarsening", "coarsen_match_small", "build_mapping_fused");
-            
+
             // For small graphs, we can fuse singletons, set_coarse_ids, prop_coarse_ids, and mapping copy
             // Since set_coarse_ids needs a prefix sum, we can do it in a single TeamPolicy kernel
             UnmanagedDeviceU32 d_nc = UnmanagedDeviceU32((u32 *) get_chunk_back(mem_stack, sizeof(u32) * 1), 1);
-            
+
             Kokkos::parallel_for("build_mapping_fused", Kokkos::TeamPolicy<DeviceExecutionSpace>(exec_space, 1, Kokkos::AUTO), KOKKOS_LAMBDA(const TeamMember &team) {
                 // 1. Singletons
                 Kokkos::parallel_for(Kokkos::TeamThreadRange(team, g.n), [&](const vertex_t i) {
@@ -170,13 +225,13 @@ namespace GPU_HeiPa {
 
             u32 nc;
             Kokkos::deep_copy(exec_space, nc, Kokkos::subview(d_nc, 0));
-            
+
             mapping = initialize_mapping(g.n, nc, mem_stack);
-            
+
             Kokkos::parallel_for("copy_mapping_small", Kokkos::RangePolicy<DeviceExecutionSpace>(exec_space, 0, g.n), KOKKOS_LAMBDA(const vertex_t u) {
                 mapping.mapping(u) = thm.vcmap(u);
             });
-            
+
             pop_back(mem_stack); // d_nc
         }
 
@@ -187,8 +242,6 @@ namespace GPU_HeiPa {
 
         return mapping;
     }
-
 }
 
 #endif
-

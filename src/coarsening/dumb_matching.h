@@ -10,7 +10,7 @@
 
 namespace GPU_HeiPa {
 
-    template<bool uniform_e_weights>
+    template<bool uniform_e_weights, bool constrain_partition = false>
     inline Mapping dumb_matcher_get_mapping(const Graph &g,
                                             const Partition &partition,
                                             const weight_t &lmax,
@@ -44,6 +44,9 @@ namespace GPU_HeiPa {
                     for (u32 j = g.neighborhood(u); j < g.neighborhood(u + 1); j++) {
                         vertex_t v = g.edges_v(j);
                         if (vcmap(v) == SENTINEL) {
+                            if (constrain_partition) {
+                                if (partition.map(u) != partition.map(v)) continue;
+                            }
                             weight_t wt = uniform_e_weights ? 1 : g.edges_w(j);
                             if (wt > max_wt) {
                                 max_wt = wt;
@@ -85,6 +88,9 @@ namespace GPU_HeiPa {
                         for (u32 k = g.neighborhood(v); k < g.neighborhood(v + 1); k++) {
                             vertex_t w = g.edges_v(k);
                             if (w != u && vcmap(w) == SENTINEL) {
+                                if (constrain_partition) {
+                                    if (partition.map(u) != partition.map(w)) continue;
+                                }
                                 best_v = w;
                                 break;
                             }

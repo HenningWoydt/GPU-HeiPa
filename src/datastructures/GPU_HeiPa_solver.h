@@ -40,8 +40,8 @@
 #include "../coarsening/two_hop_matching.h"
 #include "../refinement/jet_label_propagation.h"
 #include "../initial_partitioning/kway_partitioner/kway_core.h"
-#include "../initial_partitioning/gpu_recursive_bisection.h"
 #include "../initial_partitioning/metis_wrapper.h"
+#include "../initial_partitioning/gpu_rb_partition.h"
 #include "../definitions.h"
 #include "../GPU_HeiPa_configuration.h"
 #include "../utility/profiler.h"
@@ -340,7 +340,7 @@ namespace GPU_HeiPa {
         void internal_solve(HostGraph &host_g, KokkosMemoryStack &mem_stack) {
             initialize(host_g, mem_stack);
 
-            partition_t c = 28;
+            partition_t c = 16;
             if (config.initial_partitioning == "kway") { c = 8; }
             if (config.initial_partitioning == "metis") { c = 8; }
             const partition_t max_n = c * k;
@@ -480,7 +480,7 @@ namespace GPU_HeiPa {
             if (config.initial_partitioning == "kway") {
                 kway_partition(graphs.back(), (int) k, config.imbalance, config.seed, partition, exec_space);
             } else if (config.initial_partitioning == "gpu_bisection") {
-                gpu_rb_partition(graphs.back(), k, config.imbalance, config.seed, 28, partition, mem_stack, exec_space);
+                gpu_rb_partition(graphs.back(), k, config.imbalance, config.seed, 16, partition, mem_stack, exec_space);
             } else if (config.initial_partitioning == "metis") {
                 metis_partition(graphs.back(), (int) k, config.imbalance, config.seed, partition, exec_space);
             } else {
