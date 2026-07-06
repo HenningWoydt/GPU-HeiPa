@@ -125,6 +125,198 @@ namespace GPU_HeiPa {
     }
 
     template<bool uniform_vw, bool uniform_ew>
+    inline Graph from_Graph_Mapping_small(const Graph &old_g,
+                                          const Mapping &mapping,
+                                          KokkosMemoryStack &mem_stack,
+                                          DeviceExecutionSpace &exec_space) {
+        // --- Hyperparameters ---
+        // Sort coarse vertices by degree (ascending). Significantly speeds up brute-force bisection later.
+        const bool SORT_BY_DEGREE = true;
+        // -----------------------
+        
+        Graph coarse_g;
+        // initialize graphs
+        {
+            HEIPA_PROFILE_SCOPE("contraction", "from_Graph_Mapping_small", "initialize_graph");
+
+            coarse_g.n = mapping.coarse_n;
+            coarse_g.g_weight = old_g.g_weight;
+            coarse_g.uniform_edge_weights = false;
+            coarse_g.uniform_vertex_weights = false;
+            coarse_g.n_pops = 5;
+
+            coarse_g.weights = UnmanagedDeviceWeight((weight_t *) get_chunk_front(mem_stack, sizeof(weight_t) * coarse_g.n), coarse_g.n);
+            coarse_g.neighborhood = UnmanagedDeviceU32((u32 *) get_chunk_front(mem_stack, sizeof(u32) * (coarse_g.n + 1)), coarse_g.n + 1);
+            KOKKOS_PROFILE_FENCE(exec_space);
+        }
+
+        UnmanagedDeviceWeight dense_adj;
+        UnmanagedDeviceU32 degrees;
+
+        {
+            HEIPA_PROFILE_SCOPE("contraction", "from_Graph_Mapping_small", "initialize_helpers");
+            dense_adj = UnmanagedDeviceWeight((weight_t *) get_chunk_back(mem_stack, sizeof(weight_t) * coarse_g.n * coarse_g.n), coarse_g.n * coarse_g.n);
+            degrees = UnmanagedDeviceU32((u32 *) get_chunk_back(mem_stack, sizeof(u32) * (coarse_g.n + 1)), coarse_g.n + 1);
+            KOKKOS_PROFILE_FENCE(exec_space);
+        }
+
+        {
+            HEIPA_PROFILE_SCOPE("contraction", "from_Graph_Mapping_small", "initialize_set_0");
+            Kokkos::deep_copy(exec_space, coarse_g.weights, 0);
+            Kokkos::deep_copy(exec_space, dense_adj, 0);
+            Kokkos::deep_copy(exec_space, degrees, 0);
+            KOKKOS_PROFILE_FENCE(exec_space);
+        }
+
+        {
+            HEIPA_PROFILE_SCOPE("contraction", "from_Graph_Mapping_small", "coarse_weights");
+            Kokkos::parallel_for("coarse_weights", Kokkos::RangePolicy<DeviceExecutionSpace>(exec_space, 0, old_g.n), KOKKOS_LAMBDA(const vertex_t u) {
+                weight_t u_w = uniform_vw ? 1 : old_g.weights(u);
+                vertex_t v = mapping.mapping(u);
+                Kokkos::atomic_add(&coarse_g.weights(v), u_w);
+            });
+            KOKKOS_PROFILE_FENCE(exec_space);
+        }
+
+        {
+            HEIPA_PROFILE_SCOPE("contraction", "from_Graph_Mapping_small", "fill_dense");
+            Kokkos::parallel_for("fill_dense", Kokkos::RangePolicy<DeviceExecutionSpace>(exec_space, 0, old_g.m), KOKKOS_LAMBDA(const u32 i) {
+                vertex_t u = old_g.edges_u(i);
+                vertex_t v = old_g.edges_v(i);
+                weight_t w = uniform_ew ? 1 : old_g.edges_w(i);
+
+                vertex_t u_new = mapping.mapping(u);
+                vertex_t v_new = mapping.mapping(v);
+
+                if (u_new != v_new) {
+                    Kokkos::atomic_add(&dense_adj(u_new * coarse_g.n + v_new), w);
+                }
+            });
+            KOKKOS_PROFILE_FENCE(exec_space);
+        }
+
+        {
+            HEIPA_PROFILE_SCOPE("contraction", "from_Graph_Mapping_small", "count_degrees");
+            Kokkos::parallel_for("count_degrees", Kokkos::RangePolicy<DeviceExecutionSpace>(exec_space, 0, coarse_g.n), KOKKOS_LAMBDA(const vertex_t u) {
+                u32 count = 0;
+                for (vertex_t v = 0; v < coarse_g.n; ++v) {
+                    if (dense_adj(u * coarse_g.n + v) > 0) count++;
+                }
+                degrees(u) = count;
+            });
+            KOKKOS_PROFILE_FENCE(exec_space);
+        }
+
+        if (SORT_BY_DEGREE) {
+            HEIPA_PROFILE_SCOPE("contraction", "from_Graph_Mapping_small", "sort_by_degree");
+            
+            auto h_degrees = Kokkos::create_mirror_view_and_copy(Kokkos::HostSpace(), degrees);
+            
+            std::vector<vertex_t> ids(coarse_g.n);
+            for(vertex_t i = 0; i < coarse_g.n; ++i) ids[i] = i;
+            std::sort(ids.begin(), ids.end(), [&](const vertex_t a, const vertex_t b) {
+                return h_degrees(a) < h_degrees(b);
+            });
+            
+            Kokkos::View<vertex_t*, Kokkos::HostSpace> h_perm("h_perm", coarse_g.n);
+            Kokkos::View<vertex_t*, Kokkos::HostSpace> h_inv_perm("h_inv_perm", coarse_g.n);
+            for(vertex_t new_id = 0; new_id < coarse_g.n; ++new_id) {
+                vertex_t old_id = ids[new_id];
+                h_inv_perm(new_id) = old_id;
+                h_perm(old_id) = new_id;
+            }
+            
+            Kokkos::View<vertex_t*, DeviceMemorySpace> d_perm("d_perm", coarse_g.n);
+            Kokkos::View<vertex_t*, DeviceMemorySpace> d_inv_perm("d_inv_perm", coarse_g.n);
+            Kokkos::deep_copy(exec_space, d_perm, h_perm);
+            Kokkos::deep_copy(exec_space, d_inv_perm, h_inv_perm);
+            
+            UnmanagedDeviceU32 temp_degrees((u32 *) get_chunk_back(mem_stack, sizeof(u32) * (coarse_g.n + 1)), coarse_g.n + 1);
+            UnmanagedDeviceWeight temp_weights((weight_t *) get_chunk_back(mem_stack, sizeof(weight_t) * coarse_g.n), coarse_g.n);
+            UnmanagedDeviceWeight temp_dense_adj((weight_t *) get_chunk_back(mem_stack, sizeof(weight_t) * coarse_g.n * coarse_g.n), coarse_g.n * coarse_g.n);
+            
+            Kokkos::deep_copy(exec_space, temp_degrees, 0);
+            
+            auto map = mapping.mapping;
+            auto c_weights = coarse_g.weights;
+            
+            Kokkos::parallel_for("permute_arrays", Kokkos::RangePolicy<DeviceExecutionSpace>(exec_space, 0, coarse_g.n), KOKKOS_LAMBDA(const vertex_t new_u) {
+                vertex_t old_u = d_inv_perm(new_u);
+                temp_degrees(new_u) = degrees(old_u);
+                temp_weights(new_u) = c_weights(old_u);
+                for(vertex_t new_v = 0; new_v < coarse_g.n; ++new_v) {
+                    vertex_t old_v = d_inv_perm(new_v);
+                    temp_dense_adj(new_u * coarse_g.n + new_v) = dense_adj(old_u * coarse_g.n + old_v);
+                }
+            });
+            
+            Kokkos::parallel_for("update_mapping", Kokkos::RangePolicy<DeviceExecutionSpace>(exec_space, 0, old_g.n), KOKKOS_LAMBDA(const vertex_t u) {
+                map(u) = d_perm(map(u));
+            });
+            exec_space.fence();
+            
+            Kokkos::deep_copy(exec_space, degrees, temp_degrees);
+            Kokkos::deep_copy(exec_space, coarse_g.weights, temp_weights);
+            Kokkos::deep_copy(exec_space, dense_adj, temp_dense_adj);
+            
+            pop_back(mem_stack); // temp_dense_adj
+            pop_back(mem_stack); // temp_weights
+            pop_back(mem_stack); // temp_degrees
+            KOKKOS_PROFILE_FENCE(exec_space);
+        }
+
+        {
+            HEIPA_PROFILE_SCOPE("contraction", "from_Graph_Mapping_small", "prefix_sum_offsets");
+            Kokkos::parallel_for("prefix_sum_offsets", Kokkos::TeamPolicy<DeviceExecutionSpace>(exec_space, 1, Kokkos::AUTO), KOKKOS_LAMBDA(const Kokkos::TeamPolicy<DeviceExecutionSpace>::member_type &team) {
+                Kokkos::parallel_scan(Kokkos::TeamThreadRange(team, coarse_g.n + 1), [&](const u32 i, u32 &running, const bool final) {
+                    if (final) coarse_g.neighborhood(i) = running;
+                    running += degrees(i);
+                });
+            });
+
+            u32 temp;
+            Kokkos::deep_copy(exec_space, temp, Kokkos::subview(coarse_g.neighborhood, coarse_g.n));
+            exec_space.fence();
+            coarse_g.m = temp;
+            KOKKOS_PROFILE_FENCE(exec_space);
+        }
+
+        {
+            HEIPA_PROFILE_SCOPE("contraction", "from_Graph_Mapping_small", "allocate_edges");
+            coarse_g.edges_u = UnmanagedDeviceVertex((vertex_t *) get_chunk_front(mem_stack, sizeof(vertex_t) * coarse_g.m), coarse_g.m);
+            coarse_g.edges_v = UnmanagedDeviceVertex((vertex_t *) get_chunk_front(mem_stack, sizeof(vertex_t) * coarse_g.m), coarse_g.m);
+            coarse_g.edges_w = UnmanagedDeviceWeight((weight_t *) get_chunk_front(mem_stack, sizeof(weight_t) * coarse_g.m), coarse_g.m);
+            KOKKOS_PROFILE_FENCE(exec_space);
+        }
+
+        {
+            HEIPA_PROFILE_SCOPE("contraction", "from_Graph_Mapping_small", "compact_edges_small");
+            Kokkos::parallel_for("compact_edges_small", Kokkos::RangePolicy<DeviceExecutionSpace>(exec_space, 0, coarse_g.n), KOKKOS_LAMBDA(const vertex_t u) {
+                u32 write_idx = coarse_g.neighborhood(u);
+                for (vertex_t v = 0; v < coarse_g.n; ++v) {
+                    weight_t w = dense_adj(u * coarse_g.n + v);
+                    if (w > 0) {
+                        coarse_g.edges_v(write_idx) = v;
+                        coarse_g.edges_w(write_idx) = w;
+                        coarse_g.edges_u(write_idx) = u;
+                        write_idx++;
+                    }
+                }
+            });
+            KOKKOS_PROFILE_FENCE(exec_space);
+        }
+
+        {
+            HEIPA_PROFILE_SCOPE("contraction", "from_Graph_Mapping_small", "deallocate");
+            pop_back(mem_stack); // degrees
+            pop_back(mem_stack); // dense_adj
+            KOKKOS_PROFILE_FENCE(exec_space);
+        }
+
+        return coarse_g;
+    }
+
+    template<bool uniform_vw, bool uniform_ew>
     inline Graph from_Graph_Mapping(const Graph &old_g,
                                     const Mapping &mapping,
                                     KokkosMemoryStack &mem_stack,

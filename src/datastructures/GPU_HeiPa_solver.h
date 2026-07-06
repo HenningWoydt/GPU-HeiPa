@@ -340,7 +340,7 @@ namespace GPU_HeiPa {
         void internal_solve(HostGraph &host_g, KokkosMemoryStack &mem_stack) {
             initialize(host_g, mem_stack);
 
-            partition_t c = 8;
+            partition_t c = 28;
             if (config.initial_partitioning == "kway") { c = 8; }
             if (config.initial_partitioning == "metis") { c = 8; }
             const partition_t max_n = c * k;
@@ -480,7 +480,7 @@ namespace GPU_HeiPa {
             if (config.initial_partitioning == "kway") {
                 kway_partition(graphs.back(), (int) k, config.imbalance, config.seed, partition, exec_space);
             } else if (config.initial_partitioning == "gpu_bisection") {
-                gpu_rb_partition(graphs.back(), k, config.imbalance, config.seed, 8, partition, mem_stack, exec_space);
+                gpu_rb_partition(graphs.back(), k, config.imbalance, config.seed, 28, partition, mem_stack, exec_space);
             } else if (config.initial_partitioning == "metis") {
                 metis_partition(graphs.back(), (int) k, config.imbalance, config.seed, partition, exec_space);
             } else {
@@ -488,13 +488,13 @@ namespace GPU_HeiPa {
                 exit(EXIT_FAILURE);
             }
 
+            HEIPA_PROFILE_SCOPE("initial_partitioning", "Partition", "first_stats");
+
             if (graphs.back().uniform_vertex_weights) {
                 recalculate_weights<true>(partition, graphs.back(), exec_space);
             } else {
                 recalculate_weights<false>(partition, graphs.back(), exec_space);
             }
-
-            HEIPA_PROFILE_SCOPE("initial_partitioning", "Partition", "first_stats");
 
             if (graphs.back().uniform_edge_weights) {
                 initial_edge_cut = edge_cut<true>(graphs.back(), partition, exec_space);

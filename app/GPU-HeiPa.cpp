@@ -55,6 +55,7 @@ int main(int argc, char *argv[]) {
                 // {"--graph", "../../ProMapRepo/data/mapping/rgg23.graph"}, // 100.054 in 334ms
                 // {"--graph", "../../ProMapRepo/data/mapping/cfd2.mtx.graph"}, // 92.920 in 40ms
                 // {"--graph", "../../ProMapRepo/data/mapping/shipsec5.mtx.graph"},
+                // {"--graph", "../../ProMapRepo/data/mapping/afshell9.graph"},
                 // {"--graph", "../../GPU-HeiPa-Experiments/data/SuiteSparse/Hook_1498.graph"},
                 // {"--graph", "../../GPU-HeiPa-Experiments/data/SuiteSparse/mawi_201512020000.graph"},
                 // {"--graph", "../../GPU-HeiPa-Experiments/data/SuiteSparse/mycielskian18.graph"},
@@ -65,7 +66,9 @@ int main(int argc, char *argv[]) {
                 // {"--graph", "../../GPU-HeiPa-Experiments/data/SuiteSparse/indochina-2004.graph"},
                 // {"--graph", "../../GPU-HeiPa-Experiments/data/SuiteSparse/hugebubbles-00000.graph"},
                 {"--graph", "../../GPU-HeiPa-Experiments/data/SuiteSparse/com-LiveJournal.graph"},
-                {"--k", "31"},
+                // {"--graph", "../../ProMapRepo/data/mapping/deu.graph"},
+                // {"--graph", "../../ProMapRepo/data/mapping/thermomech_TC.mtx.graph"},
+                {"--k", "20"},
                 {"--imbalance", "0.03"},
                 {"--config", "default"},
                 {"--verbose-level", "1"},

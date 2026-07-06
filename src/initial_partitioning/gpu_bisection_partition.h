@@ -54,12 +54,12 @@ namespace GPU_HeiPa {
         std::vector<u8> active;
         std::vector<u32> curr_level;
         std::vector<u32> curr_load;
-        size_t max_blocks;
+        
     };
 
     inline void init_HierarchyManager(HierarchyManager &manager, const std::vector<partition_t> &t_hierarchy, size_t t_k) {
         manager.hierarchy = t_hierarchy;
-        manager.max_blocks = t_k;
+        
         size_t num_levels = manager.hierarchy.size();
         manager.unit_sizes.assign(num_levels, 1);
         size_t current = 1;
@@ -68,9 +68,9 @@ namespace GPU_HeiPa {
             current *= manager.hierarchy[i];
         }
         manager.total_k = (partition_t) current;
-        manager.active.assign(manager.max_blocks, 0);
-        manager.curr_level.assign(manager.max_blocks, 0);
-        manager.curr_load.assign(manager.max_blocks, 0);
+        manager.active.assign(manager.total_k, 0);
+        manager.curr_level.assign(manager.total_k, 0);
+        manager.curr_load.assign(manager.total_k, 0);
         manager.active[0] = 1;
         manager.curr_level[0] = (u32) num_levels - 1;
         manager.curr_load[0] = manager.hierarchy.back();
@@ -91,7 +91,7 @@ namespace GPU_HeiPa {
         u32 level = manager.curr_level[id];
         partition_t left_id = id;
         partition_t right_id = id + left_k;
-        if (right_id >= manager.max_blocks) throw std::runtime_error("max_blocks exceeded");
+        if (right_id >= manager.total_k) throw std::runtime_error("max_blocks exceeded");
         manager.active[left_id] = 1;
         manager.curr_level[left_id] = level;
         manager.curr_load[left_id] = left_k / manager.unit_sizes[level];
@@ -114,7 +114,7 @@ namespace GPU_HeiPa {
         GraphBatch batch;
         init_GraphBatch(batch, g, k, mem_stack);
         HierarchyManager manager;
-        init_HierarchyManager(manager, hierarchy, batch.max_blocks);
+        init_HierarchyManager(manager, hierarchy, batch.k);
         std::vector<Graph> graphs = {g};
         std::vector<Mapping> mappings;
         weight_t lmax_global = (weight_t) std::ceil((1.0 + imbalance) * (f64) g.g_weight / (f64) k);
@@ -142,16 +142,16 @@ namespace GPU_HeiPa {
             exec_space.fence();
             recalculate_block_weights(graphs.back(), map, partition.bweights, exec_space);
         }
-        DeviceU8 active_mask("active_mask", batch.max_blocks);
-        DeviceWeight lmax_l("lmax_l", batch.max_blocks);
-        DeviceWeight lmax_r("lmax_r", batch.max_blocks);
-        DevicePartition left_strides("left_strides", batch.max_blocks);
-        DevicePartition right_strides("right_strides", batch.max_blocks);
+        DeviceU8 active_mask("active_mask", batch.k);
+        DeviceWeight lmax_l("lmax_l", batch.k);
+        DeviceWeight lmax_r("lmax_r", batch.k);
+        DevicePartition left_strides("left_strides", batch.k);
+        DevicePartition right_strides("right_strides", batch.k);
         UnmanagedDeviceVertex local_ids((vertex_t *) get_chunk_back(mem_stack, sizeof(vertex_t) * g.n), g.n);
         UnmanagedDeviceVertex local_degree((vertex_t *) get_chunk_back(mem_stack, sizeof(vertex_t) * g.n), g.n);
-        UnmanagedDeviceVertex bsizes((vertex_t *) get_chunk_back(mem_stack, sizeof(vertex_t) * batch.max_blocks), batch.max_blocks);
-        UnmanagedDeviceVertex projected_bsizes((vertex_t *) get_chunk_back(mem_stack, sizeof(vertex_t) * batch.max_blocks), batch.max_blocks);
-        std::vector<u8> iteration_active(batch.max_blocks);
+        UnmanagedDeviceVertex bsizes((vertex_t *) get_chunk_back(mem_stack, sizeof(vertex_t) * batch.k), batch.k);
+        UnmanagedDeviceVertex projected_bsizes((vertex_t *) get_chunk_back(mem_stack, sizeof(vertex_t) * batch.k), batch.k);
+        std::vector<u8> iteration_active(batch.k);
         while (true) {
             HEIPA_PROFILE_SCOPE("initial_partitioning", "gpu_bisection_partition", "uncontraction_extraction_loop");
             bool do_extract = true;
@@ -166,7 +166,7 @@ namespace GPU_HeiPa {
                 Kokkos::deep_copy(exec_space, batch.h_active_mask, (u8) 0);
                 bool any_active = false;
                 std::copy(manager.active.begin(), manager.active.end(), iteration_active.begin());
-                for (partition_t id = 0; id < (partition_t) batch.max_blocks; id++) {
+                for (partition_t id = 0; id < (partition_t) batch.k; id++) {
                     if (iteration_active[id]) {
                         if (manager.curr_load[id] > 1) {
                             vertex_t projected_n = mappings.empty() ? batch.h_bsizes(id) : batch.h_projected_bsizes(id);
@@ -196,7 +196,7 @@ namespace GPU_HeiPa {
                     Kokkos::deep_copy(exec_space, right_strides, batch.h_right_strides);
                     exec_space.fence();
                     extract_all_subgraphs(graphs.back(), batch, partition, active_mask, local_ids, local_degree, exec_space);
-                    batched_bisect(batch, active_mask, lmax_l, lmax_r, exec_space);
+                    // batched_bisect(batch, active_mask, lmax_l, lmax_r, exec_space);
                     auto map = partition.map;
                     auto g_n = graphs.back().n;
                     u64 n_bytes_partition = round_up_64(batch.n) * sizeof(partition_t);
