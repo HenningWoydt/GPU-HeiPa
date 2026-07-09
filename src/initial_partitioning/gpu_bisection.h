@@ -446,7 +446,7 @@ namespace GPU_HeiPa {
         exec_space.fence();
     }
 
-    template<bool uvw, bool uew>
+    template<bool uvw, bool uew, bool DO_HEURISTIC = true, bool ONLY_DO_HEURISTIC = true>
     inline void batched_brute_force_bisect(const GraphBatch &batch,
                                            const DeviceU8 &active_mask,
                                            const DeviceU32 &current_targets_dev,
@@ -528,14 +528,144 @@ namespace GPU_HeiPa {
         }
 
         Kokkos::View<BestBisectConfig *, DeviceMemorySpace, Kokkos::MemoryTraits<Kokkos::Unmanaged> > team_results((BestBisectConfig *) get_chunk_back(mem_stack, sizeof(BestBisectConfig) * total_teams), total_teams);
+        Kokkos::View<BestBisectConfig *, DeviceMemorySpace, Kokkos::MemoryTraits<Kokkos::Unmanaged> > heuristic_results;
+        
+        if constexpr (DO_HEURISTIC || ONLY_DO_HEURISTIC) {
+            heuristic_results = Kokkos::View<BestBisectConfig *, DeviceMemorySpace, Kokkos::MemoryTraits<Kokkos::Unmanaged> >((BestBisectConfig *) get_chunk_back(mem_stack, sizeof(BestBisectConfig) * k), k);
+        }
 
-        HEIPA_PROFILE_SCOPE("initial_partitioning", "gpu_rb_partition", "bisect_kernel");
+        auto g_mem = batch.graph_memory;
+        auto d_actual_g_weight = batch.d_actual_g_weight;
+        vertex_t b_n = batch.n;
+        vertex_t b_m = batch.m;
+        u64 n_bytes_weights = round_up_64(b_n) * sizeof(weight_t);
+        u64 n_bytes_neighborhood = round_up_64(b_n + 1) * sizeof(u32);
+        u64 n_bytes_edges_u = round_up_64(b_m) * sizeof(vertex_t);
+        u64 n_bytes_edges_v = round_up_64(b_m) * sizeof(vertex_t);
+        u64 n_bytes_edges_w = round_up_64(b_m) * sizeof(weight_t);
+        u64 n_bytes_one_graph = n_bytes_weights + n_bytes_neighborhood + n_bytes_edges_u + n_bytes_edges_v + n_bytes_edges_w;
+
+        if constexpr (DO_HEURISTIC || ONLY_DO_HEURISTIC) {
+            HEIPA_PROFILE_SCOPE("initial_partitioning", "batched_brute_force_bisect", "heuristic_prepass");
+            Kokkos::parallel_for("heuristic_prepass", Kokkos::TeamPolicy<DeviceExecutionSpace>(exec_space, k, Kokkos::AUTO), KOKKOS_LAMBDA(const Kokkos::TeamPolicy<DeviceExecutionSpace>::member_type &team) {
+                const partition_t graph_id = team.league_rank();
+                if (!active_mask(graph_id)) return;
+                
+                const vertex_t gn = d_actual_n(graph_id);
+                if (gn <= 1) return;
+
+                const partition_t tk = current_targets_dev(graph_id);
+                const weight_t lmax_left = lmax_global * (tk / 2);
+                const weight_t lmax_right = lmax_global * (tk - tk / 2);
+                const weight_t g_weight = d_actual_g_weight(graph_id);
+
+                u8 *base = g_mem.data() + (u64) graph_id * n_bytes_one_graph;
+                weight_t *g_w = (weight_t *) base;
+                base += n_bytes_weights;
+                u32 *g_n = (u32 *) base;
+                base += n_bytes_neighborhood;
+                vertex_t *g_eu = (vertex_t *) base;
+                base += n_bytes_edges_u;
+                vertex_t *g_ev = (vertex_t *) base;
+                base += n_bytes_edges_v;
+                weight_t *g_ew = (weight_t *) base;
+
+                BestBisectConfig best_in_team;
+                BestBisectReducer reducer(best_in_team);
+                reducer.init(best_in_team);
+
+                Kokkos::parallel_reduce(Kokkos::TeamThreadRange(team, gn), [&](const vertex_t seed, BestBisectConfig &heuristic_best) {
+                    u64 part_mask = (1ULL << seed);
+                    weight_t w1 = uvw ? 1 : g_w[seed];
+                    
+                    while (true) {
+                        vertex_t best_v = gn;
+                        int max_gain = -99999999;
+                        for (vertex_t v = 0; v < gn; ++v) {
+                            if (part_mask & (1ULL << v)) continue;
+                            int gain = 0;
+                            for (u32 e = g_n[v]; e < g_n[v + 1]; ++e) {
+                                vertex_t u = g_ev[e];
+                                weight_t ew = uew ? 1 : g_ew[e];
+                                if (part_mask & (1ULL << u)) gain += ew;
+                                else gain -= ew;
+                            }
+                            if (gain > max_gain) {
+                                max_gain = gain;
+                                best_v = v;
+                            }
+                        }
+                        if (best_v == gn) break;
+                        weight_t vw = uvw ? 1 : g_w[best_v];
+                        if (w1 + vw > g_weight / 2) break;
+                        part_mask |= (1ULL << best_v);
+                        w1 += vw;
+                    }
+
+                    weight_t cut = 0;
+                    for (vertex_t u = 0; u < gn; ++u) {
+                        if (part_mask & (1ULL << u)) {
+                            for (u32 e = g_n[u]; e < g_n[u + 1]; ++e) {
+                                if (!(part_mask & (1ULL << g_ev[e]))) {
+                                    cut += uew ? 1 : g_ew[e];
+                                }
+                            }
+                        }
+                    }
+
+                    const weight_t wl = g_weight - w1;
+                    const u64 p_l = wl > lmax_left ? (u64) (wl - lmax_left) : 0;
+                    const u64 p_r = w1 > lmax_right ? (u64) (w1 - lmax_right) : 0;
+                    u64 penalty = p_l * p_l + p_r * p_r;
+
+                    if (wl == 0 || w1 == 0) penalty += EMPTY_BLOCK_PENALTY;
+
+                    if (penalty < heuristic_best.penalty || (penalty == heuristic_best.penalty && cut < heuristic_best.cut)) {
+                        heuristic_best.penalty = penalty;
+                        heuristic_best.cut = cut;
+                        heuristic_best.config = part_mask;
+                    }
+                }, reducer);
+
+                Kokkos::single(Kokkos::PerTeam(team), [&]() {
+                    heuristic_results(graph_id) = best_in_team;
+                });
+            });
+            KOKKOS_PROFILE_FENCE(exec_space);
+        }
+
+        if constexpr (ONLY_DO_HEURISTIC) {
+            HEIPA_PROFILE_SCOPE("initial_partitioning", "batched_brute_force_bisect", "reduce_and_apply");
+            auto d_results = batch.d_bisection_results;
+            Kokkos::parallel_for("copy_heuristic_results", Kokkos::RangePolicy<DeviceExecutionSpace>(exec_space, 0, k), KOKKOS_LAMBDA(const partition_t id) {
+                if (active_mask(id) && d_actual_n(id) > 1) {
+                    d_results(id) = heuristic_results(id);
+                }
+            });
+            
+            Kokkos::parallel_for("apply_batched_best_config", Kokkos::RangePolicy<DeviceExecutionSpace>(exec_space, 0, k), KOKKOS_LAMBDA(const partition_t id) {
+                if (active_mask(id) && d_actual_n(id) > 1) {
+                    const u64 config = d_results(id).config;
+                    partition_t *part = batch.get_partition_ptr(id);
+                    const vertex_t gn = d_actual_n(id);
+                    for (vertex_t u = 0; u < gn; ++u) {
+                        part[u] = (partition_t) ((config >> u) & 1ULL);
+                    }
+                }
+            });
+            exec_space.fence();
+            KOKKOS_PROFILE_FENCE(exec_space);
+            
+            pop_back(mem_stack); // heuristic_results
+            return;
+        }
+
+        HEIPA_PROFILE_SCOPE("initial_partitioning", "batched_brute_force_bisect", "bisect_kernel");
         typedef Kokkos::View<u32 *, DeviceExecutionSpace::scratch_memory_space, Kokkos::MemoryTraits<Kokkos::Unmanaged> > ScratchU32;
         typedef Kokkos::View<vertex_t *, DeviceExecutionSpace::scratch_memory_space, Kokkos::MemoryTraits<Kokkos::Unmanaged> > ScratchVertex;
         typedef Kokkos::View<weight_t *, DeviceExecutionSpace::scratch_memory_space, Kokkos::MemoryTraits<Kokkos::Unmanaged> > ScratchWeight;
 
         size_t shmem_size = ScratchU32::shmem_size(max_n + 1);
-        shmem_size += ScratchVertex::shmem_size(max_m);
         shmem_size += ScratchVertex::shmem_size(max_m);
         if (!uvw) shmem_size += ScratchWeight::shmem_size(max_n);
         if (!uew) shmem_size += ScratchWeight::shmem_size(max_m);
@@ -548,16 +678,6 @@ namespace GPU_HeiPa {
             team_results(i).config = 0;
         });
 
-        auto g_mem = batch.graph_memory;
-        auto d_actual_g_weight = batch.d_actual_g_weight;
-        vertex_t b_n = batch.n;
-        vertex_t b_m = batch.m;
-        u64 n_bytes_weights = round_up_64(b_n) * sizeof(weight_t);
-        u64 n_bytes_neighborhood = round_up_64(b_n + 1) * sizeof(u32);
-        u64 n_bytes_edges_u = round_up_64(b_m) * sizeof(vertex_t);
-        u64 n_bytes_edges_v = round_up_64(b_m) * sizeof(vertex_t);
-        u64 n_bytes_edges_w = round_up_64(b_m) * sizeof(weight_t);
-        u64 n_bytes_one_graph = n_bytes_weights + n_bytes_neighborhood + n_bytes_edges_u + n_bytes_edges_v + n_bytes_edges_w;
         KOKKOS_PROFILE_FENCE(exec_space);
 
         Kokkos::parallel_for("batched_brute_force_bisect", policy, KOKKOS_LAMBDA(const Kokkos::TeamPolicy<DeviceExecutionSpace>::member_type &team) {
@@ -635,10 +755,54 @@ namespace GPU_HeiPa {
             reducer.init(best_in_team);
 
             Kokkos::parallel_reduce(Kokkos::TeamThreadRange(team, TEAM_SIZE), [&](const int tid, BestBisectConfig &local_best) {
+                (void)heuristic_results; if constexpr (DO_HEURISTIC) {
+                    BestBisectConfig h_best = heuristic_results(graph_id);
+                    if (h_best.penalty < local_best.penalty || (h_best.penalty == local_best.penalty && h_best.cut < local_best.cut)) {
+                        local_best = h_best;
+                    }
+                }
+
                 const u64 chunk_id = (u64) local_team_rank * TEAM_SIZE + tid;
                 const u64 begin = chunk_id * CHUNK;
                 if (begin >= num_configs) return;
                 const u64 end = begin + CHUNK < num_configs ? begin + CHUNK : num_configs;
+                
+                (void)heuristic_results; if constexpr (DO_HEURISTIC) {
+                    const u64 chunk_gray = begin ^ (begin >> 1);
+                    weight_t min_chunk_cut = 0;
+                    const vertex_t K = 9; // Since CHUNK = 512 = 2^9
+                    const vertex_t num_var = gn < K ? gn : K;
+                    
+                    for (vertex_t u = num_var; u < gn; ++u) {
+                        const bool u_part = (chunk_gray >> u) & 1ULL;
+                        for (u32 e = s_neigh(u); e < s_neigh(u + 1); ++e) {
+                            vertex_t v = s_edges_v(e);
+                            if (v >= num_var && v > u) {
+                                const bool v_part = (chunk_gray >> v) & 1ULL;
+                                if (u_part != v_part) min_chunk_cut += uew ? 1 : s_edges_w(e);
+                            }
+                        }
+                    }
+                    
+                    for (vertex_t u = 0; u < num_var; ++u) {
+                        weight_t cut_if_0 = 0;
+                        weight_t cut_if_1 = 0;
+                        for (u32 e = s_neigh(u); e < s_neigh(u + 1); ++e) {
+                            vertex_t v = s_edges_v(e);
+                            if (v >= num_var) {
+                                const bool v_part = (chunk_gray >> v) & 1ULL;
+                                const weight_t ew = uew ? 1 : s_edges_w(e);
+                                if (v_part == 0) cut_if_1 += ew;
+                                else cut_if_0 += ew;
+                            }
+                        }
+                        min_chunk_cut += (cut_if_0 < cut_if_1) ? cut_if_0 : cut_if_1;
+                    }
+
+                    if (local_best.penalty == 0 && min_chunk_cut >= local_best.cut) {
+                        return;
+                    }
+                }
 
                 u64 gray = begin ^ (begin >> 1);
                 weight_t wr = 0;
@@ -754,6 +918,9 @@ namespace GPU_HeiPa {
         exec_space.fence();
         KOKKOS_PROFILE_FENCE(exec_space);
 
+        if constexpr (DO_HEURISTIC || ONLY_DO_HEURISTIC) {
+            pop_back(mem_stack); // heuristic_results
+        }
         pop_back(mem_stack); // team_results
         pop_back(mem_stack); // max_sizes
         pop_back(mem_stack); // teams_offset

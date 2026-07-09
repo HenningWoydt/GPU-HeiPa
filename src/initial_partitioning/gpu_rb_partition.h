@@ -97,40 +97,26 @@ namespace GPU_HeiPa {
                                  DeviceExecutionSpace &exec_space) {
         HEIPA_PROFILE_SCOPE("initial_partitioning", "gpu_rb_partition", "gpu_rb_partition");
 
-        auto sp_coarsen = get_time_point();
-
         // --- Phase 1: Coarsening ---
         std::vector<Graph> graphs = {g};
         std::vector<Mapping> mappings;
         weight_t lmax_global = (weight_t) std::ceil((1.0 + imbalance) * (f64) g.g_weight / (f64) k);
-        int small_graph_refinement = 1; // 0: none, 1: greedy, 2: jet label propagation
 
         while (graphs.back().n > threshold) {
             HEIPA_PROFILE_SCOPE("initial_partitioning", "gpu_rb_partition", "coarsening");
             assert_state_pre_partition(graphs.back(), exec_space);
 
-            auto sp1 = get_time_point();
-
             mappings.push_back(heavy_edge_matching_small_get_mapping<false, false>(graphs.back(), partition, lmax_global, mem_stack, exec_space));
             // mappings.push_back(independent_edge_set_get_mapping<false, false>(graphs.back(), partition, lmax_global, mem_stack, exec_space));
             KOKKOS_PROFILE_FENCE(exec_space);
-
-            auto sp2 = get_time_point();
 
             graphs.push_back(from_Graph_Mapping_small<false, false>(graphs.back(), mappings.back(), mem_stack, exec_space));
 
             KOKKOS_PROFILE_FENCE(exec_space);
 
-            auto sp3 = get_time_point();
-
-            std::cout << mappings.back().old_n << " " << mappings.back().coarse_n << " - " << get_milli_seconds(sp1, sp2) << " ms " << get_milli_seconds(sp2, sp3) << " ms " << std::endl;
-
             assert_coarsening(graphs[graphs.size() - 2], graphs.back(), mappings.back(), exec_space);
             assert_state_pre_partition(graphs.back(), exec_space);
         }
-
-        auto ep_coarsen = get_time_point();
-        std::cout << "time coarsen: " << get_milli_seconds(sp_coarsen, ep_coarsen) << " ms" << std::endl;
 
         // --- Phase 2: Interleaved Recursive Bisection and Uncontraction ---
         HEIPA_PROFILE_SCOPE("initial_partitioning", "gpu_rb_partition", "partition_phase");
@@ -142,20 +128,16 @@ namespace GPU_HeiPa {
         UnmanagedDeviceVertex local_ids((vertex_t *) get_chunk_back(mem_stack, sizeof(vertex_t) * g.n), g.n);
         UnmanagedDeviceVertex local_degree((vertex_t *) get_chunk_back(mem_stack, sizeof(vertex_t) * g.n), g.n);
         UnmanagedDeviceVertex bsizes((vertex_t *) get_chunk_back(mem_stack, sizeof(vertex_t) * batch.k), batch.k);
-
         UnmanagedDeviceU8 active_mask((u8 *) get_chunk_back(mem_stack, sizeof(u8) * batch.k), batch.k);
-
         UnmanagedDeviceU32 current_targets_dev((u32 *) get_chunk_back(mem_stack, sizeof(u32) * batch.k), batch.k);
-
-        HEIPA_PROFILE_SCOPE("initial_partitioning", "gpu_rb_partition", "recalculate_block_weights");
-        recalculate_block_weights(graphs.back(), partition.map, partition.bweights, exec_space);
-        KOKKOS_PROFILE_FENCE(exec_space);
 
         HEIPA_PROFILE_SCOPE("initial_partitioning", "gpu_rb_partition", "init_targets");
         Kokkos::parallel_for("init_targets", Kokkos::RangePolicy<DeviceExecutionSpace>(exec_space, 0, k), KOKKOS_LAMBDA(const int id) {
             if (id == 0) {
+                partition.bweights(id) = g.g_weight;
                 current_targets_dev(id) = k;
             } else {
+                partition.bweights(id) = 0;
                 current_targets_dev(id) = 0;
             }
         });
@@ -164,15 +146,6 @@ namespace GPU_HeiPa {
         while (true) {
             HEIPA_PROFILE_SCOPE("initial_partitioning", "gpu_rb_partition", "calculate_block_sizes");
             calculate_block_sizes(graphs.back(), mappings.empty() ? nullptr : &mappings.back(), partition.map, bsizes, exec_space);
-            KOKKOS_PROFILE_FENCE(exec_space);
-
-            auto offset_n = batch.offset_n;
-            Kokkos::parallel_scan("scan_offsets", Kokkos::RangePolicy<DeviceExecutionSpace>(exec_space, 0, k), KOKKOS_LAMBDA(const partition_t id, vertex_t &running, bool final) {
-                if (final) {
-                    offset_n(id) = running;
-                }
-                running += bsizes(id);
-            });
             KOKKOS_PROFILE_FENCE(exec_space);
 
             HEIPA_PROFILE_SCOPE("initial_partitioning", "gpu_rb_partition", "get_active");
@@ -194,13 +167,22 @@ namespace GPU_HeiPa {
                 active_mask(id) = active ? 1 : 0;
 
 
-
                 if (active) local_split = 1;
             }, Kokkos::Max<u32>(split_needed_int));
             bool split_needed = split_needed_int != 0;
             KOKKOS_PROFILE_FENCE(exec_space);
 
             if (split_needed) {
+                HEIPA_PROFILE_SCOPE("initial_partitioning", "gpu_rb_partition", "offset_sizes");
+                auto offset_n = batch.offset_n;
+                Kokkos::parallel_scan("scan_offsets", Kokkos::RangePolicy<DeviceExecutionSpace>(exec_space, 0, k), KOKKOS_LAMBDA(const partition_t id, vertex_t &running, bool final) {
+                    if (final) {
+                        offset_n(id) = running;
+                    }
+                    running += bsizes(id);
+                });
+                KOKKOS_PROFILE_FENCE(exec_space);
+
                 HEIPA_PROFILE_SCOPE("initial_partitioning", "gpu_rb_partition", "extract_graphs");
                 extract_all_subgraphs(graphs.back(), batch, partition, active_mask, local_ids, local_degree, exec_space);
                 KOKKOS_PROFILE_FENCE(exec_space);
@@ -216,12 +198,14 @@ namespace GPU_HeiPa {
                 else batched_brute_force_bisect<false, false>(batch, active_mask, current_targets_dev, lmax_global, mem_stack, exec_space);
                 KOKKOS_PROFILE_FENCE(exec_space);
 
-                HEIPA_PROFILE_SCOPE("initial_partitioning", "gpu_rb_partition", "insert_solution");
-                // insert all solutions
+                HEIPA_PROFILE_SCOPE("initial_partitioning", "gpu_rb_partition", "insert_solution_and_weights");
+                // insert all solutions and update block weights
                 auto p_map = partition.map;
+                auto p_bweights = partition.bweights;
                 auto d_actual_n = batch.d_actual_n;
+                auto g_weights = graphs.back().weights;
 
-                Kokkos::parallel_for("insert_all_solutions", Kokkos::TeamPolicy<DeviceExecutionSpace>(exec_space, k, Kokkos::AUTO()), KOKKOS_LAMBDA(const Kokkos::TeamPolicy<DeviceExecutionSpace>::member_type &team) {
+                Kokkos::parallel_for("insert_all_solutions_and_weights", Kokkos::TeamPolicy<DeviceExecutionSpace>(exec_space, k, Kokkos::AUTO()), KOKKOS_LAMBDA(const Kokkos::TeamPolicy<DeviceExecutionSpace>::member_type &team) {
                     partition_t id = team.league_rank();
 
                     if (active_mask(id)) {
@@ -233,26 +217,24 @@ namespace GPU_HeiPa {
                         partition_t *sub_part_ptr = batch.get_partition_ptr(id);
                         vertex_t *sub_global_ids_ptr = batch.get_global_ids_ptr(id);
 
-                        Kokkos::parallel_for(Kokkos::TeamThreadRange(team, sub_n), [&](const vertex_t u) {
-                            partition_t u_id = sub_part_ptr[u];
-                            vertex_t g_u = sub_global_ids_ptr[u];
-                            if (u_id == 0) {
-                                p_map(g_u) = id;
-                            } else {
-                                p_map(g_u) = id + lk;
-                            }
-                        });
-
                         Kokkos::single(Kokkos::PerTeam(team), [&]() {
                             current_targets_dev(id) = lk;
                             current_targets_dev(id + lk) = rk;
                         });
+                        team.team_barrier();
+
+                        Kokkos::parallel_for(Kokkos::TeamThreadRange(team, sub_n), [&](const vertex_t u) {
+                            partition_t u_id = sub_part_ptr[u];
+                            if (u_id != 0) {
+                                vertex_t g_u = sub_global_ids_ptr[u];
+                                weight_t w = g_uvw ? 1 : g_weights(g_u);
+                                p_map(g_u) = id + lk;
+                                Kokkos::atomic_sub(&p_bweights(id), w);
+                                Kokkos::atomic_add(&p_bweights(id + lk), w);
+                            }
+                        });
                     }
                 });
-                KOKKOS_PROFILE_FENCE(exec_space);
-
-                HEIPA_PROFILE_SCOPE("initial_partitioning", "gpu_rb_partition", "recalculate_block_weights");
-                recalculate_block_weights(graphs.back(), partition.map, partition.bweights, exec_space);
                 KOKKOS_PROFILE_FENCE(exec_space);
 
                 continue;
@@ -261,25 +243,21 @@ namespace GPU_HeiPa {
             if (!mappings.empty()) {
                 HEIPA_PROFILE_SCOPE("initial_partitioning", "gpu_rb_partition", "uncoarsening");
                 uncontract(partition, mappings.back(), exec_space);
+
                 free_graph(graphs.back(), mem_stack);
                 graphs.pop_back();
 
                 free_mapping(mappings.back(), mem_stack);
                 mappings.pop_back();
 
-                recalculate_block_weights(graphs.back(), partition.map, partition.bweights, exec_space);
-                KOKKOS_PROFILE_FENCE(exec_space);
-
                 assert_state_after_partition(graphs.back(), partition, k, exec_space);
+                KOKKOS_PROFILE_FENCE(exec_space);
 
                 continue;
             }
 
             break;
         }
-
-        auto ep_uncoarsen = get_time_point();
-        std::cout << "time uncoarsen: " << get_milli_seconds(ep_coarsen, ep_uncoarsen) << " ms" << std::endl;
 
         // Cleanup
         pop_back(mem_stack); // current_targets_dev

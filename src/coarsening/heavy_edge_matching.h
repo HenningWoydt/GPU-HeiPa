@@ -15,19 +15,31 @@ namespace GPU_HeiPa {
                                           const weight_t &lmax,
                                           KokkosMemoryStack &mem_stack,
                                           DeviceExecutionSpace &exec_space) {
-        HEIPA_PROFILE_SCOPE("initial_partitioning", "coarsen_match", "heavy_edge_matching_small");
+        // --- Hyperparameters ---
+        const u32 SEED = 0;
+        const u32 MAX_MATCHING_ROUNDS = 10;
+        const u32 COMMIT_SUB_ROUNDS = 4;
+        // -----------------------
 
-        u32 seed = 0;
+        HEIPA_PROFILE_SCOPE("initial_partitioning", "coarsen_match_small", "heavy_edge_matching_small");
+
+        Mapping mapping = initialize_mapping(g.n, 0, mem_stack);
         TwoHopMatcher thm = initialize_two_hop_matcher(g.n, g.m, partition.k, lmax, mem_stack);
-        Kokkos::deep_copy(exec_space, thm.vcmap, SENTINEL);
-        Kokkos::deep_copy(exec_space, thm.hn, SENTINEL);
+        UnmanagedDeviceU32 d_nc = UnmanagedDeviceU32((u32 *) get_chunk_back(mem_stack, sizeof(u32) * 1), 1);
 
-        Kokkos::parallel_for("hem_small", Kokkos::TeamPolicy<DeviceExecutionSpace>(exec_space, 1, Kokkos::AUTO), KOKKOS_LAMBDA(const TeamMember &team) {
+        Kokkos::parallel_for("hem_small_fused_mega", Kokkos::TeamPolicy<DeviceExecutionSpace>(exec_space, 1, Kokkos::AUTO), KOKKOS_LAMBDA(const TeamMember &team) {
+            // 0. Initialize arrays
+            Kokkos::parallel_for(Kokkos::TeamThreadRange(team, g.n), [&](const vertex_t u) {
+                thm.vcmap(u) = SENTINEL;
+                thm.hn(u) = SENTINEL;
+            });
+            team.team_barrier();
+
             // 1. Initial pick
             Kokkos::parallel_for(Kokkos::TeamThreadRange(team, g.n), [&](const vertex_t u) {
                 vertex_t h = SENTINEL;
                 weight_t max_ewt = 0;
-                u32 r = xorshiftHash(u ^ seed);
+                u32 r = xorshiftHash(u ^ SEED);
                 u32 tiebreaker = 0;
 
                 for (u32 j = g.neighborhood(u); j < g.neighborhood(u + 1); j++) {
@@ -48,17 +60,15 @@ namespace GPU_HeiPa {
                     }
                 }
                 thm.hn(u) = h;
-                // Don't initialize vcmap here if it is already initialized before, 
-                // but usually vcmap is initialized to SENTINEL elsewhere.
             });
             team.team_barrier();
 
-            // Main matching loop - fixed 10 iterations max for small graphs
-            for (u32 round = 0; round < 10; ++round) {
-                u32 round_seed = seed ^ (round * 0x9e3779b1u);
+            // Main matching loop - fixed iterations
+            for (u32 round = 0; round < MAX_MATCHING_ROUNDS; ++round) {
+                u32 round_seed = SEED ^ (round * 0x9e3779b1u);
 
                 // 4 sub-rounds of commit
-                for (u32 r = 0; r < 4; r++) {
+                for (u32 r = 0; r < COMMIT_SUB_ROUNDS; r++) {
                     Kokkos::parallel_for(Kokkos::TeamThreadRange(team, g.n), [&](const vertex_t u) {
                         vertex_t v = thm.hn(u);
                         if (v == SENTINEL || thm.vcmap(u) != SENTINEL) return;
@@ -117,52 +127,39 @@ namespace GPU_HeiPa {
                 });
                 team.team_barrier();
             }
+
+            // 1. Singletons
+            Kokkos::parallel_for(Kokkos::TeamThreadRange(team, g.n), [&](const vertex_t i) {
+                if (thm.vcmap(i) == SENTINEL) thm.vcmap(i) = i;
+            });
+            team.team_barrier();
+
+            // 2. Set coarse ids (block scan)
+            Kokkos::parallel_scan(Kokkos::TeamThreadRange(team, g.n), [&](const vertex_t i, vertex_t &update, const bool final) {
+                if (thm.vcmap(i) == i) {
+                    if (final) thm.vcmap(i) = update;
+                    update++;
+                } else if (final) {
+                    thm.vcmap(i) += g.n;
+                }
+                if (final && i == g.n - 1) {
+                    d_nc(0) = update;
+                }
+            });
+            team.team_barrier();
+
+            // 3. Propagate coarse ids & copy to mapping array
+            Kokkos::parallel_for(Kokkos::TeamThreadRange(team, g.n), [&](const vertex_t i) {
+                if (thm.vcmap(i) >= g.n) thm.vcmap(i) = thm.vcmap(thm.vcmap(i) - g.n);
+                mapping.mapping(i) = thm.vcmap(i);
+            });
         });
 
-        Mapping mapping;
-        {
-            HEIPA_PROFILE_SCOPE("initial_partitioning", "coarsen_match_small", "build_mapping_fused");
+        u32 nc;
+        Kokkos::deep_copy(exec_space, nc, Kokkos::subview(d_nc, 0));
+        mapping.coarse_n = nc;
 
-            UnmanagedDeviceU32 d_nc = UnmanagedDeviceU32((u32 *) get_chunk_back(mem_stack, sizeof(u32) * 1), 1);
-
-            Kokkos::parallel_for("build_mapping_fused", Kokkos::TeamPolicy<DeviceExecutionSpace>(exec_space, 1, Kokkos::AUTO), KOKKOS_LAMBDA(const TeamMember &team) {
-                // 1. Singletons
-                Kokkos::parallel_for(Kokkos::TeamThreadRange(team, g.n), [&](const vertex_t i) {
-                    if (thm.vcmap(i) == SENTINEL) thm.vcmap(i) = i;
-                });
-                team.team_barrier();
-
-                // 2. Set coarse ids (block scan)
-                Kokkos::parallel_scan(Kokkos::TeamThreadRange(team, g.n), [&](const vertex_t i, vertex_t &update, const bool final) {
-                    if (thm.vcmap(i) == i) {
-                        if (final) thm.vcmap(i) = update;
-                        update++;
-                    } else if (final) {
-                        thm.vcmap(i) += g.n;
-                    }
-                    if (final && i == g.n - 1) {
-                        d_nc(0) = update;
-                    }
-                });
-                team.team_barrier();
-
-                // 3. Propagate coarse ids
-                Kokkos::parallel_for(Kokkos::TeamThreadRange(team, g.n), [&](const vertex_t i) {
-                    if (thm.vcmap(i) >= g.n) thm.vcmap(i) = thm.vcmap(thm.vcmap(i) - g.n);
-                });
-            });
-
-            u32 nc;
-            Kokkos::deep_copy(exec_space, nc, Kokkos::subview(d_nc, 0));
-
-            mapping = initialize_mapping(g.n, nc, mem_stack);
-
-            Kokkos::parallel_for("copy_mapping_small", Kokkos::RangePolicy<DeviceExecutionSpace>(exec_space, 0, g.n), KOKKOS_LAMBDA(const vertex_t u) {
-                mapping.mapping(u) = thm.vcmap(u);
-            });
-
-            pop_back(mem_stack); // d_nc
-        }
+        pop_back(mem_stack); // d_nc
 
         KOKKOS_PROFILE_FENCE(exec_space);
 
