@@ -38,6 +38,12 @@
 #include "../utility/asserts.h"
 
 namespace GPU_HeiPa {
+    enum class BisectionMethod {
+        BRUTE_FORCE,
+        BRUTE_FORCE_WITH_HEURISTIC,
+        HEURISTIC_ONLY
+    };
+
     struct BestBisectConfig {
         u64 penalty = 0xFFFFFFFFFFFFFFFFULL;
         weight_t cut = 0x7FFFFFFF;
@@ -446,7 +452,156 @@ namespace GPU_HeiPa {
         exec_space.fence();
     }
 
-    template<bool uvw, bool uew, bool DO_HEURISTIC = true, bool ONLY_DO_HEURISTIC = true>
+    template<bool uvw, bool uew>
+    inline void batched_heuristic_bisect(const GraphBatch &batch,
+                                         const DeviceU8 &active_mask,
+                                         const DeviceU32 &current_targets_dev,
+                                         weight_t lmax_global,
+                                         KokkosMemoryStack &mem_stack,
+                                         DeviceExecutionSpace &exec_space) {
+        HEIPA_PROFILE_SCOPE("initial_partitioning", "gpu_rb_partition", "batched_heuristic_bisect");
+
+        constexpr u64 EMPTY_BLOCK_PENALTY = 1000000000000ULL;
+        const u32 k = batch.k;
+        auto d_actual_n = batch.d_actual_n;
+
+        HEIPA_PROFILE_SCOPE("initial_partitioning", "batched_heuristic_bisect", "bisect1_batched");
+        Kokkos::parallel_for("bisect1_batched", Kokkos::RangePolicy<DeviceExecutionSpace>(exec_space, 0, k), KOKKOS_LAMBDA(const partition_t id) {
+            if (active_mask(id) && d_actual_n(id) == 1) {
+                partition_t *part = batch.get_partition_ptr(id);
+                part[0] = 0;
+                batch.d_bisection_results(id).penalty = 0;
+                batch.d_bisection_results(id).cut = 0;
+                batch.d_bisection_results(id).config = 0;
+            }
+        });
+        KOKKOS_PROFILE_FENCE(exec_space);
+
+        Kokkos::View<BestBisectConfig *, DeviceMemorySpace, Kokkos::MemoryTraits<Kokkos::Unmanaged> > heuristic_results((BestBisectConfig *) get_chunk_back(mem_stack, sizeof(BestBisectConfig) * k), k);
+
+        auto g_mem = batch.graph_memory;
+        auto d_actual_g_weight = batch.d_actual_g_weight;
+        vertex_t b_n = batch.n;
+        vertex_t b_m = batch.m;
+        u64 n_bytes_weights = round_up_64(b_n) * sizeof(weight_t);
+        u64 n_bytes_neighborhood = round_up_64(b_n + 1) * sizeof(u32);
+        u64 n_bytes_edges_u = round_up_64(b_m) * sizeof(vertex_t);
+        u64 n_bytes_edges_v = round_up_64(b_m) * sizeof(vertex_t);
+        u64 n_bytes_edges_w = round_up_64(b_m) * sizeof(weight_t);
+        u64 n_bytes_one_graph = n_bytes_weights + n_bytes_neighborhood + n_bytes_edges_u + n_bytes_edges_v + n_bytes_edges_w;
+
+        HEIPA_PROFILE_SCOPE("initial_partitioning", "batched_heuristic_bisect", "heuristic_prepass");
+        Kokkos::parallel_for("heuristic_prepass", Kokkos::TeamPolicy<DeviceExecutionSpace>(exec_space, k, Kokkos::AUTO), KOKKOS_LAMBDA(const Kokkos::TeamPolicy<DeviceExecutionSpace>::member_type &team) {
+            const partition_t graph_id = team.league_rank();
+            if (!active_mask(graph_id)) return;
+            
+            const vertex_t gn = d_actual_n(graph_id);
+            if (gn <= 1) return;
+
+            const partition_t tk = current_targets_dev(graph_id);
+            const weight_t lmax_left = lmax_global * (tk / 2);
+            const weight_t lmax_right = lmax_global * (tk - tk / 2);
+            const weight_t g_weight = d_actual_g_weight(graph_id);
+
+            u8 *base = g_mem.data() + (u64) graph_id * n_bytes_one_graph;
+            weight_t *g_w = (weight_t *) base;
+            base += n_bytes_weights;
+            u32 *g_n = (u32 *) base;
+            base += n_bytes_neighborhood;
+            vertex_t *g_eu = (vertex_t *) base;
+            base += n_bytes_edges_u;
+            vertex_t *g_ev = (vertex_t *) base;
+            base += n_bytes_edges_v;
+            weight_t *g_ew = (weight_t *) base;
+
+            BestBisectConfig best_in_team;
+            BestBisectReducer reducer(best_in_team);
+            reducer.init(best_in_team);
+
+            Kokkos::parallel_reduce(Kokkos::TeamThreadRange(team, gn), [&](const vertex_t seed, BestBisectConfig &heuristic_best) {
+                u64 part_mask = (1ULL << seed);
+                weight_t w1 = uvw ? 1 : g_w[seed];
+                
+                while (true) {
+                    vertex_t best_v = gn;
+                    int max_gain = -99999999;
+                    for (vertex_t v = 0; v < gn; ++v) {
+                        if (part_mask & (1ULL << v)) continue;
+                        int gain = 0;
+                        for (u32 e = g_n[v]; e < g_n[v + 1]; ++e) {
+                            vertex_t u = g_ev[e];
+                            weight_t ew = uew ? 1 : g_ew[e];
+                            if (part_mask & (1ULL << u)) gain += ew;
+                            else gain -= ew;
+                        }
+                        if (gain > max_gain) {
+                            max_gain = gain;
+                            best_v = v;
+                        }
+                    }
+                    if (best_v == gn) break;
+                    weight_t vw = uvw ? 1 : g_w[best_v];
+                    if (w1 + vw > g_weight / 2) break;
+                    part_mask |= (1ULL << best_v);
+                    w1 += vw;
+                }
+
+                weight_t cut = 0;
+                for (vertex_t u = 0; u < gn; ++u) {
+                    if (part_mask & (1ULL << u)) {
+                        for (u32 e = g_n[u]; e < g_n[u + 1]; ++e) {
+                            if (!(part_mask & (1ULL << g_ev[e]))) {
+                                cut += uew ? 1 : g_ew[e];
+                            }
+                        }
+                    }
+                }
+
+                const weight_t wl = g_weight - w1;
+                const u64 p_l = wl > lmax_left ? (u64) (wl - lmax_left) : 0;
+                const u64 p_r = w1 > lmax_right ? (u64) (w1 - lmax_right) : 0;
+                u64 penalty = p_l * p_l + p_r * p_r;
+
+                if (wl == 0 || w1 == 0) penalty += EMPTY_BLOCK_PENALTY;
+
+                if (penalty < heuristic_best.penalty || (penalty == heuristic_best.penalty && cut < heuristic_best.cut)) {
+                    heuristic_best.penalty = penalty;
+                    heuristic_best.cut = cut;
+                    heuristic_best.config = part_mask;
+                }
+            }, reducer);
+
+            Kokkos::single(Kokkos::PerTeam(team), [&]() {
+                heuristic_results(graph_id) = best_in_team;
+            });
+        });
+        KOKKOS_PROFILE_FENCE(exec_space);
+
+        HEIPA_PROFILE_SCOPE("initial_partitioning", "batched_heuristic_bisect", "reduce_and_apply");
+        auto d_results = batch.d_bisection_results;
+        Kokkos::parallel_for("copy_heuristic_results", Kokkos::RangePolicy<DeviceExecutionSpace>(exec_space, 0, k), KOKKOS_LAMBDA(const partition_t id) {
+            if (active_mask(id) && d_actual_n(id) > 1) {
+                d_results(id) = heuristic_results(id);
+            }
+        });
+        
+        Kokkos::parallel_for("apply_batched_best_config", Kokkos::RangePolicy<DeviceExecutionSpace>(exec_space, 0, k), KOKKOS_LAMBDA(const partition_t id) {
+            if (active_mask(id) && d_actual_n(id) > 1) {
+                const u64 config = d_results(id).config;
+                partition_t *part = batch.get_partition_ptr(id);
+                const vertex_t gn = d_actual_n(id);
+                for (vertex_t u = 0; u < gn; ++u) {
+                    part[u] = (partition_t) ((config >> u) & 1ULL);
+                }
+            }
+        });
+        exec_space.fence();
+        KOKKOS_PROFILE_FENCE(exec_space);
+        
+        pop_back(mem_stack); // heuristic_results
+    }
+
+    template<bool uvw, bool uew, bool DO_HEURISTIC = true>
     inline void batched_brute_force_bisect(const GraphBatch &batch,
                                            const DeviceU8 &active_mask,
                                            const DeviceU32 &current_targets_dev,
@@ -530,7 +685,7 @@ namespace GPU_HeiPa {
         Kokkos::View<BestBisectConfig *, DeviceMemorySpace, Kokkos::MemoryTraits<Kokkos::Unmanaged> > team_results((BestBisectConfig *) get_chunk_back(mem_stack, sizeof(BestBisectConfig) * total_teams), total_teams);
         Kokkos::View<BestBisectConfig *, DeviceMemorySpace, Kokkos::MemoryTraits<Kokkos::Unmanaged> > heuristic_results;
         
-        if constexpr (DO_HEURISTIC || ONLY_DO_HEURISTIC) {
+        if constexpr (DO_HEURISTIC) {
             heuristic_results = Kokkos::View<BestBisectConfig *, DeviceMemorySpace, Kokkos::MemoryTraits<Kokkos::Unmanaged> >((BestBisectConfig *) get_chunk_back(mem_stack, sizeof(BestBisectConfig) * k), k);
         }
 
@@ -545,7 +700,7 @@ namespace GPU_HeiPa {
         u64 n_bytes_edges_w = round_up_64(b_m) * sizeof(weight_t);
         u64 n_bytes_one_graph = n_bytes_weights + n_bytes_neighborhood + n_bytes_edges_u + n_bytes_edges_v + n_bytes_edges_w;
 
-        if constexpr (DO_HEURISTIC || ONLY_DO_HEURISTIC) {
+        if constexpr (DO_HEURISTIC) {
             HEIPA_PROFILE_SCOPE("initial_partitioning", "batched_brute_force_bisect", "heuristic_prepass");
             Kokkos::parallel_for("heuristic_prepass", Kokkos::TeamPolicy<DeviceExecutionSpace>(exec_space, k, Kokkos::AUTO), KOKKOS_LAMBDA(const Kokkos::TeamPolicy<DeviceExecutionSpace>::member_type &team) {
                 const partition_t graph_id = team.league_rank();
@@ -632,32 +787,6 @@ namespace GPU_HeiPa {
                 });
             });
             KOKKOS_PROFILE_FENCE(exec_space);
-        }
-
-        if constexpr (ONLY_DO_HEURISTIC) {
-            HEIPA_PROFILE_SCOPE("initial_partitioning", "batched_brute_force_bisect", "reduce_and_apply");
-            auto d_results = batch.d_bisection_results;
-            Kokkos::parallel_for("copy_heuristic_results", Kokkos::RangePolicy<DeviceExecutionSpace>(exec_space, 0, k), KOKKOS_LAMBDA(const partition_t id) {
-                if (active_mask(id) && d_actual_n(id) > 1) {
-                    d_results(id) = heuristic_results(id);
-                }
-            });
-            
-            Kokkos::parallel_for("apply_batched_best_config", Kokkos::RangePolicy<DeviceExecutionSpace>(exec_space, 0, k), KOKKOS_LAMBDA(const partition_t id) {
-                if (active_mask(id) && d_actual_n(id) > 1) {
-                    const u64 config = d_results(id).config;
-                    partition_t *part = batch.get_partition_ptr(id);
-                    const vertex_t gn = d_actual_n(id);
-                    for (vertex_t u = 0; u < gn; ++u) {
-                        part[u] = (partition_t) ((config >> u) & 1ULL);
-                    }
-                }
-            });
-            exec_space.fence();
-            KOKKOS_PROFILE_FENCE(exec_space);
-            
-            pop_back(mem_stack); // heuristic_results
-            return;
         }
 
         HEIPA_PROFILE_SCOPE("initial_partitioning", "batched_brute_force_bisect", "bisect_kernel");
@@ -918,13 +1047,40 @@ namespace GPU_HeiPa {
         exec_space.fence();
         KOKKOS_PROFILE_FENCE(exec_space);
 
-        if constexpr (DO_HEURISTIC || ONLY_DO_HEURISTIC) {
+        if constexpr (DO_HEURISTIC) {
             pop_back(mem_stack); // heuristic_results
         }
         pop_back(mem_stack); // team_results
         pop_back(mem_stack); // max_sizes
         pop_back(mem_stack); // teams_offset
         pop_back(mem_stack); // teams_per_graph
+    }
+
+    inline void dispatch_batched_bisection(BisectionMethod method,
+                                           bool uvw,
+                                           bool uew,
+                                           const GraphBatch &batch,
+                                           const DeviceU8 &active_mask,
+                                           const DeviceU32 &current_targets_dev,
+                                           weight_t lmax_global,
+                                           KokkosMemoryStack &mem_stack,
+                                           DeviceExecutionSpace &exec_space) {
+        if (method == BisectionMethod::HEURISTIC_ONLY) {
+            if (uvw && uew) batched_heuristic_bisect<true, true>(batch, active_mask, current_targets_dev, lmax_global, mem_stack, exec_space);
+            else if (uvw) batched_heuristic_bisect<true, false>(batch, active_mask, current_targets_dev, lmax_global, mem_stack, exec_space);
+            else if (uew) batched_heuristic_bisect<false, true>(batch, active_mask, current_targets_dev, lmax_global, mem_stack, exec_space);
+            else batched_heuristic_bisect<false, false>(batch, active_mask, current_targets_dev, lmax_global, mem_stack, exec_space);
+        } else if (method == BisectionMethod::BRUTE_FORCE_WITH_HEURISTIC) {
+            if (uvw && uew) batched_brute_force_bisect<true, true, true>(batch, active_mask, current_targets_dev, lmax_global, mem_stack, exec_space);
+            else if (uvw) batched_brute_force_bisect<true, false, true>(batch, active_mask, current_targets_dev, lmax_global, mem_stack, exec_space);
+            else if (uew) batched_brute_force_bisect<false, true, true>(batch, active_mask, current_targets_dev, lmax_global, mem_stack, exec_space);
+            else batched_brute_force_bisect<false, false, true>(batch, active_mask, current_targets_dev, lmax_global, mem_stack, exec_space);
+        } else if (method == BisectionMethod::BRUTE_FORCE) {
+            if (uvw && uew) batched_brute_force_bisect<true, true, false>(batch, active_mask, current_targets_dev, lmax_global, mem_stack, exec_space);
+            else if (uvw) batched_brute_force_bisect<true, false, false>(batch, active_mask, current_targets_dev, lmax_global, mem_stack, exec_space);
+            else if (uew) batched_brute_force_bisect<false, true, false>(batch, active_mask, current_targets_dev, lmax_global, mem_stack, exec_space);
+            else batched_brute_force_bisect<false, false, false>(batch, active_mask, current_targets_dev, lmax_global, mem_stack, exec_space);
+        }
     }
 
     inline void bisect(Graph &g, weight_t lmax_1, weight_t lmax_2, UnmanagedDevicePartition &partition, DeviceExecutionSpace &exec_space) {

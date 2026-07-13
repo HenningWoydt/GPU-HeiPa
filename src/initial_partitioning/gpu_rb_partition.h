@@ -94,7 +94,8 @@ namespace GPU_HeiPa {
                                  u32 threshold,
                                  Partition &partition,
                                  KokkosMemoryStack &mem_stack,
-                                 DeviceExecutionSpace &exec_space) {
+                                 DeviceExecutionSpace &exec_space,
+                                 BisectionMethod bisection_method = BisectionMethod::HEURISTIC_ONLY) {
         HEIPA_PROFILE_SCOPE("initial_partitioning", "gpu_rb_partition", "gpu_rb_partition");
 
         // --- Phase 1: Coarsening ---
@@ -110,7 +111,7 @@ namespace GPU_HeiPa {
             // mappings.push_back(independent_edge_set_get_mapping<false, false>(graphs.back(), partition, lmax_global, mem_stack, exec_space));
             KOKKOS_PROFILE_FENCE(exec_space);
 
-            graphs.push_back(from_Graph_Mapping_small<false, false>(graphs.back(), mappings.back(), mem_stack, exec_space));
+            graphs.push_back(from_Graph_Mapping_small<false, false>(graphs.back(), mappings.back(), mem_stack, exec_space, true));
 
             KOKKOS_PROFILE_FENCE(exec_space);
 
@@ -192,10 +193,7 @@ namespace GPU_HeiPa {
                 bool g_uvw = graphs.back().uniform_vertex_weights;
                 bool g_uew = graphs.back().uniform_edge_weights;
 
-                if (g_uvw && g_uew) batched_brute_force_bisect<true, true>(batch, active_mask, current_targets_dev, lmax_global, mem_stack, exec_space);
-                else if (g_uvw) batched_brute_force_bisect<true, false>(batch, active_mask, current_targets_dev, lmax_global, mem_stack, exec_space);
-                else if (g_uew) batched_brute_force_bisect<false, true>(batch, active_mask, current_targets_dev, lmax_global, mem_stack, exec_space);
-                else batched_brute_force_bisect<false, false>(batch, active_mask, current_targets_dev, lmax_global, mem_stack, exec_space);
+                dispatch_batched_bisection(bisection_method, g_uvw, g_uew, batch, active_mask, current_targets_dev, lmax_global, mem_stack, exec_space);
                 KOKKOS_PROFILE_FENCE(exec_space);
 
                 HEIPA_PROFILE_SCOPE("initial_partitioning", "gpu_rb_partition", "insert_solution_and_weights");

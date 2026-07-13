@@ -129,12 +129,8 @@ namespace GPU_HeiPa {
     inline Graph from_Graph_Mapping_small(const Graph &old_g,
                                           const Mapping &mapping,
                                           KokkosMemoryStack &mem_stack,
-                                          DeviceExecutionSpace &exec_space) {
-        // --- Hyperparameters ---
-        // Sort coarse vertices by degree (ascending). Significantly speeds up brute-force bisection later.
-        const bool SORT_BY_DEGREE = true;
-        // -----------------------
-
+                                          DeviceExecutionSpace &exec_space,
+                                          bool sort_by_degree = true) {
         // initialize graphs
         HEIPA_PROFILE_SCOPE("initial_partitioning", "from_Graph_Mapping_small", "initialize_graph");
         Graph coarse_g;
@@ -193,7 +189,7 @@ namespace GPU_HeiPa {
         // count new degrees
         HEIPA_PROFILE_SCOPE("initial_partitioning", "from_Graph_Mapping_small", "count_degrees");
         Kokkos::View<u32 *, DeviceMemorySpace, Kokkos::MemoryTraits<Kokkos::Unmanaged> > bin_counts;
-        if (SORT_BY_DEGREE) {
+        if (sort_by_degree) {
             bin_counts = Kokkos::View<u32 *, DeviceMemorySpace, Kokkos::MemoryTraits<Kokkos::Unmanaged> >((u32 *) get_chunk_back(mem_stack, sizeof(u32) * (coarse_g.n + 1)), coarse_g.n + 1);
             Kokkos::deep_copy(exec_space, bin_counts, 0);
         }
@@ -204,14 +200,14 @@ namespace GPU_HeiPa {
                 if (dense_adj(u * coarse_g.n + v) > 0) count++;
             }
             degrees(u) = count;
-            if (SORT_BY_DEGREE) {
+            if (sort_by_degree) {
                 Kokkos::atomic_add(&bin_counts(count), 1);
             }
         });
         KOKKOS_PROFILE_FENCE(exec_space);
 
 
-        if (SORT_BY_DEGREE) {
+        if (sort_by_degree) {
             HEIPA_PROFILE_SCOPE("initial_partitioning", "from_Graph_Mapping_small", "sort_by_degree");
 
             Kokkos::parallel_scan("scan_bins", Kokkos::RangePolicy<DeviceExecutionSpace>(exec_space, 0, coarse_g.n + 1), KOKKOS_LAMBDA(const u32 i, u32 &running, const bool final) {
