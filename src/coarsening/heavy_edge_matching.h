@@ -9,16 +9,17 @@
 #include "two_hop_matching.h"
 
 namespace GPU_HeiPa {
+
     template<bool uniform_v_weights, bool uniform_e_weights>
     inline Mapping heavy_edge_matching_small_get_mapping(const Graph &g,
-                                          const Partition &partition,
-                                          const weight_t &lmax,
-                                          KokkosMemoryStack &mem_stack,
-                                          DeviceExecutionSpace &exec_space) {
+                                                         const Partition &partition,
+                                                         const weight_t lmax,
+                                                         KokkosMemoryStack &mem_stack,
+                                                         DeviceExecutionSpace &exec_space) {
         // --- Hyperparameters ---
-        const u32 SEED = 0;
-        const u32 MAX_MATCHING_ROUNDS = 10;
-        const u32 COMMIT_SUB_ROUNDS = 4;
+        constexpr u32 SEED = 0;
+        constexpr u32 MAX_MATCHING_ROUNDS = 3;
+        constexpr u32 COMMIT_SUB_ROUNDS = 3;
         // -----------------------
 
         HEIPA_PROFILE_SCOPE("initial_partitioning", "coarsen_match_small", "heavy_edge_matching_small");
@@ -42,8 +43,16 @@ namespace GPU_HeiPa {
                 u32 r = xorshiftHash(u ^ SEED);
                 u32 tiebreaker = 0;
 
+                weight_t wu = 1;
+                if constexpr (!uniform_v_weights) wu = g.weights(u);
+
                 for (u32 j = g.neighborhood(u); j < g.neighborhood(u + 1); j++) {
                     vertex_t v = g.edges_v(j);
+                    
+                    weight_t wv = 1;
+                    if constexpr (!uniform_v_weights) wv = g.weights(v);
+                    // if (wu + wv > lmax) continue;
+
                     if constexpr (!uniform_e_weights) {
                         if (max_ewt < g.edges_w(j)) {
                             max_ewt = g.edges_w(j);
@@ -104,9 +113,16 @@ namespace GPU_HeiPa {
                     u32 r = xorshiftHash(u ^ round_seed);
                     u32 tiebreaker = 0;
 
+                    weight_t wu = 1;
+                    if constexpr (!uniform_v_weights) wu = g.weights(u);
+
                     for (u32 j = g.neighborhood(u); j < g.neighborhood(u + 1); j++) {
                         vertex_t v = g.edges_v(j);
                         if (thm.vcmap(v) == SENTINEL) {
+                            weight_t wv = 1;
+                            if constexpr (!uniform_v_weights) wv = g.weights(v);
+                            // if (wu + wv > lmax) continue;
+
                             if constexpr (!uniform_e_weights) {
                                 if (max_ewt < g.edges_w(j)) {
                                     max_ewt = g.edges_w(j);
@@ -161,10 +177,10 @@ namespace GPU_HeiPa {
 
         pop_back(mem_stack); // d_nc
 
+        free_TwoHopMatcher(thm, mem_stack);
+
         KOKKOS_PROFILE_FENCE(exec_space);
 
-        free_TwoHopMatcher(thm, mem_stack);
-        
         return mapping;
     }
 }
