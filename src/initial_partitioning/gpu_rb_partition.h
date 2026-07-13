@@ -214,7 +214,7 @@ namespace GPU_HeiPa {
                 // insert all solutions and update block weights
                 auto p_map = partition.map;
                 auto p_bweights = partition.bweights;
-                auto d_actual_n = batch.d_actual_n;
+                auto d_actual_n = batch.actual_n;
                 auto g_weights = graphs.back().weights;
 
                 Kokkos::parallel_for("insert_all_solutions_and_weights", Kokkos::TeamPolicy<DeviceExecutionSpace>(exec_space, k, Kokkos::AUTO()), KOKKOS_LAMBDA(const Kokkos::TeamPolicy<DeviceExecutionSpace>::member_type &team) {

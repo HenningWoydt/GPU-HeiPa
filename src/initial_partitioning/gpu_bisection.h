@@ -30,6 +30,7 @@
 #include <Kokkos_Core.hpp>
 
 #include "../datastructures/graph.h"
+#include "../datastructures/small_graph.h"
 #include "../datastructures/partition.h"
 #include "../datastructures/kokkos_memory_stack.h"
 #include "../definitions.h"
@@ -261,12 +262,10 @@ namespace GPU_HeiPa {
         UnmanagedDeviceU8 partition_memory;
         UnmanagedDeviceU8 global_ids_memory;
 
-
-        UnmanagedDeviceVertex d_actual_n;
+        UnmanagedDeviceVertex actual_n;
         UnmanagedDeviceVertex offset_n;
-        UnmanagedDeviceVertex d_actual_m;
-        UnmanagedDeviceWeight d_actual_g_weight;
-
+        UnmanagedDeviceVertex actual_m;
+        UnmanagedDeviceWeight actual_g_weight;
 
         Kokkos::View<BestBisectConfig *, DeviceMemorySpace> d_bisection_results;
         KOKKOS_INLINE_FUNCTION
@@ -307,10 +306,10 @@ namespace GPU_HeiPa {
         batch.global_ids_memory = UnmanagedDeviceU8((u8 *) get_chunk_front(mem_stack, sizeof(u8) * n_bytes_global_ids_total), n_bytes_global_ids_total);
 
 
-        batch.d_actual_n = UnmanagedDeviceVertex((vertex_t *) get_chunk_front(mem_stack, sizeof(vertex_t) * batch.k), batch.k);
+        batch.actual_n = UnmanagedDeviceVertex((vertex_t *) get_chunk_front(mem_stack, sizeof(vertex_t) * batch.k), batch.k);
         batch.offset_n = UnmanagedDeviceVertex((vertex_t *) get_chunk_front(mem_stack, sizeof(vertex_t) * batch.k), batch.k);
-        batch.d_actual_m = UnmanagedDeviceVertex((vertex_t *) get_chunk_front(mem_stack, sizeof(vertex_t) * batch.k), batch.k);
-        batch.d_actual_g_weight = UnmanagedDeviceWeight((weight_t *) get_chunk_front(mem_stack, sizeof(weight_t) * batch.k), batch.k);
+        batch.actual_m = UnmanagedDeviceVertex((vertex_t *) get_chunk_front(mem_stack, sizeof(vertex_t) * batch.k), batch.k);
+        batch.actual_g_weight = UnmanagedDeviceWeight((weight_t *) get_chunk_front(mem_stack, sizeof(weight_t) * batch.k), batch.k);
 
         batch.d_bisection_results = Kokkos::View<BestBisectConfig *, DeviceMemorySpace>("d_bisection_results", batch.k);
     }
@@ -337,9 +336,9 @@ namespace GPU_HeiPa {
         auto map = partition.map;
         partition_t k = (partition_t) batch.k;
         bool use_mask = active_mask.extent(0) > 0;
-        auto d_actual_n = batch.d_actual_n;
-        auto d_actual_m = batch.d_actual_m;
-        auto d_actual_g_weight = batch.d_actual_g_weight;
+        auto d_actual_n = batch.actual_n;
+        auto d_actual_m = batch.actual_m;
+        auto d_actual_g_weight = batch.actual_g_weight;
         Kokkos::deep_copy(exec_space, d_actual_n, 0);
         Kokkos::deep_copy(exec_space, d_actual_m, 0);
         Kokkos::deep_copy(exec_space, d_actual_g_weight, 0);
@@ -459,13 +458,13 @@ namespace GPU_HeiPa {
 
         constexpr u64 EMPTY_BLOCK_PENALTY = 1000000000000ULL;
         const u32 k = batch.k;
-        auto d_actual_n = batch.d_actual_n;
+        auto d_actual_n = batch.actual_n;
 
         HEIPA_PROFILE_SCOPE("initial_partitioning", "batched_heuristic_bisect", "heuristic_prepass");
         auto d_results = batch.d_bisection_results;
         
         auto g_mem = batch.graph_memory;
-        auto d_actual_g_weight = batch.d_actual_g_weight;
+        auto d_actual_g_weight = batch.actual_g_weight;
         vertex_t b_n = batch.n;
         vertex_t b_m = batch.m;
         u64 n_bytes_weights = round_up_64(b_n) * sizeof(weight_t);
@@ -608,8 +607,8 @@ namespace GPU_HeiPa {
         UnmanagedDeviceU32 max_sizes((u32 *) get_chunk_back(mem_stack, sizeof(u32) * 2), 2);
         Kokkos::deep_copy(exec_space, max_sizes, 0);
 
-        auto d_actual_n = batch.d_actual_n;
-        auto d_actual_m = batch.d_actual_m;
+        auto d_actual_n = batch.actual_n;
+        auto d_actual_m = batch.actual_m;
 
         u32 total_teams = 0;
         u32 max_n = 0;
@@ -644,6 +643,7 @@ namespace GPU_HeiPa {
         Kokkos::deep_copy(exec_space, total_teams, Kokkos::subview(teams_offset, k));
         Kokkos::deep_copy(exec_space, max_n, Kokkos::subview(max_sizes, 0));
         Kokkos::deep_copy(exec_space, max_m, Kokkos::subview(max_sizes, 1));
+
         KOKKOS_PROFILE_FENCE(exec_space);
 
         HEIPA_PROFILE_SCOPE("initial_partitioning", "gpu_rb_partition", "bisect1_batched");
@@ -673,7 +673,7 @@ namespace GPU_HeiPa {
         }
 
         auto g_mem = batch.graph_memory;
-        auto d_actual_g_weight = batch.d_actual_g_weight;
+        auto d_actual_g_weight = batch.actual_g_weight;
         vertex_t b_n = batch.n;
         vertex_t b_m = batch.m;
         u64 n_bytes_weights = round_up_64(b_n) * sizeof(weight_t);
