@@ -188,78 +188,14 @@ namespace GPU_HeiPa {
 
         // count new degrees
         HEIPA_PROFILE_SCOPE("initial_partitioning", "from_Graph_Mapping_small", "count_degrees");
-        Kokkos::View<u32 *, DeviceMemorySpace, Kokkos::MemoryTraits<Kokkos::Unmanaged> > bin_counts;
-        if (sort_by_degree) {
-            bin_counts = Kokkos::View<u32 *, DeviceMemorySpace, Kokkos::MemoryTraits<Kokkos::Unmanaged> >((u32 *) get_chunk_back(mem_stack, sizeof(u32) * (coarse_g.n + 1)), coarse_g.n + 1);
-            Kokkos::deep_copy(exec_space, bin_counts, 0);
-        }
-
         Kokkos::parallel_for("count_degrees", Kokkos::RangePolicy<DeviceExecutionSpace>(exec_space, 0, coarse_g.n), KOKKOS_LAMBDA(const vertex_t u) {
             u32 count = 0;
             for (vertex_t v = 0; v < coarse_g.n; ++v) {
                 if (dense_adj(u * coarse_g.n + v) > 0) count++;
             }
             degrees(u) = count;
-            if (sort_by_degree) {
-                Kokkos::atomic_add(&bin_counts(count), 1);
-            }
         });
         KOKKOS_PROFILE_FENCE(exec_space);
-
-
-        if (sort_by_degree) {
-            HEIPA_PROFILE_SCOPE("initial_partitioning", "from_Graph_Mapping_small", "sort_by_degree");
-
-            Kokkos::parallel_scan("scan_bins", Kokkos::RangePolicy<DeviceExecutionSpace>(exec_space, 0, coarse_g.n + 1), KOKKOS_LAMBDA(const u32 i, u32 &running, const bool final) {
-                u32 val = bin_counts(i);
-                if (final) bin_counts(i) = running;
-                running += val;
-            });
-
-            Kokkos::View<vertex_t *, DeviceMemorySpace, Kokkos::MemoryTraits<Kokkos::Unmanaged> > sorted_old_ids((vertex_t *) get_chunk_back(mem_stack, sizeof(vertex_t) * coarse_g.n), coarse_g.n);
-            
-            Kokkos::parallel_for("scatter_ids", Kokkos::RangePolicy<DeviceExecutionSpace>(exec_space, 0, coarse_g.n), KOKKOS_LAMBDA(const vertex_t u) {
-                u32 count = degrees(u);
-                u32 write_idx = Kokkos::atomic_fetch_add(&bin_counts(count), 1);
-                sorted_old_ids(write_idx) = u;
-            });
-
-            Kokkos::View<vertex_t *, DeviceMemorySpace, Kokkos::MemoryTraits<Kokkos::Unmanaged> > d_perm((vertex_t *) get_chunk_back(mem_stack, sizeof(vertex_t) * coarse_g.n), coarse_g.n);
-
-            UnmanagedDeviceU32 temp_degrees((u32 *) get_chunk_back(mem_stack, sizeof(u32) * (coarse_g.n + 1)), coarse_g.n + 1);
-            UnmanagedDeviceWeight temp_weights((weight_t *) get_chunk_back(mem_stack, sizeof(weight_t) * coarse_g.n), coarse_g.n);
-            UnmanagedDeviceWeight temp_dense_adj((weight_t *) get_chunk_back(mem_stack, sizeof(weight_t) * coarse_g.n * coarse_g.n), coarse_g.n * coarse_g.n);
-
-            auto map = mapping.mapping;
-            auto c_weights = coarse_g.weights;
-
-            Kokkos::parallel_for("permute_arrays", Kokkos::RangePolicy<DeviceExecutionSpace>(exec_space, 0, coarse_g.n), KOKKOS_LAMBDA(const vertex_t new_u) {
-                vertex_t old_u = sorted_old_ids(new_u);
-                d_perm(old_u) = new_u;
-                temp_degrees(new_u) = degrees(old_u);
-                temp_weights(new_u) = c_weights(old_u);
-                for (vertex_t new_v = 0; new_v < coarse_g.n; ++new_v) {
-                    vertex_t old_v = sorted_old_ids(new_v);
-                    temp_dense_adj(new_u * coarse_g.n + new_v) = dense_adj(old_u * coarse_g.n + old_v);
-                }
-            });
-
-            Kokkos::parallel_for("update_mapping", Kokkos::RangePolicy<DeviceExecutionSpace>(exec_space, 0, old_g.n), KOKKOS_LAMBDA(const vertex_t u) {
-                map(u) = d_perm(map(u));
-            });
-
-            Kokkos::deep_copy(exec_space, degrees, temp_degrees);
-            Kokkos::deep_copy(exec_space, coarse_g.weights, temp_weights);
-            Kokkos::deep_copy(exec_space, dense_adj, temp_dense_adj);
-
-            pop_back(mem_stack); // temp_dense_adj
-            pop_back(mem_stack); // temp_weights
-            pop_back(mem_stack); // temp_degrees
-            pop_back(mem_stack); // d_perm
-            pop_back(mem_stack); // sorted_old_ids
-            pop_back(mem_stack); // bin_counts
-            KOKKOS_PROFILE_FENCE(exec_space);
-        }
 
         // prefix sum
         HEIPA_PROFILE_SCOPE("initial_partitioning", "from_Graph_Mapping_small", "prefix_sum_offsets");
@@ -302,6 +238,95 @@ namespace GPU_HeiPa {
         pop_back(mem_stack); // degrees
         pop_back(mem_stack); // dense_adj
         KOKKOS_PROFILE_FENCE(exec_space);
+
+        if (sort_by_degree) {
+            HEIPA_PROFILE_SCOPE("initial_partitioning", "from_Graph_Mapping_small", "sort_by_degree_csr");
+
+            UnmanagedDeviceU32 bin_counts((u32 *) get_chunk_back(mem_stack, sizeof(u32) * (coarse_g.n + 1)), coarse_g.n + 1);
+            Kokkos::deep_copy(exec_space, bin_counts, 0);
+
+            auto c_neigh = coarse_g.neighborhood;
+            Kokkos::parallel_for("count_bins", Kokkos::RangePolicy<DeviceExecutionSpace>(exec_space, 0, coarse_g.n), KOKKOS_LAMBDA(const vertex_t u) {
+                u32 count = c_neigh(u + 1) - c_neigh(u);
+                Kokkos::atomic_add(&bin_counts(count), 1);
+            });
+
+            Kokkos::parallel_scan("scan_bins", Kokkos::RangePolicy<DeviceExecutionSpace>(exec_space, 0, coarse_g.n + 1), KOKKOS_LAMBDA(const u32 i, u32 &running, const bool final) {
+                u32 val = bin_counts(i);
+                if (final) bin_counts(i) = running;
+                running += val;
+            });
+
+            UnmanagedDeviceVertex sorted_old_ids((vertex_t *) get_chunk_back(mem_stack, sizeof(vertex_t) * coarse_g.n), coarse_g.n);
+            
+            Kokkos::parallel_for("scatter_ids", Kokkos::RangePolicy<DeviceExecutionSpace>(exec_space, 0, coarse_g.n), KOKKOS_LAMBDA(const vertex_t u) {
+                u32 count = c_neigh(u + 1) - c_neigh(u);
+                u32 write_idx = Kokkos::atomic_fetch_add(&bin_counts(count), 1);
+                sorted_old_ids(write_idx) = u;
+            });
+
+            UnmanagedDeviceVertex d_perm((vertex_t *) get_chunk_back(mem_stack, sizeof(vertex_t) * coarse_g.n), coarse_g.n);
+
+            UnmanagedDeviceU32 temp_degrees((u32 *) get_chunk_back(mem_stack, sizeof(u32) * (coarse_g.n + 1)), coarse_g.n + 1);
+            UnmanagedDeviceWeight temp_weights((weight_t *) get_chunk_back(mem_stack, sizeof(weight_t) * coarse_g.n), coarse_g.n);
+
+            auto c_weights = coarse_g.weights;
+
+            Kokkos::parallel_for("permute_vertices", Kokkos::RangePolicy<DeviceExecutionSpace>(exec_space, 0, coarse_g.n), KOKKOS_LAMBDA(const vertex_t new_u) {
+                vertex_t old_u = sorted_old_ids(new_u);
+                d_perm(old_u) = new_u;
+                temp_degrees(new_u) = c_neigh(old_u + 1) - c_neigh(old_u);
+                temp_weights(new_u) = c_weights(old_u);
+            });
+
+            UnmanagedDeviceU32 temp_neigh((u32 *) get_chunk_back(mem_stack, sizeof(u32) * (coarse_g.n + 1)), coarse_g.n + 1);
+            Kokkos::parallel_scan("scan_temp_neigh", Kokkos::RangePolicy<DeviceExecutionSpace>(exec_space, 0, coarse_g.n + 1), KOKKOS_LAMBDA(const u32 i, u32 &running, const bool final) {
+                if (final) temp_neigh(i) = running;
+                running += temp_degrees(i);
+            });
+
+            UnmanagedDeviceVertex temp_edges_v((vertex_t *) get_chunk_back(mem_stack, sizeof(vertex_t) * coarse_g.m), coarse_g.m);
+            UnmanagedDeviceWeight temp_edges_w((weight_t *) get_chunk_back(mem_stack, sizeof(weight_t) * coarse_g.m), coarse_g.m);
+            UnmanagedDeviceVertex temp_edges_u((vertex_t *) get_chunk_back(mem_stack, sizeof(vertex_t) * coarse_g.m), coarse_g.m);
+
+            auto c_edges_v = coarse_g.edges_v;
+            auto c_edges_w = coarse_g.edges_w;
+
+            Kokkos::parallel_for("permute_edges", Kokkos::RangePolicy<DeviceExecutionSpace>(exec_space, 0, coarse_g.n), KOKKOS_LAMBDA(const vertex_t new_u) {
+                vertex_t old_u = sorted_old_ids(new_u);
+                u32 old_start = c_neigh(old_u);
+                u32 old_end = c_neigh(old_u + 1);
+                u32 new_start = temp_neigh(new_u);
+                
+                for (u32 i = 0; i < (old_end - old_start); ++i) {
+                    temp_edges_v(new_start + i) = d_perm(c_edges_v(old_start + i));
+                    temp_edges_w(new_start + i) = c_edges_w(old_start + i);
+                    temp_edges_u(new_start + i) = new_u;
+                }
+            });
+
+            auto map = mapping.mapping;
+            Kokkos::parallel_for("update_mapping", Kokkos::RangePolicy<DeviceExecutionSpace>(exec_space, 0, old_g.n), KOKKOS_LAMBDA(const vertex_t u) {
+                map(u) = d_perm(map(u));
+            });
+
+            Kokkos::deep_copy(exec_space, coarse_g.weights, temp_weights);
+            Kokkos::deep_copy(exec_space, coarse_g.neighborhood, temp_neigh);
+            Kokkos::deep_copy(exec_space, coarse_g.edges_v, temp_edges_v);
+            Kokkos::deep_copy(exec_space, coarse_g.edges_w, temp_edges_w);
+            Kokkos::deep_copy(exec_space, coarse_g.edges_u, temp_edges_u);
+
+            pop_back(mem_stack); // temp_edges_u
+            pop_back(mem_stack); // temp_edges_w
+            pop_back(mem_stack); // temp_edges_v
+            pop_back(mem_stack); // temp_neigh
+            pop_back(mem_stack); // temp_weights
+            pop_back(mem_stack); // temp_degrees
+            pop_back(mem_stack); // d_perm
+            pop_back(mem_stack); // sorted_old_ids
+            pop_back(mem_stack); // bin_counts
+            KOKKOS_PROFILE_FENCE(exec_space);
+        }
 
         return coarse_g;
     }
