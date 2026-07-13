@@ -7,11 +7,12 @@
 #include "../utility/profiler.h"
 #include "../datastructures/graph.h"
 #include "two_hop_matching.h"
+#include "../datastructures/small_graph.h"
 
 namespace GPU_HeiPa {
 
     template<bool uniform_v_weights, bool uniform_e_weights>
-    inline Mapping heavy_edge_matching_small_get_mapping(const Graph &g,
+    inline Mapping heavy_edge_matching_small_get_mapping(const SmallGraph &g,
                                                          const Partition &partition,
                                                          const weight_t lmax,
                                                          KokkosMemoryStack &mem_stack,
@@ -46,7 +47,9 @@ namespace GPU_HeiPa {
                 weight_t wu = 1;
                 if constexpr (!uniform_v_weights) wu = g.weights(u);
 
-                for (u32 j = g.neighborhood(u); j < g.neighborhood(u + 1); j++) {
+                u32 start = g.edge_begin(u);
+                u32 limit = g.edge_end(u);
+                for (u32 j = start; j < limit; j++) {
                     vertex_t v = g.edges_v(j);
                     
                     weight_t wv = 1;
@@ -116,7 +119,9 @@ namespace GPU_HeiPa {
                     weight_t wu = 1;
                     if constexpr (!uniform_v_weights) wu = g.weights(u);
 
-                    for (u32 j = g.neighborhood(u); j < g.neighborhood(u + 1); j++) {
+                    u32 start = g.edge_begin(u);
+                    u32 limit = g.edge_end(u);
+                    for (u32 j = start; j < limit; j++) {
                         vertex_t v = g.edges_v(j);
                         if (thm.vcmap(v) == SENTINEL) {
                             weight_t wv = 1;
@@ -144,9 +149,10 @@ namespace GPU_HeiPa {
                 team.team_barrier();
             }
 
-            // 1. Singletons
+            // 1. Singletons and partners
             Kokkos::parallel_for(Kokkos::TeamThreadRange(team, g.n), [&](const vertex_t i) {
                 if (thm.vcmap(i) == SENTINEL) thm.vcmap(i) = i;
+                mapping.partners(i) = thm.vcmap(i);
             });
             team.team_barrier();
 
@@ -166,7 +172,7 @@ namespace GPU_HeiPa {
 
             // 3. Propagate coarse ids & copy to mapping array
             Kokkos::parallel_for(Kokkos::TeamThreadRange(team, g.n), [&](const vertex_t i) {
-                if (thm.vcmap(i) >= g.n) thm.vcmap(i) = thm.vcmap(thm.vcmap(i) - g.n);
+                if (thm.vcmap(i) >= g.n) thm.vcmap(i) = thm.vcmap((vertex_t)thm.vcmap(i) - g.n);
                 mapping.mapping(i) = thm.vcmap(i);
             });
         });

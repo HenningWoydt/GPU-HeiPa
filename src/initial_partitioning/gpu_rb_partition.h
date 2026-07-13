@@ -43,6 +43,7 @@
 #include "../coarsening/independent_edge_set.h"
 #include "../refinement/greedy_refinement.h"
 #include "../refinement/jet_label_propagation.h"
+#include "../datastructures/small_graph.h"
 #include "../utility/edge_cut.h"
 #include "../definitions.h"
 #include "../utility/kokkos_util.h"
@@ -99,35 +100,30 @@ namespace GPU_HeiPa {
         HEIPA_PROFILE_SCOPE("initial_partitioning", "gpu_rb_partition", "gpu_rb_partition");
 
         // --- Phase 1: Coarsening ---
-        std::vector<Graph> graphs = {g};
+        std::vector<SmallGraph> graphs = {from_Graph_to_SmallGraph(g, mem_stack, exec_space)};
         std::vector<Mapping> mappings;
         weight_t lmax_global = (weight_t) std::ceil((1.0 + imbalance) * (f64) g.g_weight / (f64) k);
 
         while (graphs.back().n > threshold) {
             HEIPA_PROFILE_SCOPE("initial_partitioning", "gpu_rb_partition", "coarsening");
-            assert_state_pre_partition(graphs.back(), exec_space);
 
             mappings.push_back(heavy_edge_matching_small_get_mapping<false, false>(graphs.back(), partition, lmax_global, mem_stack, exec_space));
-            // mappings.push_back(independent_edge_set_get_mapping<false, false>(graphs.back(), partition, lmax_global, mem_stack, exec_space));
             KOKKOS_PROFILE_FENCE(exec_space);
 
-            graphs.push_back(from_Graph_Mapping_small<false, false>(graphs.back(), mappings.back(), mem_stack, exec_space, true));
-
+            HEIPA_PROFILE_SCOPE("initial_partitioning", "gpu_rb_partition", "contraction");
+            graphs.push_back(from_Graph_Mapping_small<false, false, true>(graphs.back(), mappings.back(), mem_stack, exec_space));
             KOKKOS_PROFILE_FENCE(exec_space);
-
-            assert_coarsening(graphs[graphs.size() - 2], graphs.back(), mappings.back(), exec_space);
-            assert_state_pre_partition(graphs.back(), exec_space);
         }
 
         // --- Phase 2: Interleaved Recursive Bisection and Uncontraction ---
         HEIPA_PROFILE_SCOPE("initial_partitioning", "gpu_rb_partition", "partition_phase");
 
         GraphBatch batch;
-        init_GraphBatch(batch, g, k, mem_stack);
+        init_GraphBatch(batch, graphs[0], k, mem_stack);
 
         // Scratch for extraction
-        UnmanagedDeviceVertex local_ids((vertex_t *) get_chunk_back(mem_stack, sizeof(vertex_t) * g.n), g.n);
-        UnmanagedDeviceVertex local_degree((vertex_t *) get_chunk_back(mem_stack, sizeof(vertex_t) * g.n), g.n);
+        UnmanagedDeviceVertex local_ids((vertex_t *) get_chunk_back(mem_stack, sizeof(vertex_t) * graphs[0].n), graphs[0].n);
+        UnmanagedDeviceVertex local_degree((vertex_t *) get_chunk_back(mem_stack, sizeof(vertex_t) * graphs[0].n), graphs[0].n);
         UnmanagedDeviceVertex bsizes((vertex_t *) get_chunk_back(mem_stack, sizeof(vertex_t) * batch.k), batch.k);
         UnmanagedDeviceU8 active_mask((u8 *) get_chunk_back(mem_stack, sizeof(u8) * batch.k), batch.k);
         UnmanagedDeviceU32 current_targets_dev((u32 *) get_chunk_back(mem_stack, sizeof(u32) * batch.k), batch.k);
@@ -145,44 +141,62 @@ namespace GPU_HeiPa {
         KOKKOS_PROFILE_FENCE(exec_space);
 
         while (true) {
-            HEIPA_PROFILE_SCOPE("initial_partitioning", "gpu_rb_partition", "calculate_block_sizes");
-            calculate_block_sizes(graphs.back(), mappings.empty() ? nullptr : &mappings.back(), partition.map, bsizes, exec_space);
-            KOKKOS_PROFILE_FENCE(exec_space);
-
-            HEIPA_PROFILE_SCOPE("initial_partitioning", "gpu_rb_partition", "get_active");
+            HEIPA_PROFILE_SCOPE("initial_partitioning", "gpu_rb_partition", "calculate_block_sizes_fused");
             u32 split_needed_int = 0;
-            bool is_mapping_empty = mappings.empty();
-            Kokkos::parallel_reduce("check_split_needed", Kokkos::RangePolicy<DeviceExecutionSpace>(exec_space, 0, k), KOKKOS_LAMBDA(const partition_t id, u32 &local_split) {
-                bool active = false;
-                if (current_targets_dev(id) > 1) {
-                    if (is_mapping_empty) {
-                        if (bsizes(id) >= 2 && bsizes(id) <= threshold) {
-                            active = true;
-                        }
-                    } else {
-                        if (bsizes(id) > threshold) {
-                            active = true;
-                        }
-                    }
+            bool has_mapping = !mappings.empty();
+            vertex_t old_n = has_mapping ? mappings.back().old_n : 0;
+            UnmanagedDeviceVertex mapping_view = has_mapping ? mappings.back().mapping : UnmanagedDeviceVertex();
+            auto map = partition.map;
+            auto offset_n = batch.offset_n;
+            vertex_t g_n = graphs.back().n;
+
+            Kokkos::parallel_reduce("calculate_block_sizes_fused", Kokkos::TeamPolicy<DeviceExecutionSpace>(exec_space, 1, Kokkos::AUTO()), KOKKOS_LAMBDA(const Kokkos::TeamPolicy<DeviceExecutionSpace>::member_type &team, u32 &local_split) {
+                Kokkos::parallel_for(Kokkos::TeamThreadRange(team, k), [&](const int i) {
+                    bsizes(i) = 0;
+                });
+
+                team.team_barrier();
+
+                if (!has_mapping) {
+                    Kokkos::parallel_for(Kokkos::TeamThreadRange(team, g_n), [&](const vertex_t u) {
+                        partition_t id = map(u);
+                        Kokkos::atomic_add(&bsizes(id), 1);
+                    });
+                } else {
+                    Kokkos::parallel_for(Kokkos::TeamThreadRange(team, old_n), [&](const vertex_t u) {
+                        vertex_t new_v = mapping_view(u);
+                        partition_t id = map(new_v);
+                        Kokkos::atomic_add(&bsizes(id), 1);
+                    });
                 }
-                active_mask(id) = active ? 1 : 0;
 
+                team.team_barrier();
 
-                if (active) local_split = 1;
+                if (team.team_rank() == 0) {
+                    u32 running = 0;
+                    u32 s = 0;
+                    for (u32 id = 0; id < k; ++id) {
+                        bool active = false;
+                        if (current_targets_dev(id) > 1) {
+                            if (!has_mapping) {
+                                if (bsizes(id) >= 2 && bsizes(id) <= threshold) active = true;
+                            } else {
+                                if (bsizes(id) > threshold) active = true;
+                            }
+                        }
+                        active_mask(id) = active ? 1 : 0;
+                        if (active) s = 1;
+                        offset_n(id) = running;
+                        running += bsizes(id);
+                    }
+                    local_split = s;
+                }
             }, Kokkos::Max<u32>(split_needed_int));
+            
             bool split_needed = split_needed_int != 0;
             KOKKOS_PROFILE_FENCE(exec_space);
 
             if (split_needed) {
-                HEIPA_PROFILE_SCOPE("initial_partitioning", "gpu_rb_partition", "offset_sizes");
-                auto offset_n = batch.offset_n;
-                Kokkos::parallel_scan("scan_offsets", Kokkos::RangePolicy<DeviceExecutionSpace>(exec_space, 0, k), KOKKOS_LAMBDA(const partition_t id, vertex_t &running, bool final) {
-                    if (final) {
-                        offset_n(id) = running;
-                    }
-                    running += bsizes(id);
-                });
-                KOKKOS_PROFILE_FENCE(exec_space);
 
                 HEIPA_PROFILE_SCOPE("initial_partitioning", "gpu_rb_partition", "extract_graphs");
                 extract_all_subgraphs(graphs.back(), batch, partition, active_mask, local_ids, local_degree, exec_space);
@@ -248,7 +262,6 @@ namespace GPU_HeiPa {
                 free_mapping(mappings.back(), mem_stack);
                 mappings.pop_back();
 
-                assert_state_after_partition(graphs.back(), partition, k, exec_space);
                 KOKKOS_PROFILE_FENCE(exec_space);
 
                 continue;
@@ -264,6 +277,7 @@ namespace GPU_HeiPa {
         pop_back(mem_stack); // local_degree
         pop_back(mem_stack); // local_ids
         free_GraphBatch(batch, mem_stack);
+        free_graph(graphs[0], mem_stack);
         KOKKOS_PROFILE_FENCE(exec_space);
     }
 } // namespace GPU_HeiPa

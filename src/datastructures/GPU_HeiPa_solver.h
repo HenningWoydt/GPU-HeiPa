@@ -340,7 +340,7 @@ namespace GPU_HeiPa {
         void internal_solve(HostGraph &host_g, KokkosMemoryStack &mem_stack) {
             initialize(host_g, mem_stack);
 
-            partition_t c = 22;
+            partition_t c = 28;
             if (config.initial_partitioning == "kway") { c = 8; }
             if (config.initial_partitioning == "metis") { c = 8; }
             const partition_t max_n = c * k;
@@ -348,10 +348,12 @@ namespace GPU_HeiPa {
             u32 level = 0;
             while (graphs.back().n > max_n) {
                 #if ENABLE_PROFILER
+                HEIPA_PROFILE_SCOPE("misc", "internal_solve", "overhead");
                 level_infos.emplace_back();
                 level_infos[level].level = level;
                 level_infos[level].n = graphs.back().n;
                 level_infos[level].m = graphs.back().m;
+                KOKKOS_PROFILE_FENCE(exec_space);
                 #endif
 
                 coarsening(level, mem_stack);
@@ -362,15 +364,18 @@ namespace GPU_HeiPa {
 
 
             #if ENABLE_PROFILER
+            HEIPA_PROFILE_SCOPE("misc", "internal_solve", "overhead");
             level_infos.emplace_back();
             level_infos[level].level = level;
             level_infos[level].n = graphs.back().n;
             level_infos[level].m = graphs.back().m;
+            KOKKOS_PROFILE_FENCE(exec_space);
             #endif
 
             initial_partitioning(mem_stack);
 
             #if ENABLE_PROFILER
+            HEIPA_PROFILE_SCOPE("misc", "internal_solve", "overhead");
             level_infos[level].max_b_weight = max_weight(partition);
             level_infos[level].imb = (f64) level_infos[level].max_b_weight / ((f64) host_g.g_weight / (f64) config.k);
             if (graphs.back().uniform_edge_weights) {
@@ -381,6 +386,7 @@ namespace GPU_HeiPa {
             level_infos[level].empty_partitions = n_empty_blocks(partition);
             level_infos[level].oload_partitions = n_oload_blocks(partition);
             level_infos[level].sum_oload_weights = sum_oload_weight(partition);
+            KOKKOS_PROFILE_FENCE(exec_space);
             #endif
 
             while (!mappings.empty()) {
@@ -390,6 +396,7 @@ namespace GPU_HeiPa {
                 refinement(level, mem_stack);
 
                 #if ENABLE_PROFILER
+                HEIPA_PROFILE_SCOPE("misc", "internal_solve", "overhead");
                 level_infos[level].max_b_weight = max_weight(partition);
                 level_infos[level].imb = (f64) level_infos[level].max_b_weight / ((f64) host_g.g_weight / (f64) config.k);
                 if (graphs.back().uniform_edge_weights) {
@@ -400,6 +407,7 @@ namespace GPU_HeiPa {
                 level_infos[level].empty_partitions = n_empty_blocks(partition);
                 level_infos[level].oload_partitions = n_oload_blocks(partition);
                 level_infos[level].sum_oload_weights = sum_oload_weight(partition);
+                KOKKOS_PROFILE_FENCE(exec_space);
                 #endif
             }
         }
@@ -480,7 +488,7 @@ namespace GPU_HeiPa {
             if (config.initial_partitioning == "kway") {
                 kway_partition(graphs.back(), (int) k, config.imbalance, config.seed, partition, exec_space);
             } else if (config.initial_partitioning == "gpu_bisection") {
-                gpu_rb_partition(graphs.back(), k, config.imbalance, config.seed, 22, partition, mem_stack, exec_space);
+                gpu_rb_partition(graphs.back(), k, config.imbalance, config.seed, 28, partition, mem_stack, exec_space);
             } else if (config.initial_partitioning == "metis") {
                 metis_partition(graphs.back(), (int) k, config.imbalance, config.seed, partition, exec_space);
             } else {

@@ -283,7 +283,7 @@ namespace GPU_HeiPa {
     };
 
     inline void init_GraphBatch(GraphBatch &batch,
-                                Graph &g,
+                                const SmallGraph &g,
                                 partition_t k,
                                 KokkosMemoryStack &mem_stack) {
         batch.n = g.n;
@@ -327,7 +327,7 @@ namespace GPU_HeiPa {
     }
 
 
-    inline void extract_all_subgraphs(const Graph &g,
+    inline void extract_all_subgraphs(const SmallGraph &g,
                                       GraphBatch &batch,
                                       Partition &partition,
                                       const DeviceU8 &active_mask,
@@ -357,7 +357,9 @@ namespace GPU_HeiPa {
         u64 n_bytes_one_graph = n_bytes_weights + n_bytes_neighborhood + n_bytes_edges_u + n_bytes_edges_v + n_bytes_edges_w;
         u64 n_bytes_global_ids = round_up_64(b_n) * sizeof(vertex_t);
 
-        auto g_neighborhood = g.neighborhood;
+        auto g_begin = g.edge_begin;
+        auto g_end = g.edge_end;
+
         auto g_edges_v = g.edges_v;
         HEIPA_PROFILE_SCOPE("initial_partitioning", "extract_all_subgraphs", "batched_vertex_assignment_and_edge_counting");
         Kokkos::parallel_for("batched_vertex_assignment_and_edge_counting", Kokkos::RangePolicy<DeviceExecutionSpace>(exec_space, 0, g.n), KOKKOS_LAMBDA(const vertex_t u) {
@@ -377,8 +379,12 @@ namespace GPU_HeiPa {
             Kokkos::atomic_add(&d_actual_g_weight(id), w);
 
             u32 count = 0;
-            for (u32 e = g_neighborhood(u); e < g_neighborhood(u + 1); ++e) {
-                if (map(g_edges_v(e)) == id) count++;
+            u32 start = g_begin(u);
+            u32 limit = g_end(u);
+            for (u32 e = start; e < limit; ++e) {
+                vertex_t v = g_edges_v(e);
+                if (v == SENTINEL) break;
+                if (map(v) == id) count++;
             }
             local_degree(u) = count;
         });
@@ -423,8 +429,11 @@ namespace GPU_HeiPa {
             vertex_t *sub_g_edges_v = (vertex_t *) ((u8 *) sub_g_edges_u + n_bytes_edges_u);
             weight_t *sub_g_edges_w = (weight_t *) ((u8 *) sub_g_edges_v + n_bytes_edges_v);
             u32 edge_idx = sub_g_neighborhood[local_ids(u)];
-            for (u32 e = g_neighborhood(u); e < g_neighborhood(u + 1); ++e) {
+            u32 start = g_begin(u);
+            u32 limit = g_end(u);
+            for (u32 e = start; e < limit; ++e) {
                 vertex_t v = g_edges_v(e);
+                if (v == SENTINEL) break;
                 if (map(v) == id) {
                     sub_g_edges_u[edge_idx] = local_ids(u);
                     sub_g_edges_v[edge_idx] = local_ids(v);
@@ -452,20 +461,9 @@ namespace GPU_HeiPa {
         const u32 k = batch.k;
         auto d_actual_n = batch.d_actual_n;
 
-        HEIPA_PROFILE_SCOPE("initial_partitioning", "batched_heuristic_bisect", "bisect1_batched");
-        Kokkos::parallel_for("bisect1_batched", Kokkos::RangePolicy<DeviceExecutionSpace>(exec_space, 0, k), KOKKOS_LAMBDA(const partition_t id) {
-            if (active_mask(id) && d_actual_n(id) == 1) {
-                partition_t *part = batch.get_partition_ptr(id);
-                part[0] = 0;
-                batch.d_bisection_results(id).penalty = 0;
-                batch.d_bisection_results(id).cut = 0;
-                batch.d_bisection_results(id).config = 0;
-            }
-        });
-        KOKKOS_PROFILE_FENCE(exec_space);
-
-        Kokkos::View<BestBisectConfig *, DeviceMemorySpace, Kokkos::MemoryTraits<Kokkos::Unmanaged> > heuristic_results((BestBisectConfig *) get_chunk_back(mem_stack, sizeof(BestBisectConfig) * k), k);
-
+        HEIPA_PROFILE_SCOPE("initial_partitioning", "batched_heuristic_bisect", "heuristic_prepass");
+        auto d_results = batch.d_bisection_results;
+        
         auto g_mem = batch.graph_memory;
         auto d_actual_g_weight = batch.d_actual_g_weight;
         vertex_t b_n = batch.n;
@@ -477,13 +475,23 @@ namespace GPU_HeiPa {
         u64 n_bytes_edges_w = round_up_64(b_m) * sizeof(weight_t);
         u64 n_bytes_one_graph = n_bytes_weights + n_bytes_neighborhood + n_bytes_edges_u + n_bytes_edges_v + n_bytes_edges_w;
 
-        HEIPA_PROFILE_SCOPE("initial_partitioning", "batched_heuristic_bisect", "heuristic_prepass");
         Kokkos::parallel_for("heuristic_prepass", Kokkos::TeamPolicy<DeviceExecutionSpace>(exec_space, k, Kokkos::AUTO), KOKKOS_LAMBDA(const Kokkos::TeamPolicy<DeviceExecutionSpace>::member_type &team) {
             const partition_t graph_id = team.league_rank();
             if (!active_mask(graph_id)) return;
             
             const vertex_t gn = d_actual_n(graph_id);
-            if (gn <= 1) return;
+            if (gn <= 1) {
+                if (gn == 1) {
+                    Kokkos::single(Kokkos::PerTeam(team), [&]() {
+                        partition_t *part = batch.get_partition_ptr(graph_id);
+                        part[0] = 0;
+                        d_results(graph_id).penalty = 0;
+                        d_results(graph_id).cut = 0;
+                        d_results(graph_id).config = 0;
+                    });
+                }
+                return;
+            }
 
             const partition_t tk = current_targets_dev(graph_id);
             const weight_t lmax_left = lmax_global * (tk / 2);
@@ -564,33 +572,16 @@ namespace GPU_HeiPa {
             }, reducer);
 
             Kokkos::single(Kokkos::PerTeam(team), [&]() {
-                heuristic_results(graph_id) = best_in_team;
-            });
-        });
-        KOKKOS_PROFILE_FENCE(exec_space);
-
-        HEIPA_PROFILE_SCOPE("initial_partitioning", "batched_heuristic_bisect", "reduce_and_apply");
-        auto d_results = batch.d_bisection_results;
-        Kokkos::parallel_for("copy_heuristic_results", Kokkos::RangePolicy<DeviceExecutionSpace>(exec_space, 0, k), KOKKOS_LAMBDA(const partition_t id) {
-            if (active_mask(id) && d_actual_n(id) > 1) {
-                d_results(id) = heuristic_results(id);
-            }
-        });
-        
-        Kokkos::parallel_for("apply_batched_best_config", Kokkos::RangePolicy<DeviceExecutionSpace>(exec_space, 0, k), KOKKOS_LAMBDA(const partition_t id) {
-            if (active_mask(id) && d_actual_n(id) > 1) {
-                const u64 config = d_results(id).config;
-                partition_t *part = batch.get_partition_ptr(id);
-                const vertex_t gn = d_actual_n(id);
+                d_results(graph_id) = best_in_team;
+                const u64 config = best_in_team.config;
+                partition_t *part = batch.get_partition_ptr(graph_id);
                 for (vertex_t u = 0; u < gn; ++u) {
                     part[u] = (partition_t) ((config >> u) & 1ULL);
                 }
-            }
+            });
         });
         exec_space.fence();
         KOKKOS_PROFILE_FENCE(exec_space);
-        
-        pop_back(mem_stack); // heuristic_results
     }
 
     template<bool uvw, bool uew, bool DO_HEURISTIC = true>
@@ -1097,7 +1088,7 @@ namespace GPU_HeiPa {
         exec_space.fence();
     }
 
-    inline void recalculate_block_weights(const Graph &g, const UnmanagedDevicePartition &map, UnmanagedDeviceWeight &bweights, DeviceExecutionSpace &exec_space) {
+    inline void recalculate_block_weights(const SmallGraph &g, const UnmanagedDevicePartition &map, UnmanagedDeviceWeight &bweights, DeviceExecutionSpace &exec_space) {
         Kokkos::deep_copy(exec_space, bweights, 0);
         Kokkos::parallel_for("recalculate_block_weights", Kokkos::RangePolicy<DeviceExecutionSpace>(exec_space, 0, g.n), KOKKOS_LAMBDA(const vertex_t u) {
             partition_t id = map(u);
@@ -1106,7 +1097,7 @@ namespace GPU_HeiPa {
         exec_space.fence();
     }
 
-    inline void calculate_block_sizes(const Graph &g, const Mapping *mapping, const UnmanagedDevicePartition &map, UnmanagedDeviceVertex &sizes, DeviceExecutionSpace &exec_space) {
+    inline void calculate_block_sizes(const SmallGraph &g, const Mapping *mapping, const UnmanagedDevicePartition &map, UnmanagedDeviceVertex &sizes, DeviceExecutionSpace &exec_space) {
         bool has_mapping = (mapping != nullptr);
         vertex_t old_n = has_mapping ? mapping->old_n : 0;
         UnmanagedDeviceVertex mapping_view = has_mapping ? mapping->mapping : UnmanagedDeviceVertex();
