@@ -357,35 +357,38 @@ namespace GPU_HeiPa {
         u64 n_bytes_one_graph = n_bytes_weights + n_bytes_neighborhood + n_bytes_edges_u + n_bytes_edges_v + n_bytes_edges_w;
         u64 n_bytes_global_ids = round_up_64(b_n) * sizeof(vertex_t);
 
-        Kokkos::parallel_for("batched_vertex_assignment", Kokkos::RangePolicy<DeviceExecutionSpace>(exec_space, 0, g.n), KOKKOS_LAMBDA(const vertex_t u) {
-            partition_t id = map(u);
-            if (use_mask && !active_mask(id)) return;
-            vertex_t local_u = Kokkos::atomic_fetch_add(&d_actual_n(id), 1);
-            local_ids(u) = local_u;
-            vertex_t *g_ids_ptr = batch.get_global_ids_ptr(id);
-            g_ids_ptr[local_u] = u;
-            weight_t *weights_ptr = (weight_t *) (graph_memory.data() + (u64) id * n_bytes_one_graph);
-            weights_ptr[local_u] = g_uvw ? 1 : g_weights(u);
-        });
         auto g_neighborhood = g.neighborhood;
         auto g_edges_v = g.edges_v;
-        Kokkos::parallel_for("batched_edge_counting", Kokkos::RangePolicy<DeviceExecutionSpace>(exec_space, 0, g.n), KOKKOS_LAMBDA(const vertex_t u) {
+        HEIPA_PROFILE_SCOPE("initial_partitioning", "extract_all_subgraphs", "batched_vertex_assignment_and_edge_counting");
+        Kokkos::parallel_for("batched_vertex_assignment_and_edge_counting", Kokkos::RangePolicy<DeviceExecutionSpace>(exec_space, 0, g.n), KOKKOS_LAMBDA(const vertex_t u) {
             partition_t id = map(u);
             if (use_mask && !active_mask(id)) {
                 local_degree(u) = 0;
                 return;
             }
+            vertex_t local_u = Kokkos::atomic_fetch_add(&d_actual_n(id), 1);
+            local_ids(u) = local_u;
+            vertex_t *g_ids_ptr = batch.get_global_ids_ptr(id);
+            g_ids_ptr[local_u] = u;
+            
+            weight_t w = g_uvw ? 1 : g_weights(u);
+            weight_t *weights_ptr = (weight_t *) (graph_memory.data() + (u64) id * n_bytes_one_graph);
+            weights_ptr[local_u] = w;
+            Kokkos::atomic_add(&d_actual_g_weight(id), w);
+
             u32 count = 0;
             for (u32 e = g_neighborhood(u); e < g_neighborhood(u + 1); ++e) {
                 if (map(g_edges_v(e)) == id) count++;
             }
             local_degree(u) = count;
         });
+        KOKKOS_PROFILE_FENCE(exec_space);
 
         // 1. Batched block neighborhood scan
         typedef Kokkos::TeamPolicy<DeviceExecutionSpace> TeamPolicy;
         typedef TeamPolicy::member_type TeamMember;
 
+        HEIPA_PROFILE_SCOPE("initial_partitioning", "extract_all_subgraphs", "batched_block_neighborhood_scan");
         Kokkos::parallel_for("batched_block_neighborhood_scan", TeamPolicy(exec_space, k, Kokkos::AUTO), KOKKOS_LAMBDA(const TeamMember &team) {
             partition_t id = team.league_rank();
             vertex_t sub_n = d_actual_n(id);
@@ -407,9 +410,11 @@ namespace GPU_HeiPa {
             }
         });
         exec_space.fence();
+        KOKKOS_PROFILE_FENCE(exec_space);
 
         auto g_edges_w = g.edges_w;
         bool g_uew = g.uniform_edge_weights;
+        HEIPA_PROFILE_SCOPE("initial_partitioning", "extract_all_subgraphs", "batched_edge_population");
         Kokkos::parallel_for("batched_edge_population", Kokkos::RangePolicy<DeviceExecutionSpace>(exec_space, 0, g.n), KOKKOS_LAMBDA(const vertex_t u) {
             partition_t id = map(u);
             if (use_mask && !active_mask(id)) return;
@@ -429,25 +434,7 @@ namespace GPU_HeiPa {
                 }
             }
         });
-
-        // 2. Batched subgraph weight sum
-        Kokkos::parallel_for("batched_sum_subgraph_weight", TeamPolicy(exec_space, k, Kokkos::AUTO), KOKKOS_LAMBDA(const TeamMember &team) {
-            partition_t id = team.league_rank();
-            vertex_t sub_n = d_actual_n(id);
-            if (sub_n == 0) return;
-
-            weight_t *sub_g_weights = (weight_t *) (graph_memory.data() + (u64) id * n_bytes_one_graph);
-
-            weight_t local_sum = 0;
-            Kokkos::parallel_reduce(Kokkos::TeamThreadRange(team, sub_n), [&](const vertex_t local_u, weight_t &lsum) {
-                lsum += sub_g_weights[local_u];
-            }, local_sum);
-
-            if (team.team_rank() == 0) {
-                d_actual_g_weight(id) = local_sum;
-            }
-        });
-        exec_space.fence();
+        KOKKOS_PROFILE_FENCE(exec_space);
 
         exec_space.fence();
     }
@@ -519,42 +506,47 @@ namespace GPU_HeiPa {
             reducer.init(best_in_team);
 
             Kokkos::parallel_reduce(Kokkos::TeamThreadRange(team, gn), [&](const vertex_t seed, BestBisectConfig &heuristic_best) {
-                u64 part_mask = (1ULL << seed);
-                weight_t w1 = uvw ? 1 : g_w[seed];
-                
+                int gains[64];
+                for (vertex_t v = 0; v < gn; ++v) {
+                    int initial_gain = 0;
+                    for (u32 e = g_n[v]; e < g_n[v + 1]; ++e) {
+                        initial_gain -= (uew ? 1 : g_ew[e]);
+                    }
+                    gains[v] = initial_gain;
+                }
+
+                u64 part_mask = 0;
+                weight_t w1 = 0;
+                weight_t cut = 0;
+
+                auto add_to_part = [&](vertex_t v) {
+                    w1 += (uvw ? 1 : g_w[v]);
+                    for (u32 e = g_n[v]; e < g_n[v + 1]; ++e) {
+                        vertex_t u = g_ev[e];
+                        weight_t ew = (uew ? 1 : g_ew[e]);
+                        gains[u] += 2 * ew;
+                        if (part_mask & (1ULL << u)) cut -= ew;
+                        else cut += ew;
+                    }
+                    part_mask |= (1ULL << v);
+                };
+
+                add_to_part(seed);
+
                 while (true) {
                     vertex_t best_v = gn;
                     int max_gain = -99999999;
                     for (vertex_t v = 0; v < gn; ++v) {
                         if (part_mask & (1ULL << v)) continue;
-                        int gain = 0;
-                        for (u32 e = g_n[v]; e < g_n[v + 1]; ++e) {
-                            vertex_t u = g_ev[e];
-                            weight_t ew = uew ? 1 : g_ew[e];
-                            if (part_mask & (1ULL << u)) gain += ew;
-                            else gain -= ew;
-                        }
-                        if (gain > max_gain) {
-                            max_gain = gain;
+                        if (gains[v] > max_gain) {
+                            max_gain = gains[v];
                             best_v = v;
                         }
                     }
                     if (best_v == gn) break;
                     weight_t vw = uvw ? 1 : g_w[best_v];
                     if (w1 + vw > g_weight / 2) break;
-                    part_mask |= (1ULL << best_v);
-                    w1 += vw;
-                }
-
-                weight_t cut = 0;
-                for (vertex_t u = 0; u < gn; ++u) {
-                    if (part_mask & (1ULL << u)) {
-                        for (u32 e = g_n[u]; e < g_n[u + 1]; ++e) {
-                            if (!(part_mask & (1ULL << g_ev[e]))) {
-                                cut += uew ? 1 : g_ew[e];
-                            }
-                        }
-                    }
+                    add_to_part(best_v);
                 }
 
                 const weight_t wl = g_weight - w1;
@@ -730,42 +722,47 @@ namespace GPU_HeiPa {
                 reducer.init(best_in_team);
 
                 Kokkos::parallel_reduce(Kokkos::TeamThreadRange(team, gn), [&](const vertex_t seed, BestBisectConfig &heuristic_best) {
-                    u64 part_mask = (1ULL << seed);
-                    weight_t w1 = uvw ? 1 : g_w[seed];
+                    int gains[64];
+                    for (vertex_t v = 0; v < gn; ++v) {
+                        int initial_gain = 0;
+                        for (u32 e = g_n[v]; e < g_n[v + 1]; ++e) {
+                            initial_gain -= (uew ? 1 : g_ew[e]);
+                        }
+                        gains[v] = initial_gain;
+                    }
+
+                    u64 part_mask = 0;
+                    weight_t w1 = 0;
+                    weight_t cut = 0;
                     
+                    auto add_to_part = [&](vertex_t v) {
+                        w1 += (uvw ? 1 : g_w[v]);
+                        for (u32 e = g_n[v]; e < g_n[v + 1]; ++e) {
+                            vertex_t u = g_ev[e];
+                            weight_t ew = (uew ? 1 : g_ew[e]);
+                            gains[u] += 2 * ew;
+                            if (part_mask & (1ULL << u)) cut -= ew;
+                            else cut += ew;
+                        }
+                        part_mask |= (1ULL << v);
+                    };
+
+                    add_to_part(seed);
+
                     while (true) {
                         vertex_t best_v = gn;
                         int max_gain = -99999999;
                         for (vertex_t v = 0; v < gn; ++v) {
                             if (part_mask & (1ULL << v)) continue;
-                            int gain = 0;
-                            for (u32 e = g_n[v]; e < g_n[v + 1]; ++e) {
-                                vertex_t u = g_ev[e];
-                                weight_t ew = uew ? 1 : g_ew[e];
-                                if (part_mask & (1ULL << u)) gain += ew;
-                                else gain -= ew;
-                            }
-                            if (gain > max_gain) {
-                                max_gain = gain;
+                            if (gains[v] > max_gain) {
+                                max_gain = gains[v];
                                 best_v = v;
                             }
                         }
                         if (best_v == gn) break;
                         weight_t vw = uvw ? 1 : g_w[best_v];
                         if (w1 + vw > g_weight / 2) break;
-                        part_mask |= (1ULL << best_v);
-                        w1 += vw;
-                    }
-
-                    weight_t cut = 0;
-                    for (vertex_t u = 0; u < gn; ++u) {
-                        if (part_mask & (1ULL << u)) {
-                            for (u32 e = g_n[u]; e < g_n[u + 1]; ++e) {
-                                if (!(part_mask & (1ULL << g_ev[e]))) {
-                                    cut += uew ? 1 : g_ew[e];
-                                }
-                            }
-                        }
+                        add_to_part(best_v);
                     }
 
                     const weight_t wl = g_weight - w1;
