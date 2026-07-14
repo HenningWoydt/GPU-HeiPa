@@ -121,8 +121,6 @@ namespace GPU_HeiPa {
         lp.cut_change2 = Kokkos::subview(lp.reduce_locs, 1);
         lp.host_max_part = Kokkos::subview(lp.reduce_locs, 2);
 
-        exec_space.fence();
-
         return lp;
     }
 
@@ -366,7 +364,6 @@ namespace GPU_HeiPa {
 
         HEIPA_PROFILE_SCOPE("refinement", "jetrs", "reset_mini_buckets");
         Kokkos::deep_copy(exec_space, Kokkos::subview(lp.gain1, std::make_pair((vertex_t) 0, t_minibuckets + 1)), 0);
-        exec_space.fence();
         KOKKOS_PROFILE_FENCE(exec_space);
 
         HEIPA_PROFILE_SCOPE("refinement", "jetrs", "score_candidates");
@@ -435,7 +432,6 @@ namespace GPU_HeiPa {
 
         HEIPA_PROFILE_SCOPE("refinement", "jetrs", "reset_evict_adjust");
         Kokkos::deep_copy(exec_space, lp.evict_adjust, 0);
-        exec_space.fence();
         KOKKOS_PROFILE_FENCE(exec_space);
 
         HEIPA_PROFILE_SCOPE("refinement", "jetrs", "filter_scores");
@@ -564,7 +560,6 @@ namespace GPU_HeiPa {
 
         HEIPA_PROFILE_SCOPE("refinement", "jetrw", "reset_minibuckets");
         Kokkos::deep_copy(exec_space, Kokkos::subview(lp.gain1, std::make_pair((vertex_t) 0, t_minibuckets + 1)), 0);
-        exec_space.fence();
         KOKKOS_PROFILE_FENCE(exec_space);
 
         // determine best block
@@ -835,7 +830,6 @@ namespace GPU_HeiPa {
         // copy partition
         HEIPA_PROFILE_SCOPE("refinement", "JetLabelPropagation", "copy_partition");
         copy_into(lp.partition, partition, g.n, exec_space);
-        exec_space.fence();
         KOKKOS_PROFILE_FENCE(exec_space);
 
         weight_t best_edge_cut = curr_edge_cut;
@@ -893,7 +887,7 @@ namespace GPU_HeiPa {
                     // copy the partition
                     HEIPA_PROFILE_SCOPE("refinement", "JetLabelPropagation", "copy_partition");
                     copy_into(partition, lp.partition, g.n, exec_space);
-                    exec_space.fence();
+
                     best_edge_cut = curr_edge_cut;
                     best_max_weight = curr_max_weight;
                     iteration = 0;
@@ -904,7 +898,7 @@ namespace GPU_HeiPa {
                     // copy the partition
                     HEIPA_PROFILE_SCOPE("refinement", "JetLabelPropagation", "copy_partition");
                     copy_into(partition, lp.partition, g.n, exec_space);
-                    exec_space.fence();
+
                     best_edge_cut = curr_edge_cut;
                     best_max_weight = curr_max_weight;
                     KOKKOS_PROFILE_FENCE(exec_space);
