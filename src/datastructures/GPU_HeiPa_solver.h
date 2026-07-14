@@ -463,7 +463,6 @@ namespace GPU_HeiPa {
             } else {
                 graphs.emplace_back(from_Graph_Mapping<false, false>(cur, mappings.back(), mem_stack, exec_space));
             }
-            contract(partition, mappings.back(), exec_space);
 
             exec_space.fence();
             contraction_ms += get_milli_seconds(p, get_time_point());

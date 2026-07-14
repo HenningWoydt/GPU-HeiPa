@@ -295,6 +295,24 @@ namespace GPU_HeiPa {
         return coarse_g;
     }
 
+    template<bool sort_by_degree = false>
+    inline SmallGraph dispatch_from_Graph_Mapping_small(const SmallGraph &old_g,
+                                                        const Mapping &mapping,
+                                                        KokkosMemoryStack &mem_stack,
+                                                        DeviceExecutionSpace &exec_space) {
+        bool uvw = old_g.uniform_vertex_weights;
+        bool uew = old_g.uniform_edge_weights;
+        if (uvw && uew) {
+            return from_Graph_Mapping_small<true, true, sort_by_degree>(old_g, mapping, mem_stack, exec_space);
+        } else if (uvw) {
+            return from_Graph_Mapping_small<true, false, sort_by_degree>(old_g, mapping, mem_stack, exec_space);
+        } else if (uew) {
+            return from_Graph_Mapping_small<false, true, sort_by_degree>(old_g, mapping, mem_stack, exec_space);
+        } else {
+            return from_Graph_Mapping_small<false, false, sort_by_degree>(old_g, mapping, mem_stack, exec_space);
+        }
+    }
+
 } // namespace GPU_HeiPa
 
 #endif

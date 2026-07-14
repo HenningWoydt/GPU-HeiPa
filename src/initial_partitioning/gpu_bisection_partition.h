@@ -198,7 +198,7 @@ namespace GPU_HeiPa {
                     Kokkos::deep_copy(exec_space, left_strides, h_left_strides);
                     Kokkos::deep_copy(exec_space, right_strides, h_right_strides);
                     exec_space.fence();
-                    extract_all_subgraphs(graphs.back(), batch, partition, active_mask, local_ids, local_degree, exec_space);
+                    dispatch_extract_all_subgraphs(graphs.back(), batch, partition, active_mask, local_ids, local_degree, exec_space);
                     // batched_bisect(batch, active_mask, lmax_l, lmax_r, exec_space);
                     auto map = partition.map;
                     auto g_n = graphs.back().n;

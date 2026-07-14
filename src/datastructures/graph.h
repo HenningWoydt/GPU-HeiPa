@@ -260,10 +260,8 @@ namespace GPU_HeiPa {
             running += degrees(i);
         });
 
-        u32 temp;
-        Kokkos::deep_copy(exec_space, temp, Kokkos::subview(coarse_g.neighborhood, coarse_g.n));
+        Kokkos::deep_copy(exec_space, coarse_g.m, Kokkos::subview(coarse_g.neighborhood, coarse_g.n));
         exec_space.fence();
-        coarse_g.m = temp;
         KOKKOS_PROFILE_FENCE(exec_space);
 
         // allocate edges
@@ -477,10 +475,8 @@ namespace GPU_HeiPa {
             if (final) { coarse_g.neighborhood(i) = running; }
             running += degrees(i);
         });
-        u32 temp;
-        Kokkos::deep_copy(exec_space, temp, Kokkos::subview(coarse_g.neighborhood, coarse_g.n)); // copy final number of edges m
+        Kokkos::deep_copy(exec_space, coarse_g.m, Kokkos::subview(coarse_g.neighborhood, coarse_g.n)); // copy final number of edges m
         exec_space.fence();
-        coarse_g.m = temp;
         KOKKOS_PROFILE_FENCE(exec_space);
 
         // allocate edges for coarse graph

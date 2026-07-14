@@ -50,7 +50,6 @@ namespace GPU_HeiPa {
 
             local_sum += w * get(d_oracle, u_id, v_id);
         }, sum);
-        exec_space.fence();
 
         return sum;
     }

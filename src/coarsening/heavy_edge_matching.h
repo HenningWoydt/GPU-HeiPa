@@ -188,6 +188,23 @@ namespace GPU_HeiPa {
 
         return mapping;
     }
+    inline Mapping dispatch_heavy_edge_matching_small_get_mapping(const SmallGraph &g,
+                                                                  const Partition &partition,
+                                                                  const weight_t lmax,
+                                                                  KokkosMemoryStack &mem_stack,
+                                                                  DeviceExecutionSpace &exec_space) {
+        bool uvw = g.uniform_vertex_weights;
+        bool uew = g.uniform_edge_weights;
+        if (uvw && uew) {
+            return heavy_edge_matching_small_get_mapping<true, true>(g, partition, lmax, mem_stack, exec_space);
+        } else if (uvw) {
+            return heavy_edge_matching_small_get_mapping<true, false>(g, partition, lmax, mem_stack, exec_space);
+        } else if (uew) {
+            return heavy_edge_matching_small_get_mapping<false, true>(g, partition, lmax, mem_stack, exec_space);
+        } else {
+            return heavy_edge_matching_small_get_mapping<false, false>(g, partition, lmax, mem_stack, exec_space);
+        }
+    }
 }
 
 #endif
