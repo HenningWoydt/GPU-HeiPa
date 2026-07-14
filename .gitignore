@@ -18,3 +18,11 @@ out.txt
 *.nsys-rep
 test_*.cpp
 A_Multilevel_Memetic_Approach_for_Graph_Partitioning.pdf
+results/*
+check_jetgraphs.sh
+failed_runs.txt
+successful_runs.txt
+.gitignore
+too_large_graphs.txt
+test_jetgraphs.sh
+mem_analysis.py

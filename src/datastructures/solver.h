@@ -28,6 +28,8 @@
 #define GPU_HEIPA_SOLVER_H
 
 #include <vector>
+#include <chrono>
+#include <iostream>
 
 #include <Kokkos_Core.hpp>
 #include <KokkosSparse_CrsMatrix.hpp>
@@ -292,6 +294,16 @@ namespace GPU_HeiPa {
             const partition_t c = 8;
             const partition_t max_n = c * k;
             u32 level = 0;
+
+            std::cout << "Starting V-cycle coarsening" << std::endl;
+
+
+
+    auto start = std::chrono::steady_clock::now();
+
+
+
+
             while (graphs.back().n > max_n) {
                 #if ENABLE_PROFILER
                 ScopedTimer t_profiler{"hm", "solver", "profiling"};
@@ -311,7 +323,20 @@ namespace GPU_HeiPa {
                 contraction(level, dev_mem_stack);
 
                 level += 1;
+
+                if( level >= 20) {
+                    break;
+                }
             }
+
+                
+    auto end = std::chrono::steady_clock::now();
+
+    auto duration = std::chrono::duration_cast<std::chrono::milliseconds>(end - start);
+
+
+            std::cout << "Finished V-cycle coarsening after " << duration << "ms" << std::endl;
+            std::cout << "Now we are at level " << level  << std::endl;
 
             #if ENABLE_PROFILER
             ScopedTimer t_profiler{"hm", "solver", "profiling"};
@@ -387,9 +412,9 @@ namespace GPU_HeiPa {
 
             ScopedTimer t{"hm", "solver", "copy_res"};
         
-            Kokkos::deep_copy(exec_space, in_partition.map,  partition.map);
-            Kokkos::deep_copy(exec_space, in_partition.bweights,  partition.bweights);
-            exec_space.fence();
+                Kokkos::deep_copy(exec_space, in_partition.map,  partition.map);
+                Kokkos::deep_copy(exec_space, in_partition.bweights,  partition.bweights);
+                exec_space.fence();
 
             free_partition(partition, dev_mem_stack);
         }

@@ -255,8 +255,8 @@ namespace GPU_HeiPa {
                             vcmap(i) = cv;
                         } else {
                             // könnte man auch weglassen i think
-                            vcmap(twin) = twin;
-                            vcmap(i) = i;
+                            // vcmap(twin) = twin;
+                            // vcmap(i) = i;
                         }
 
 
@@ -550,8 +550,8 @@ namespace GPU_HeiPa {
                                 thm.vcmap(twin) = cv;
                                 thm.vcmap(u) = cv;
                             } else {
-                                thm.vcmap(twin) = twin;
-                                thm.vcmap(u) = u;
+                               // thm.vcmap(twin) = twin;
+                               // thm.vcmap(u) = u;
                             }
                             found = true;
                         }
@@ -635,13 +635,7 @@ namespace GPU_HeiPa {
                                                DeviceExecutionSpace &exec_space) {
         TwoHopMatcher thm = initialize_two_hop_matcher(g.n, g.m, partition.k, lmax, mem_stack);
 
-        /*
-        ! I need to change all kernel-calls in this file to actually use the execution space!
-        ! Else, the cpu parallelism will fail again and multiple cpu-threads
-        ! commiting to the same stream will cause seg faults and stuff! 
         
-        */
-
 
         {
             ScopedTimer _t("coarsening", "coarsen_match", "reset");
@@ -655,6 +649,10 @@ namespace GPU_HeiPa {
         heavy_edge_matching<uniform_v_weights, uniform_e_weights>(g, partition, thm, 12345u, exec_space);
 
         vertex_t unmapped = count_unmapped(g, thm, exec_space);
+
+        //std::cout << "Number of vertices: " << g.n << std::endl;
+        //std::cout << "Unmatched after HEM: " << unmapped << std::endl;
+
         if ((f64) unmapped / (f64) g.n > 0.25) {
             
             leaf_matching(g, partition, thm, unmapped, mem_stack, exec_space);
@@ -662,6 +660,7 @@ namespace GPU_HeiPa {
             unmapped = count_unmapped(g, thm, exec_space);
         }
 
+        //std::cout << "Unmatched after leaf matching: " << unmapped << std::endl;
         // Twin matches
         if ((f64) unmapped / (f64) g.n > 0.25) {
             
@@ -670,35 +669,28 @@ namespace GPU_HeiPa {
             unmapped = count_unmapped(g, thm, exec_space);
         }
 
+        //std::cout << "Unmatched after twin matching: " << unmapped << std::endl;
         // Relative matches
         if ((f64) unmapped / (f64) g.n > 0.25) {
             
             relative_matching<uniform_e_weights>(g, partition, thm, unmapped, mem_stack, exec_space);
         }
+
+        unmapped = count_unmapped(g, thm, exec_space);
+
+        //std::cout << "Unmatched after relative matching: " << unmapped << std::endl;
         //
         Mapping mapping;
         //
         {
             ScopedTimer _t("coarsening", "coarsen_match", "build_mapping");
 
+
             Kokkos::parallel_for("singletons", Kokkos::RangePolicy<DeviceExecutionSpace>(exec_space, 0, g.n), KOKKOS_LAMBDA(vertex_t i) {
                 if (thm.vcmap(i) == SENTINEL) thm.vcmap(i) = i;
             });
 
-            vertex_t count = 0;
-            Kokkos::parallel_reduce("count wrong matchings", Kokkos::RangePolicy<DeviceExecutionSpace>(exec_space, 0, g.n),
-                KOKKOS_LAMBDA(const vertex_t u, vertex_t &count_tmp) {
-                    if( partition.map(u) != partition.map( thm.vcmap(u)) )
-                        count_tmp++;
-                }, count
-            );
-            if( count != 0) {
 
-                std::cout << "--- inside matching ---" << std::endl;
-                std::cout << "counted " << count << " wrongly matched vertices" << std::endl;
-                std::cout << "-----------------------" << std::endl;
-                
-            }
             vertex_t nc = 0;
             Kokkos::parallel_scan("set_coarse_ids", Kokkos::RangePolicy<DeviceExecutionSpace>(exec_space, 0, g.n), KOKKOS_LAMBDA(const vertex_t i, vertex_t &update, const bool final) {
                 if (thm.vcmap(i) == i) {
@@ -708,6 +700,8 @@ namespace GPU_HeiPa {
                     thm.vcmap(i) += g.n;
                 }
             }, nc);
+
+            //std::cout << "Number of coarser vertices: " << nc << std::endl;
 
             Kokkos::parallel_for("prop_coarse_ids", Kokkos::RangePolicy<DeviceExecutionSpace>(exec_space, 0, g.n), KOKKOS_LAMBDA(const vertex_t i) {
                 if (thm.vcmap(i) >= g.n) thm.vcmap(i) = thm.vcmap(thm.vcmap(i) - g.n);

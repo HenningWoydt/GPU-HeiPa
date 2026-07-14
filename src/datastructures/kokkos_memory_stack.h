@@ -38,6 +38,8 @@ namespace GPU_HeiPa {
 
         size_t n_bytes_allocated = 0; // total bytes in the pool
 
+        size_t peak_usage = 0;
+
         // FRONT side (grows from the beginning of the buffer upwards)
         size_t n_bytes_in_use = 0; // bytes used from the front (kept for backward compat)
         std::vector<size_t> reserved_chunks; // LIFO sizes from the front (aligned)
@@ -79,6 +81,9 @@ namespace GPU_HeiPa {
 
         // total used = front + back; must not exceed allocated
         const size_t total_used = stack.n_bytes_in_use + stack.n_bytes_in_use_back;
+        if(total_used > stack.peak_usage) {
+            stack.peak_usage = total_used;
+        }
 
         if (total_used + need > stack.n_bytes_allocated) {
             std::cerr << "ERROR: Memory stack '" << stack.name << "' out of memory (front allocation)\n";
@@ -128,6 +133,11 @@ namespace GPU_HeiPa {
         if (need == 0) return nullptr;
 
         const size_t total_used = stack.n_bytes_in_use + stack.n_bytes_in_use_back;
+
+        if(total_used > stack.peak_usage) {
+            stack.peak_usage = total_used;
+        }
+
 
         if (total_used + need > stack.n_bytes_allocated) {
             std::cerr << "ERROR: Memory stack '" << stack.name << "' out of memory (back allocation)\n";

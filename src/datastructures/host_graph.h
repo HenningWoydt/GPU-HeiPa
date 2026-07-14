@@ -29,6 +29,9 @@
 
 #include <iostream>
 #include <cstdlib>
+#include <cstdio>
+#include <cstring>
+#include <algorithm>
 
 #include "../utility/definitions.h"
 #include "../utility/util.h"
@@ -101,50 +104,53 @@ namespace GPU_HeiPa {
         size_t curr_m = 0;
 
         while (p < end) {
-            while (*p == '%') {
-                while (*p != '\n') { ++p; }
-                ++p;
+            while (p < end && *p == '%') {
+                while (p < end && *p != '\n') { ++p; }
+                if (p < end) ++p;
             }
-            while (*p == ' ') { ++p; }
+            while (p < end && *p == ' ') { ++p; }
 
             weight_t vw = 1;
             if constexpr (has_v_weights) {
                 vw = 0;
-                while (*p != ' ' && *p != '\n') {
+                while (p < end && *p != ' ' && *p != '\n') {
                     vw = vw * 10 + (weight_t) (*p - '0');
                     ++p;
                 }
-                while (*p == ' ') { ++p; }
+                while (p < end && *p == ' ') { ++p; }
+
                 weights_ptr[u] = vw;
             }
             g.g_weight += vw;
 
-            while (*p != '\n' && p < end) {
+            while (p < end && *p != '\n') {
                 vertex_t v = 0;
-                while (*p != ' ' && *p != '\n') {
+                while (p < end && *p != ' ' && *p != '\n') {
                     v = v * 10 + (vertex_t) (*p - '0');
                     ++p;
                 }
-                while (*p == ' ') { ++p; }
+                while (p < end && *p == ' ') { ++p; }
 
                 if constexpr (has_e_weights) {
                     weight_t w = 0;
-                    while (*p != ' ' && *p != '\n') {
+                    while (p < end && *p != ' ' && *p != '\n') {
                         w = w * 10 + (weight_t) (*p - '0');
                         ++p;
                     }
-                    while (*p == ' ') { ++p; }
+                    while (p < end && *p == ' ') { ++p; }
+
                     edges_w_ptr[curr_m] = w;
                 }
 
                 edges_v_ptr[curr_m] = v - 1;
                 ++curr_m;
             }
+
             neighborhood_ptr[u + 1] = (vertex_t) curr_m;
             ++u;
-            ++p;
+            if (p < end) ++p;
         }
-
+        
         if (curr_m != g.m) {
             std::cerr << "Number of expected edges " << g.m << " not equal to number edges " << curr_m << " found!\n";
             exit(EXIT_FAILURE);

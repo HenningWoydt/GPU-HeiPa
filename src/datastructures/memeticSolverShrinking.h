@@ -355,15 +355,15 @@ namespace GPU_HeiPa {
 
             size_t bytes_needed = 0;
 
-            size_t bytes_for_orga_stack = 20 * (size_t) host_g.n * sizeof(vertex_t) +
-                                          20 * (size_t) host_g.m * sizeof(vertex_t);
+            size_t bytes_for_orga_stack = 21 * (size_t) host_g.n * sizeof(vertex_t) +
+                                          21 * (size_t) host_g.m * sizeof(vertex_t);
 
-            size_t bytes_for_a_partition_stack = (6) * (reduction_factor / 2) * (size_t) host_g.n * sizeof(vertex_t) +
-                                                 (9 + (num_crossovers / 2) )  * (size_t) host_g.m * sizeof(vertex_t);
+            size_t bytes_for_a_partition_stack = (5) * (reduction_factor) * (size_t) host_g.n * sizeof(vertex_t) ;
 
-            size_t bytes_for_a_cpu_thread_stack = 12 * (size_t) host_g.n * sizeof(vertex_t) +
-                                                  12 * (size_t) host_g.m * sizeof(vertex_t);
-
+                        size_t bytes_for_a_cpu_thread_stack = 15 * (size_t) host_g.n * sizeof(vertex_t) +
+                                                  15 * (size_t) host_g.m * sizeof(vertex_t) +
+                                                  1024 * 1024 * 1024
+                                                  ;
 
             //! use this for the coarsening and mapping and stuff
             mem_stacks[orga_stack] = initialize_kokkos_memory_stack(
@@ -415,6 +415,31 @@ namespace GPU_HeiPa {
 
 
             internal_solve(host_g, mem_stacks, in_partition);
+
+
+            std::cout << "Memory statistics: " << std::endl;
+
+            std::cout << "Orga stack: " << std::endl;
+            std::cout << "Bytes allocated: " << bytes_for_orga_stack << std::endl;
+            std::cout << "Bytes used: " << mem_stacks[orga_stack].peak_usage << std::endl;
+            std::cout << "%: " <<  (f64) mem_stacks[orga_stack].peak_usage  / (f64) bytes_for_orga_stack  << std::endl;
+
+            std::cout << "partition stack A: " << std::endl;
+            std::cout << "Bytes allocated: " << bytes_for_a_partition_stack << std::endl;
+            std::cout << "Bytes used: " << mem_stacks[partition_stack_a].peak_usage << std::endl;
+            std::cout << "%: " <<  (f64) mem_stacks[partition_stack_a].peak_usage  / (f64) bytes_for_a_partition_stack << std::endl;
+
+            
+            std::cout << "partition stack B: " << std::endl;
+            std::cout << "Bytes allocated: " << bytes_for_a_partition_stack << std::endl;
+            std::cout << "Bytes used: " << mem_stacks[partition_stack_b].peak_usage << std::endl;
+            std::cout << "%: " <<  (f64) mem_stacks[partition_stack_b].peak_usage  / (f64) bytes_for_a_partition_stack << std::endl;
+
+            
+            std::cout << "cpu thread stack: " << std::endl;
+            std::cout << "Bytes allocated: " << bytes_for_a_cpu_thread_stack << std::endl;
+            std::cout << "Bytes used: " << mem_stacks[0].peak_usage << std::endl;
+            std::cout << "%: " <<  (f64) mem_stacks[0].peak_usage  / (f64) bytes_for_a_cpu_thread_stack << std::endl;
 
             auto p = get_time_point();
 
@@ -470,6 +495,7 @@ namespace GPU_HeiPa {
                 graphs.pop_back();
 
                 for (size_t i = 0; i < intended_num_cpu_threads + 3; ++i) {
+
                     assert_is_empty(mem_stacks[i]);
                     destroy(mem_stacks[i]);
                 }
@@ -822,8 +848,8 @@ namespace GPU_HeiPa {
                 {
                     //std::cout << "mutation: " << std::endl;
                    auto p = get_time_point();
-                   if( ( static_cast<f32>(level) / static_cast<f32>(max_level) ) < mutation_percentile  ) {
-
+                   //if( ( static_cast<f32>(level) / static_cast<f32>(max_level) ) < mutation_percentile  ) {
+                    if( level == 0) {
                         mutate(level, mem_stacks);
 
                     }
