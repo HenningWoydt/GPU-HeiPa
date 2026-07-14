@@ -253,16 +253,14 @@ namespace GPU_HeiPa {
     inline vertex_t count_unmapped(const Graph &g,
                                    const TwoHopMatcher &thm,
                                    DeviceExecutionSpace &exec_space) {
+        HEIPA_PROFILE_SCOPE("coarsening", "coarsen_match", "count_unmapped");
+
         vertex_t unmapped = 0;
-        {
-            HEIPA_PROFILE_SCOPE("coarsening", "coarsen_match", "count_unmapped");
+        Kokkos::parallel_reduce("count_unmapped", Kokkos::RangePolicy<DeviceExecutionSpace>(exec_space, 0, g.n), KOKKOS_LAMBDA(vertex_t i, vertex_t &update) {
+            if (thm.vcmap(i) == SENTINEL) update++;
+        }, unmapped);
+        KOKKOS_PROFILE_FENCE(exec_space);
 
-            Kokkos::parallel_reduce("count_unmapped", Kokkos::RangePolicy<DeviceExecutionSpace>(exec_space, 0, g.n), KOKKOS_LAMBDA(vertex_t i, vertex_t &update) {
-                if (thm.vcmap(i) == SENTINEL) update++;
-            }, unmapped);
-
-            KOKKOS_PROFILE_FENCE(exec_space);
-        }
         return unmapped;
     }
 
@@ -303,89 +301,77 @@ namespace GPU_HeiPa {
         u32 round = 0;
         while (perm_length > 0) {
             u32 round_seed = seed ^ (round * 0x9e3779b1u);
+
             // 4 sub-rounds of commit
-            {
-                HEIPA_PROFILE_SCOPE("coarsening", "coarsen_match", "commit");
-
-                for (u32 r = 0; r < 4; r++) {
-                    Kokkos::parallel_for("commit_p1", Kokkos::RangePolicy<DeviceExecutionSpace>(exec_space, 0, perm_length), KOKKOS_LAMBDA(vertex_t i) {
-                        vertex_t u = perm_length == g.n ? i : thm.vertex_list(i);
-                        vertex_t v = thm.hn(u);
-                        if (v == SENTINEL || thm.vcmap(u) != SENTINEL) return;
-                        hasher_t hash;
-                        bool condition = (r > 0) ? (hash(u + r) < hash(v + r)) : (u < v);
-                        if (!condition) thm.vcmap(u) = SENTINEL - 1;
-                    });
-                    Kokkos::parallel_for("commit_p2", Kokkos::RangePolicy<DeviceExecutionSpace>(exec_space, 0, perm_length), KOKKOS_LAMBDA(vertex_t i) {
-                        vertex_t u = perm_length == g.n ? i : thm.vertex_list(i);
-                        vertex_t v = thm.hn(u);
-                        if (v == SENTINEL || thm.vcmap(u) != SENTINEL) return;
-                        vertex_t cv = u < v ? u : v;
-                        if (Kokkos::atomic_compare_exchange(&thm.vcmap(v), SENTINEL - 1, cv) == SENTINEL - 1) {
-                            thm.vcmap(u) = cv;
-                        }
-                    });
-                    Kokkos::parallel_for("commit_p3", Kokkos::RangePolicy<DeviceExecutionSpace>(exec_space, 0, perm_length), KOKKOS_LAMBDA(vertex_t i) {
-                        vertex_t u = perm_length == g.n ? i : thm.vertex_list(i);
-                        if (thm.vcmap(u) == SENTINEL - 1) thm.vcmap(u) = SENTINEL;
-                    });
-                }
-
-                KOKKOS_PROFILE_FENCE(exec_space);
+            HEIPA_PROFILE_SCOPE("coarsening", "coarsen_match", "commit");
+            for (u32 r = 0; r < 4; r++) {
+                Kokkos::parallel_for("commit_p1", Kokkos::RangePolicy<DeviceExecutionSpace>(exec_space, 0, perm_length), KOKKOS_LAMBDA(vertex_t i) {
+                    vertex_t u = perm_length == g.n ? i : thm.vertex_list(i);
+                    vertex_t v = thm.hn(u);
+                    if (v == SENTINEL || thm.vcmap(u) != SENTINEL) return;
+                    hasher_t hash;
+                    bool condition = (r > 0) ? (hash(u + r) < hash(v + r)) : (u < v);
+                    if (!condition) thm.vcmap(u) = SENTINEL - 1;
+                });
+                Kokkos::parallel_for("commit_p2", Kokkos::RangePolicy<DeviceExecutionSpace>(exec_space, 0, perm_length), KOKKOS_LAMBDA(vertex_t i) {
+                    vertex_t u = perm_length == g.n ? i : thm.vertex_list(i);
+                    vertex_t v = thm.hn(u);
+                    if (v == SENTINEL || thm.vcmap(u) != SENTINEL) return;
+                    vertex_t cv = u < v ? u : v;
+                    if (Kokkos::atomic_compare_exchange(&thm.vcmap(v), SENTINEL - 1, cv) == SENTINEL - 1) {
+                        thm.vcmap(u) = cv;
+                    }
+                });
+                Kokkos::parallel_for("commit_p3", Kokkos::RangePolicy<DeviceExecutionSpace>(exec_space, 0, perm_length), KOKKOS_LAMBDA(vertex_t i) {
+                    vertex_t u = perm_length == g.n ? i : thm.vertex_list(i);
+                    if (thm.vcmap(u) == SENTINEL - 1) thm.vcmap(u) = SENTINEL;
+                });
             }
+            KOKKOS_PROFILE_FENCE(exec_space);
 
             // Re-pick for unmatched
-            {
-                if (uniform_e_weights) {
-                    if (g.m / g.n > 32) {
-                        HEIPA_PROFILE_SCOPE("coarsening", "coarsen_match", "repick_uniform_team");
-
-                        pick_neighbor_team<false, uniform_e_weights>(g, thm.vcmap, thm.hn, round_seed, thm.vertex_list, perm_length, exec_space);
-
-                        KOKKOS_PROFILE_FENCE(exec_space);
-                    } else {
-                        HEIPA_PROFILE_SCOPE("coarsening", "coarsen_match", "repick_uniform_flat");
-
-                        pick_neighbor_flat<false, uniform_e_weights>(g, thm.vcmap, thm.hn, round_seed, thm.vertex_list, perm_length, exec_space);
-
-                        KOKKOS_PROFILE_FENCE(exec_space);
-                    }
+            if (uniform_e_weights) {
+                if (g.m / g.n > 32) {
+                    HEIPA_PROFILE_SCOPE("coarsening", "coarsen_match", "repick_uniform_team");
+                    pick_neighbor_team<false, uniform_e_weights>(g, thm.vcmap, thm.hn, round_seed, thm.vertex_list, perm_length, exec_space);
+                    KOKKOS_PROFILE_FENCE(exec_space);
                 } else {
-                    if (g.m / g.n > 32) {
-                        HEIPA_PROFILE_SCOPE("coarsening", "coarsen_match", "repick_team");
-
-                        pick_neighbor_team<false, uniform_e_weights>(g, thm.vcmap, thm.hn, round_seed, thm.vertex_list, perm_length, exec_space);
-
-                        KOKKOS_PROFILE_FENCE(exec_space);
-                    } else {
-                        HEIPA_PROFILE_SCOPE("coarsening", "coarsen_match", "repick_flat");
-
-                        pick_neighbor_flat<false, uniform_e_weights>(g, thm.vcmap, thm.hn, round_seed, thm.vertex_list, perm_length, exec_space);
-
-                        KOKKOS_PROFILE_FENCE(exec_space);
-                    }
+                    HEIPA_PROFILE_SCOPE("coarsening", "coarsen_match", "repick_uniform_flat");
+                    pick_neighbor_flat<false, uniform_e_weights>(g, thm.vcmap, thm.hn, round_seed, thm.vertex_list, perm_length, exec_space);
+                    KOKKOS_PROFILE_FENCE(exec_space);
+                }
+            } else {
+                if (g.m / g.n > 32) {
+                    HEIPA_PROFILE_SCOPE("coarsening", "coarsen_match", "repick_team");
+                    pick_neighbor_team<false, uniform_e_weights>(g, thm.vcmap, thm.hn, round_seed, thm.vertex_list, perm_length, exec_space);
+                    KOKKOS_PROFILE_FENCE(exec_space);
+                } else {
+                    HEIPA_PROFILE_SCOPE("coarsening", "coarsen_match", "repick_flat");
+                    pick_neighbor_flat<false, uniform_e_weights>(g, thm.vcmap, thm.hn, round_seed, thm.vertex_list, perm_length, exec_space);
+                    KOKKOS_PROFILE_FENCE(exec_space);
                 }
             }
+
 
             // Compact
-            {
-                HEIPA_PROFILE_SCOPE("coarsening", "coarsen_match", "compact");
-
-                if (perm_length != g.n) {
-                    Kokkos::parallel_for("copy_perm", Kokkos::RangePolicy<DeviceExecutionSpace>(exec_space, 0, perm_length), KOKKOS_LAMBDA(vertex_t i) {
-                        thm.vertex_list_temp(i) = thm.vertex_list(i);
-                    });
-                }
-                Kokkos::parallel_scan("compact", Kokkos::RangePolicy<DeviceExecutionSpace>(exec_space, 0, perm_length), KOKKOS_LAMBDA(const vertex_t i, vertex_t &update, const bool final) {
-                    vertex_t u = perm_length == g.n ? i : thm.vertex_list_temp(i);
-                    if (thm.vcmap(u) == SENTINEL && thm.hn(u) != SENTINEL) {
-                        if (final) thm.vertex_list(update) = u;
-                        update++;
-                    }
-                }, perm_length);
-
-                KOKKOS_PROFILE_FENCE(exec_space);
+            HEIPA_PROFILE_SCOPE("coarsening", "coarsen_match", "compact_copy");
+            if (perm_length != g.n) {
+                Kokkos::parallel_for("copy_perm", Kokkos::RangePolicy<DeviceExecutionSpace>(exec_space, 0, perm_length), KOKKOS_LAMBDA(vertex_t i) {
+                    thm.vertex_list_temp(i) = thm.vertex_list(i);
+                });
             }
+            KOKKOS_PROFILE_FENCE(exec_space);
+
+            HEIPA_PROFILE_SCOPE("coarsening", "coarsen_match", "compact_compact");
+            Kokkos::parallel_scan("compact", Kokkos::RangePolicy<DeviceExecutionSpace>(exec_space, 0, perm_length), KOKKOS_LAMBDA(const vertex_t i, vertex_t &update, const bool final) {
+                vertex_t u = perm_length == g.n ? i : thm.vertex_list_temp(i);
+                if (thm.vcmap(u) == SENTINEL && thm.hn(u) != SENTINEL) {
+                    if (final) thm.vertex_list(update) = u;
+                    update++;
+                }
+            }, perm_length);
+            KOKKOS_PROFILE_FENCE(exec_space);
+
             round++;
         }
     }
@@ -427,98 +413,86 @@ namespace GPU_HeiPa {
                               vertex_t unmapped,
                               KokkosMemoryStack &mem_stack,
                               DeviceExecutionSpace &exec_space) {
+        HEIPA_PROFILE_SCOPE("coarsening", "twin_matching", "allocate");
         UnmanagedDeviceVertex unmappedVtx((vertex_t *) get_chunk_back(mem_stack, sizeof(vertex_t) * unmapped), unmapped);
         UnmanagedDeviceU64 hashes((u64 *) get_chunk_back(mem_stack, sizeof(u64) * unmapped), unmapped);
 
         u64 table_size = g.n;
         UnmanagedDeviceU64 htable((u64 *) get_chunk_back(mem_stack, sizeof(u64) * table_size), table_size);
         UnmanagedDeviceVertex twins((vertex_t *) get_chunk_back(mem_stack, sizeof(vertex_t) * table_size), table_size);
+        KOKKOS_PROFILE_FENCE(exec_space);
 
-        {
-            HEIPA_PROFILE_SCOPE("coarsening", "twin_matching", "unmapped");
+        HEIPA_PROFILE_SCOPE("coarsening", "twin_matching", "unmapped");
+        Kokkos::parallel_scan("scan_twin", Kokkos::RangePolicy<DeviceExecutionSpace>(exec_space, 0, g.n), KOKKOS_LAMBDA(const vertex_t i, vertex_t &update, const bool final) {
+            if (thm.vcmap(i) == SENTINEL) {
+                if (final) unmappedVtx(update) = i;
+                update++;
+            }
+        });
+        KOKKOS_PROFILE_FENCE(exec_space);
 
-            Kokkos::parallel_scan("scan_twin", Kokkos::RangePolicy<DeviceExecutionSpace>(exec_space, 0, g.n), KOKKOS_LAMBDA(const vertex_t i, vertex_t &update, const bool final) {
-                if (thm.vcmap(i) == SENTINEL) {
-                    if (final) unmappedVtx(update) = i;
-                    update++;
+        HEIPA_PROFILE_SCOPE("coarsening", "twin_matching", "hash");
+        hasher_t hasher;
+        Kokkos::parallel_for("twin_digests", TeamPolicy_t(exec_space, unmapped, Kokkos::AUTO), KOKKOS_LAMBDA(const TeamMember &thread) {
+            vertex_t u = unmappedVtx(thread.league_rank());
+            u64 hash = 0;
+            Kokkos::parallel_reduce(Kokkos::TeamThreadRange(thread, g.neighborhood(u), g.neighborhood(u + 1)), [=](const u32 j, u64 &thread_sum) {
+                u64 x = g.edges_v(j);
+                u64 y = hasher(static_cast<vertex_t>(x));
+                y = y * y + y;
+                thread_sum += y;
+            }, hash);
+            Kokkos::single(Kokkos::PerTeam(thread), [=]() {
+                hashes(thread.league_rank()) = hash;
+            });
+        });
+        KOKKOS_PROFILE_FENCE(exec_space);
+
+        HEIPA_PROFILE_SCOPE("coarsening", "twin_matching", "reset_htable");
+        Kokkos::deep_copy(exec_space, htable, 0);
+        Kokkos::deep_copy(exec_space, twins, SENTINEL);
+        KOKKOS_PROFILE_FENCE(exec_space);
+
+        HEIPA_PROFILE_SCOPE("coarsening", "twin_matching", "match");
+        Kokkos::parallel_for("match_by_hash", Kokkos::RangePolicy<DeviceExecutionSpace>(exec_space, 0, unmapped), KOKKOS_LAMBDA(const u32 i) {
+            vertex_t u = unmappedVtx(i);
+            u64 h = hashes(i);
+            vertex_t key = (vertex_t) (h % table_size);
+            bool found = false;
+            while (!found) {
+                if (htable(key) == 0) {
+                    Kokkos::atomic_compare_exchange(&htable(key), 0, h);
                 }
-            });
-
-            KOKKOS_PROFILE_FENCE(exec_space);
-        }
-        //
-        {
-            HEIPA_PROFILE_SCOPE("coarsening", "twin_matching", "hash");
-
-            hasher_t hasher;
-            Kokkos::parallel_for("twin_digests", TeamPolicy_t(exec_space, unmapped, Kokkos::AUTO), KOKKOS_LAMBDA(const TeamMember &thread) {
-                vertex_t u = unmappedVtx(thread.league_rank());
-                u64 hash = 0;
-                Kokkos::parallel_reduce(Kokkos::TeamThreadRange(thread, g.neighborhood(u), g.neighborhood(u + 1)), [=](const u32 j, u64 &thread_sum) {
-                    u64 x = g.edges_v(j);
-                    u64 y = hasher(static_cast<vertex_t>(x));
-                    y = y * y + y;
-                    thread_sum += y;
-                }, hash);
-                Kokkos::single(Kokkos::PerTeam(thread), [=]() {
-                    hashes(thread.league_rank()) = hash;
-                });
-            });
-
-            KOKKOS_PROFILE_FENCE(exec_space);
-        }
-        //
-        {
-            HEIPA_PROFILE_SCOPE("coarsening", "twin_matching", "reset_htable");
-
-            Kokkos::deep_copy(exec_space, htable, 0);
-            Kokkos::deep_copy(exec_space, twins, SENTINEL);
-
-            KOKKOS_PROFILE_FENCE(exec_space);
-        }
-        //
-        {
-            HEIPA_PROFILE_SCOPE("coarsening", "twin_matching", "match");
-
-            Kokkos::parallel_for("match_by_hash", Kokkos::RangePolicy<DeviceExecutionSpace>(exec_space, 0, unmapped), KOKKOS_LAMBDA(const u32 i) {
-                vertex_t u = unmappedVtx(i);
-                u64 h = hashes(i);
-                vertex_t key = (vertex_t) (h % table_size);
-                bool found = false;
-                while (!found) {
-                    if (htable(key) == 0) {
-                        Kokkos::atomic_compare_exchange(&htable(key), 0, h);
-                    }
-                    if (htable(key) == h) {
+                if (htable(key) == h) {
+                    found = true;
+                } else {
+                    ++key;
+                    if (key >= table_size) key -= table_size;
+                }
+            }
+            found = false;
+            while (!found) {
+                vertex_t twin = twins(key);
+                if (twin == SENTINEL) {
+                    if (Kokkos::atomic_compare_exchange(&twins(key), twin, u) == twin) found = true;
+                } else {
+                    if (Kokkos::atomic_compare_exchange(&twins(key), twin, SENTINEL) == twin) {
+                        vertex_t cv = twin < u ? twin : u;
+                        thm.vcmap(twin) = cv;
+                        thm.vcmap(u) = cv;
                         found = true;
-                    } else {
-                        ++key;
-                        if (key >= table_size) key -= table_size;
                     }
                 }
-                found = false;
-                while (!found) {
-                    vertex_t twin = twins(key);
-                    if (twin == SENTINEL) {
-                        if (Kokkos::atomic_compare_exchange(&twins(key), twin, u) == twin) found = true;
-                    } else {
-                        if (Kokkos::atomic_compare_exchange(&twins(key), twin, SENTINEL) == twin) {
-                            vertex_t cv = twin < u ? twin : u;
-                            thm.vcmap(twin) = cv;
-                            thm.vcmap(u) = cv;
-                            found = true;
-                        }
-                    }
-                }
-            });
+            }
+        });
+        KOKKOS_PROFILE_FENCE(exec_space);
 
-            KOKKOS_PROFILE_FENCE(exec_space);
-        }
-
+        HEIPA_PROFILE_SCOPE("coarsening", "twin_matching", "free");
         pop_back(mem_stack); // hashes
         pop_back(mem_stack); // unmappedVtx
         pop_back(mem_stack); // twins
         pop_back(mem_stack); // htable
+        KOKKOS_PROFILE_FENCE(exec_space);
     }
 
     template<bool uniform_e_weights>
@@ -576,28 +550,23 @@ namespace GPU_HeiPa {
                                                DeviceExecutionSpace &exec_space) {
         TwoHopMatcher thm = initialize_two_hop_matcher(g.n, g.m, partition.k, lmax, mem_stack);
 
-        {
-            HEIPA_PROFILE_SCOPE("coarsening", "coarsen_match", "reset");
 
-            Kokkos::deep_copy(exec_space, thm.vcmap, SENTINEL);
-            Kokkos::deep_copy(exec_space, thm.hn, SENTINEL);
-
-            KOKKOS_PROFILE_FENCE(exec_space);
-        }
+        HEIPA_PROFILE_SCOPE("coarsening", "coarsen_match", "reset");
+        Kokkos::deep_copy(exec_space, thm.vcmap, SENTINEL);
+        Kokkos::deep_copy(exec_space, thm.hn, SENTINEL);
+        KOKKOS_PROFILE_FENCE(exec_space);
 
         heavy_edge_matching<uniform_v_weights, uniform_e_weights>(g, thm, 12345u, exec_space);
 
         vertex_t unmapped = count_unmapped(g, thm, exec_space);
         if ((f64) unmapped / (f64) g.n > 0.25) {
             leaf_matching(g, thm, unmapped, mem_stack, exec_space);
-
             unmapped = count_unmapped(g, thm, exec_space);
         }
 
         // Twin matches
         if ((f64) unmapped / (f64) g.n > 0.25) {
             twin_matching(g, thm, unmapped, mem_stack, exec_space);
-
             unmapped = count_unmapped(g, thm, exec_space);
         }
 
@@ -605,44 +574,38 @@ namespace GPU_HeiPa {
         if ((f64) unmapped / (f64) g.n > 0.25) {
             relative_matching<uniform_e_weights>(g, thm, unmapped, mem_stack, exec_space);
         }
-        //
+
+        HEIPA_PROFILE_SCOPE("coarsening", "coarsen_match", "build_mapping");
         Mapping mapping;
-        //
-        {
-            HEIPA_PROFILE_SCOPE("coarsening", "coarsen_match", "build_mapping");
+        Kokkos::parallel_for("singletons", Kokkos::RangePolicy<DeviceExecutionSpace>(exec_space, 0, g.n), KOKKOS_LAMBDA(vertex_t i) {
+            if (thm.vcmap(i) == SENTINEL) thm.vcmap(i) = i;
+        });
 
-            Kokkos::parallel_for("singletons", Kokkos::RangePolicy<DeviceExecutionSpace>(exec_space, 0, g.n), KOKKOS_LAMBDA(vertex_t i) {
-                if (thm.vcmap(i) == SENTINEL) thm.vcmap(i) = i;
-            });
+        vertex_t nc = 0;
+        Kokkos::parallel_scan("set_coarse_ids", Kokkos::RangePolicy<DeviceExecutionSpace>(exec_space, 0, g.n), KOKKOS_LAMBDA(const vertex_t i, vertex_t &update, const bool final) {
+            if (thm.vcmap(i) == i) {
+                if (final) thm.vcmap(i) = update;
+                update++;
+            } else if (final) {
+                thm.vcmap(i) += g.n;
+            }
+        }, nc);
 
-            vertex_t nc = 0;
-            Kokkos::parallel_scan("set_coarse_ids", Kokkos::RangePolicy<DeviceExecutionSpace>(exec_space, 0, g.n), KOKKOS_LAMBDA(const vertex_t i, vertex_t &update, const bool final) {
-                if (thm.vcmap(i) == i) {
-                    if (final) thm.vcmap(i) = update;
-                    update++;
-                } else if (final) {
-                    thm.vcmap(i) += g.n;
-                }
-            }, nc);
+        Kokkos::parallel_for("prop_coarse_ids", Kokkos::RangePolicy<DeviceExecutionSpace>(exec_space, 0, g.n), KOKKOS_LAMBDA(const vertex_t i) {
+            if (thm.vcmap(i) >= g.n) thm.vcmap(i) = thm.vcmap(thm.vcmap(i) - g.n);
+        });
 
-            Kokkos::parallel_for("prop_coarse_ids", Kokkos::RangePolicy<DeviceExecutionSpace>(exec_space, 0, g.n), KOKKOS_LAMBDA(const vertex_t i) {
-                if (thm.vcmap(i) >= g.n) thm.vcmap(i) = thm.vcmap(thm.vcmap(i) - g.n);
-            });
+        // ---- Build Mapping ----
+        mapping = initialize_mapping(g.n, nc, mem_stack);
+        Kokkos::parallel_for("copy_mapping", Kokkos::RangePolicy<DeviceExecutionSpace>(exec_space, 0, g.n), KOKKOS_LAMBDA(const vertex_t u) {
+            mapping.mapping(u) = thm.vcmap(u);
+        });
+        KOKKOS_PROFILE_FENCE(exec_space);
 
-            // ---- Build Mapping ----
-            mapping = initialize_mapping(g.n, nc, mem_stack);
-            Kokkos::parallel_for("copy_mapping", Kokkos::RangePolicy<DeviceExecutionSpace>(exec_space, 0, g.n), KOKKOS_LAMBDA(const vertex_t u) {
-                mapping.mapping(u) = thm.vcmap(u);
-            });
 
-            KOKKOS_PROFILE_FENCE(exec_space);
-        }
-
-        {
-            HEIPA_PROFILE_SCOPE("coarsening", "coarsen_match", "free");
-
-            free_TwoHopMatcher(thm, mem_stack);
-        }
+        HEIPA_PROFILE_SCOPE("coarsening", "coarsen_match", "free");
+        free_TwoHopMatcher(thm, mem_stack);
+        KOKKOS_PROFILE_FENCE(exec_space);
 
         return mapping;
     }

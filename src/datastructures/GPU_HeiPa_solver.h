@@ -245,20 +245,18 @@ namespace GPU_HeiPa {
         HostPartition solve(HostGraph &host_g) {
             auto sp = get_time_point();
 
-
             KokkosMemoryStack mem_stack = initialize_kokkos_memory_stack(config.n_bytes_requested, "Stack");
 
             internal_solve(host_g, mem_stack);
 
             auto p = get_time_point();
+
+            HEIPA_PROFILE_SCOPE("up/download", "Solver", "download_partition");
             HostPartition host_partition;
-            //
-            {
-                HEIPA_PROFILE_SCOPE("up/download", "Solver", "download_partition");
-                host_partition = HostPartition(Kokkos::view_alloc(Kokkos::WithoutInitializing, "host_partition"), graphs.back().n);
-                Kokkos::deep_copy(exec_space, host_partition, partition.map);
-                exec_space.fence("deep_copy host_partition");
-            }
+            host_partition = HostPartition(Kokkos::view_alloc(Kokkos::WithoutInitializing, "host_partition"), graphs.back().n);
+            Kokkos::deep_copy(exec_space, host_partition, partition.map);
+            exec_space.fence("deep_copy host_partition");
+
             f64 down_ms = get_milli_seconds(p, get_time_point());
             down_up_load_ms += down_ms;
 
@@ -277,17 +275,14 @@ namespace GPU_HeiPa {
             }
 
             // free all memory
-            {
-                HEIPA_PROFILE_SCOPE("misc", "Solver", "free_memory");
+            HEIPA_PROFILE_SCOPE("misc", "Solver", "free_memory");
+            free_partition(partition, mem_stack);
 
-                free_partition(partition, mem_stack);
+            free_graph(graphs.back(), mem_stack);
+            graphs.pop_back();
 
-                free_graph(graphs.back(), mem_stack);
-                graphs.pop_back();
-
-                assert_is_empty(mem_stack);
-                destroy(mem_stack);
-            }
+            assert_is_empty(mem_stack);
+            destroy(mem_stack);
 
             misc_ms += get_milli_seconds(p, get_time_point());
             misc_ms -= down_ms;
@@ -361,7 +356,6 @@ namespace GPU_HeiPa {
 
                 level += 1;
             }
-
 
             #if ENABLE_PROFILER
             HEIPA_PROFILE_SCOPE("misc", "internal_solve", "overhead");
@@ -497,7 +491,6 @@ namespace GPU_HeiPa {
             }
 
             HEIPA_PROFILE_SCOPE("initial_partitioning", "Partition", "first_stats");
-
             if (graphs.back().uniform_vertex_weights) {
                 recalculate_weights<true>(partition, graphs.back(), exec_space);
             } else {

@@ -182,7 +182,6 @@ namespace GPU_HeiPa {
         mapping.coarse_n = nc;
 
         pop_back(mem_stack); // d_nc
-
         free_TwoHopMatcher(thm, mem_stack);
 
         KOKKOS_PROFILE_FENCE(exec_space);

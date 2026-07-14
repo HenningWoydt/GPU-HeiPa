@@ -50,7 +50,6 @@ namespace GPU_HeiPa {
                                           KokkosMemoryStack &mem_stack,
                                           DeviceExecutionSpace &exec_space) {
         HEIPA_PROFILE_SCOPE("misc", "partition", "initialize_partition");
-
         Partition partition;
 
         partition.n = t_n;
@@ -63,6 +62,7 @@ namespace GPU_HeiPa {
 
         Kokkos::deep_copy(exec_space, partition.map, 0);
         Kokkos::deep_copy(exec_space, partition.bweights, 0);
+        KOKKOS_PROFILE_FENCE(exec_space);
 
         return partition;
     }
@@ -86,7 +86,6 @@ namespace GPU_HeiPa {
         exec_space.fence();
 
         std::swap(partition.map, partition.temp_map);
-
         KOKKOS_PROFILE_FENCE(exec_space);
     }
 

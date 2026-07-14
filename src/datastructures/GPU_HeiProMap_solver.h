@@ -152,14 +152,13 @@ namespace GPU_HeiPa {
             internal_solve(host_g);
 
             auto p = get_time_point();
+
+            HEIPA_PROFILE_SCOPE("up/download", "Solver", "download_partition");
             HostPartition host_partition;
-            //
-            {
-                HEIPA_PROFILE_SCOPE("up/download", "Solver", "download_partition");
-                host_partition = HostPartition(Kokkos::view_alloc(Kokkos::WithoutInitializing, "host_partition"), graphs.back().n);
-                Kokkos::deep_copy(exec_space, host_partition, partition.map);
-                exec_space.fence("deep_copy host_partition");
-            }
+            host_partition = HostPartition(Kokkos::view_alloc(Kokkos::WithoutInitializing, "host_partition"), graphs.back().n);
+            Kokkos::deep_copy(exec_space, host_partition, partition.map);
+            exec_space.fence("deep_copy host_partition");
+
             down_upload_ms += get_milli_seconds(p, get_time_point());
 
             // calc stats
@@ -180,18 +179,15 @@ namespace GPU_HeiPa {
             }
 
             // free all memory
-            {
-                HEIPA_PROFILE_SCOPE("misc", "Solver", "free_memory");
+            HEIPA_PROFILE_SCOPE("misc", "Solver", "free_memory");
+            free_distance_oracle<d_oracle_t>(d_oracle, mem_stack);
+            free_partition(partition, mem_stack);
 
-                free_distance_oracle<d_oracle_t>(d_oracle, mem_stack);
-                free_partition(partition, mem_stack);
+            free_graph(graphs.back(), mem_stack);
+            graphs.pop_back();
 
-                free_graph(graphs.back(), mem_stack);
-                graphs.pop_back();
-
-                assert_is_empty(mem_stack);
-                destroy(mem_stack);
-            }
+            assert_is_empty(mem_stack);
+            destroy(mem_stack);
 
             misc_ms += get_milli_seconds(p, get_time_point());
 
@@ -250,7 +246,6 @@ namespace GPU_HeiPa {
             const partition_t c = 8;
             const partition_t max_n = c * k;
 
-
             u32 level = 0;
             if (config.verbose_level >= 1) {
                 std::cout << "Starting coarsening (target max_n: " << max_n << ")..." << std::endl;
@@ -303,7 +298,6 @@ namespace GPU_HeiPa {
             level_infos[level].sum_oload_weights = sum_oload_weight(partition);
             #endif
 
-
             while (!mappings.empty()) {
                 level -= 1;
 
@@ -328,7 +322,6 @@ namespace GPU_HeiPa {
         void initialize(HostGraph &host_g) {
             auto p = get_time_point();
 
-
             // Main stack: Graph + coarsening overhead
             mem_stack = initialize_kokkos_memory_stack(config.n_bytes_requested, "Stack");
 
@@ -342,16 +335,12 @@ namespace GPU_HeiPa {
             graphs.emplace_back(from_HostGraph(host_g, mem_stack, down_upload_ms, exec_space));
 
             // initialize distance oracle
-            {
-                HEIPA_PROFILE_SCOPE("misc", "distance_oracle", "initialize");
-                d_oracle = initialize_distance_oracle<d_oracle_t>(k, hierarchy, distances, mem_stack, exec_space);
-            }
+            HEIPA_PROFILE_SCOPE("misc", "distance_oracle", "initialize");
+            d_oracle = initialize_distance_oracle<d_oracle_t>(k, hierarchy, distances, mem_stack, exec_space);
 
             // initialize partition
-            {
-                HEIPA_PROFILE_SCOPE("misc", "partition", "initialize");
-                partition = initialize_partition(n, k, lmax, mem_stack, exec_space);
-            }
+            HEIPA_PROFILE_SCOPE("misc", "partition", "initialize");
+            partition = initialize_partition(n, k, lmax, mem_stack, exec_space);
 
             misc_ms += get_milli_seconds(p, get_time_point());
 
@@ -383,7 +372,6 @@ namespace GPU_HeiPa {
 
         void contraction(u32 level) {
             auto p = get_time_point();
-
 
             const Graph cur = graphs.back();
             if (cur.uniform_vertex_weights && cur.uniform_edge_weights) {
@@ -444,7 +432,6 @@ namespace GPU_HeiPa {
         void refinement(u32 level) {
             auto p = get_time_point();
 
-
             Graph &cur = graphs.back();
             if (cur.uniform_vertex_weights && cur.uniform_edge_weights) {
                 auto pair = ProMap_jet_refine<true, true>(cur, partition, d_oracle, k, lmax, level, curr_comm_cost, curr_max_block_weight, mem_stack, exec_space);
@@ -476,7 +463,6 @@ namespace GPU_HeiPa {
 
         void uncontraction(u32 level) {
             auto p = get_time_point();
-
 
             uncontract(partition, mappings.back(), exec_space);
 

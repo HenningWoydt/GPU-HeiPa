@@ -61,12 +61,14 @@ namespace GPU_HeiPa {
             sg_begin(u) = g_neigh(u);
             sg_end(u) = g_neigh(u + 1);
         });
+
         KOKKOS_PROFILE_FENCE(exec_space);
         return sg;
     }
 
     inline Graph from_SmallGraph_to_Graph(const SmallGraph &sg, KokkosMemoryStack &mem_stack, DeviceExecutionSpace &exec_space) {
         HEIPA_PROFILE_SCOPE("initial_partitioning", "gpu_rb_partition", "from_SmallGraph_to_Graph");
+
         Graph g;
         g.n = sg.n;
         g.m = sg.m;
@@ -95,6 +97,7 @@ namespace GPU_HeiPa {
                 g_neigh(u + 1) = sg_end(u);
             }
         });
+
         KOKKOS_PROFILE_FENCE(exec_space);
         return g;
     }
@@ -119,6 +122,7 @@ namespace GPU_HeiPa {
         UnmanagedDeviceU32 max_degrees((u32 *) get_chunk_back(mem_stack, sizeof(u32) * coarse_g.n), coarse_g.n);
         Kokkos::deep_copy(exec_space, max_degrees, 0);
         Kokkos::deep_copy(exec_space, coarse_g.weights, 0);
+        KOKKOS_PROFILE_FENCE(exec_space);
 
         // 1. Calculate max degrees, coarse weights, and reduce max chunk size simultaneously
         HEIPA_PROFILE_SCOPE("initial_partitioning", "from_Graph_Mapping_small_SG", "calc_max_deg");
@@ -286,6 +290,8 @@ namespace GPU_HeiPa {
         pop_back(mem_stack); // max_degrees
         
         coarse_g.n_pops = 6;
+
+        KOKKOS_PROFILE_FENCE(exec_space);
         return coarse_g;
     }
 

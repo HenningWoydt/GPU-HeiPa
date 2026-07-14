@@ -152,12 +152,10 @@ namespace GPU_HeiPa {
         #endif
 
         // partition current graph into k_here blocks (writes temp_partition for vertices 0..g.n-1)
-        {
-            // kaffpa_partition(g, (int) k, imb, seed, temp_partition, FAST);
-            // metis_partition(g, (int) k, imb, seed, temp_partition, METIS_KWAY);
-            kway_partition(g, (int) k, imb, seed, temp_partition);
-            // recursive_bisec_partition(g, k, imb, seed, temp_partition);
-        }
+        // kaffpa_partition(g, (int) k, imb, seed, temp_partition, FAST);
+        // metis_partition(g, (int) k, imb, seed, temp_partition, METIS_KWAY);
+        kway_partition(g, (int) k, imb, seed, temp_partition);
+        // recursive_bisec_partition(g, k, imb, seed, temp_partition);
 
         #if ASSERT_ENABLED
         for (vertex_t u = 0; u < g.n; ++u) { ASSERT(temp_partition[u] < k); }
@@ -170,17 +168,16 @@ namespace GPU_HeiPa {
             partition_t offset = 0;
             for (partition_t i = 0; i < l - 1; ++i) { offset += identifier[i] * index_vec[index_vec.size() - 1 - i]; }
             for (vertex_t u = 0; u < g.n; ++u) { global_partition(n_to_o[u]) = offset + temp_partition(u); }
+
             return;
         }
 
         std::vector<HostGraph> sub_gs;
         std::vector<std::vector<vertex_t> > n_to_os;
         std::vector<std::vector<vertex_t> > o_to_ns;
-        //
-        {
-            HEIPA_PROFILE_SCOPE("initial_partitioning", "global_multisection", "build subgraphs");
-            build_subgraphs(g, temp_partition, k, n_to_o, global_n, sub_gs, n_to_os, o_to_ns);
-        }
+
+        HEIPA_PROFILE_SCOPE("initial_partitioning", "global_multisection", "build subgraphs");
+        build_subgraphs(g, temp_partition, k, n_to_o, global_n, sub_gs, n_to_os, o_to_ns);
 
         for (partition_t id = 0; id < k; ++id) {
             identifier.push_back(id);
@@ -261,27 +258,21 @@ namespace GPU_HeiPa {
                                     u64 seed,
                                     Partition &partition,
                                     DeviceExecutionSpace &exec_space) {
+        HEIPA_PROFILE_SCOPE("initial_partitioning", "global_multisection", "init_host");
         HostGraph host_g;
         HostPartition host_partition;
-        // initialize the host
-        {
-            HEIPA_PROFILE_SCOPE("initial_partitioning", "global_multisection", "init_host");
 
-            // Convert device graph to simple CSR arrays on host
-            host_g = to_host_graph(g, exec_space);
-            host_partition = HostPartition(Kokkos::view_alloc(Kokkos::WithoutInitializing, "host_partition"), g.n);
-        }
+        // Convert device graph to simple CSR arrays on host
+        host_g = to_host_graph(g, exec_space);
+        host_partition = HostPartition(Kokkos::view_alloc(Kokkos::WithoutInitializing, "host_partition"), g.n);
 
         global_multisection_host(host_g, hierarchy, k, imbalance, seed, host_partition);
 
         // upload the partition
-        {
-            HEIPA_PROFILE_SCOPE("initial_partitioning", "global_multisection", "upload_partition");
-
-            auto device_subview = Kokkos::subview(partition.map, std::pair<size_t, size_t>(0, host_partition.extent(0)));
-            Kokkos::deep_copy(exec_space, device_subview, host_partition);
-            exec_space.fence();
-        }
+        HEIPA_PROFILE_SCOPE("initial_partitioning", "global_multisection", "upload_partition");
+        auto device_subview = Kokkos::subview(partition.map, std::pair<size_t, size_t>(0, host_partition.extent(0)));
+        Kokkos::deep_copy(exec_space, device_subview, host_partition);
+        exec_space.fence();
     }
 }
 

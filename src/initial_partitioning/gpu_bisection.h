@@ -414,7 +414,6 @@ namespace GPU_HeiPa {
                 d_actual_m(id) = total_m;
             }
         });
-        exec_space.fence();
         KOKKOS_PROFILE_FENCE(exec_space);
 
         auto g_edges_w = g.edges_w;
@@ -443,8 +442,6 @@ namespace GPU_HeiPa {
             }
         });
         KOKKOS_PROFILE_FENCE(exec_space);
-
-        exec_space.fence();
     }
 
     template<bool uvw, bool uew>
@@ -579,7 +576,6 @@ namespace GPU_HeiPa {
                 }
             });
         });
-        exec_space.fence();
         KOKKOS_PROFILE_FENCE(exec_space);
     }
 
@@ -643,7 +639,6 @@ namespace GPU_HeiPa {
         Kokkos::deep_copy(exec_space, total_teams, Kokkos::subview(teams_offset, k));
         Kokkos::deep_copy(exec_space, max_n, Kokkos::subview(max_sizes, 0));
         Kokkos::deep_copy(exec_space, max_m, Kokkos::subview(max_sizes, 1));
-
         KOKKOS_PROFILE_FENCE(exec_space);
 
         HEIPA_PROFILE_SCOPE("initial_partitioning", "gpu_rb_partition", "bisect1_batched");
@@ -794,8 +789,6 @@ namespace GPU_HeiPa {
             team_results(i).cut = 0x7FFFFFFF;
             team_results(i).config = 0;
         });
-
-        KOKKOS_PROFILE_FENCE(exec_space);
 
         Kokkos::parallel_for("batched_brute_force_bisect", policy, KOKKOS_LAMBDA(const Kokkos::TeamPolicy<DeviceExecutionSpace>::member_type &team) {
             const u32 global_rank = team.league_rank();
@@ -1032,7 +1025,6 @@ namespace GPU_HeiPa {
                 }
             }
         });
-        exec_space.fence();
         KOKKOS_PROFILE_FENCE(exec_space);
 
         if constexpr (DO_HEURISTIC) {

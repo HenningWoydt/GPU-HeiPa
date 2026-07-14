@@ -66,61 +66,55 @@ namespace GPU_HeiPa {
                                 f64 &down_upload_ms,
                                 DeviceExecutionSpace &exec_space) {
         Graph g;
-        {
-            HEIPA_PROFILE_SCOPE("misc", "from_HostGraph", "initialize");
 
-            g.n = host_g.n;
-            g.m = host_g.m;
-            g.g_weight = host_g.g_weight;
-            g.uniform_edge_weights = host_g.uniform_edge_weights;
-            g.uniform_vertex_weights = host_g.uniform_vertex_weights;
+        HEIPA_PROFILE_SCOPE("misc", "from_HostGraph", "initialize");
 
-            g.neighborhood = UnmanagedDeviceU32((u32 *) get_chunk_front(mem_stack, sizeof(u32) * (g.n + 1)), g.n + 1);
-            g.edges_v = UnmanagedDeviceVertex((vertex_t *) get_chunk_front(mem_stack, sizeof(vertex_t) * g.m), g.m);
-            g.edges_u = UnmanagedDeviceVertex((vertex_t *) get_chunk_front(mem_stack, sizeof(vertex_t) * g.m), g.m);
-            g.n_pops = 3;
+        g.n = host_g.n;
+        g.m = host_g.m;
+        g.g_weight = host_g.g_weight;
+        g.uniform_edge_weights = host_g.uniform_edge_weights;
+        g.uniform_vertex_weights = host_g.uniform_vertex_weights;
 
-            if (!g.uniform_vertex_weights) {
-                g.weights = UnmanagedDeviceWeight((weight_t *) get_chunk_front(mem_stack, sizeof(weight_t) * g.n), g.n);
-                g.n_pops += 1;
-            }
-            if (!g.uniform_edge_weights) {
-                g.edges_w = UnmanagedDeviceWeight((weight_t *) get_chunk_front(mem_stack, sizeof(weight_t) * g.m), g.m);
-                g.n_pops += 1;
-            }
+        g.neighborhood = UnmanagedDeviceU32((u32 *) get_chunk_front(mem_stack, sizeof(u32) * (g.n + 1)), g.n + 1);
+        g.edges_v = UnmanagedDeviceVertex((vertex_t *) get_chunk_front(mem_stack, sizeof(vertex_t) * g.m), g.m);
+        g.edges_u = UnmanagedDeviceVertex((vertex_t *) get_chunk_front(mem_stack, sizeof(vertex_t) * g.m), g.m);
+        g.n_pops = 3;
+
+        if (!g.uniform_vertex_weights) {
+            g.weights = UnmanagedDeviceWeight((weight_t *) get_chunk_front(mem_stack, sizeof(weight_t) * g.n), g.n);
+            g.n_pops += 1;
         }
+        if (!g.uniform_edge_weights) {
+            g.edges_w = UnmanagedDeviceWeight((weight_t *) get_chunk_front(mem_stack, sizeof(weight_t) * g.m), g.m);
+            g.n_pops += 1;
+        }
+
         auto p = get_time_point();
-        {
-            HEIPA_PROFILE_SCOPE("up/download", "from_HostGraph", "copy");
 
-            Kokkos::deep_copy(exec_space, g.neighborhood, host_g.neighborhood);
-            Kokkos::deep_copy(exec_space, g.edges_v, host_g.edges_v);
+        HEIPA_PROFILE_SCOPE("up/download", "from_HostGraph", "copy");
+        Kokkos::deep_copy(exec_space, g.neighborhood, host_g.neighborhood);
+        Kokkos::deep_copy(exec_space, g.edges_v, host_g.edges_v);
 
-            if (!g.uniform_vertex_weights) {
-                Kokkos::deep_copy(exec_space, g.weights, host_g.weights);
-            }
-            if (!g.uniform_edge_weights) {
-                Kokkos::deep_copy(exec_space, g.edges_w, host_g.edges_w);
-            }
-
-            exec_space.fence();
-            KOKKOS_PROFILE_FENCE(exec_space);
+        if (!g.uniform_vertex_weights) {
+            Kokkos::deep_copy(exec_space, g.weights, host_g.weights);
         }
+        if (!g.uniform_edge_weights) {
+            Kokkos::deep_copy(exec_space, g.edges_w, host_g.edges_w);
+        }
+        exec_space.fence();
         down_upload_ms += get_milli_seconds(p, get_time_point());
+        KOKKOS_PROFILE_FENCE(exec_space);
+
         // create the third array
-        {
-            HEIPA_PROFILE_SCOPE("misc", "from_HostGraph", "fill_edges_u");
-
-            Kokkos::parallel_for("fill_edges_u", Kokkos::RangePolicy<DeviceExecutionSpace>(exec_space, 0, g.n), KOKKOS_LAMBDA(const vertex_t u) {
-                u32 begin = g.neighborhood(u);
-                u32 end = g.neighborhood(u + 1);
-                for (u32 i = begin; i < end; ++i) {
-                    g.edges_u(i) = u;
-                }
-            });
-
-            KOKKOS_PROFILE_FENCE(exec_space);
-        }
+        HEIPA_PROFILE_SCOPE("misc", "from_HostGraph", "fill_edges_u");
+        Kokkos::parallel_for("fill_edges_u", Kokkos::RangePolicy<DeviceExecutionSpace>(exec_space, 0, g.n), KOKKOS_LAMBDA(const vertex_t u) {
+            u32 begin = g.neighborhood(u);
+            u32 end = g.neighborhood(u + 1);
+            for (u32 i = begin; i < end; ++i) {
+                g.edges_u(i) = u;
+            }
+        });
+        KOKKOS_PROFILE_FENCE(exec_space);
 
         return g;
     }
@@ -311,20 +305,18 @@ namespace GPU_HeiPa {
                                     const Mapping &mapping,
                                     KokkosMemoryStack &mem_stack,
                                     DeviceExecutionSpace &exec_space) {
-        Graph coarse_g;
         // initialize graphs
-        {
-            HEIPA_PROFILE_SCOPE("contraction", "from_Graph_Mapping", "initialize_graph");
+        HEIPA_PROFILE_SCOPE("contraction", "from_Graph_Mapping", "initialize_graph");
+        Graph coarse_g;
 
-            coarse_g.n = mapping.coarse_n;
-            coarse_g.g_weight = old_g.g_weight;
-            coarse_g.uniform_edge_weights = false;
-            coarse_g.uniform_vertex_weights = false;
-            coarse_g.n_pops = 5;
+        coarse_g.n = mapping.coarse_n;
+        coarse_g.g_weight = old_g.g_weight;
+        coarse_g.uniform_edge_weights = false;
+        coarse_g.uniform_vertex_weights = false;
+        coarse_g.n_pops = 5;
 
-            coarse_g.weights = UnmanagedDeviceWeight((weight_t *) get_chunk_front(mem_stack, sizeof(weight_t) * coarse_g.n), coarse_g.n);
-            coarse_g.neighborhood = UnmanagedDeviceU32((u32 *) get_chunk_front(mem_stack, sizeof(u32) * (coarse_g.n + 1)), coarse_g.n + 1);
-        }
+        coarse_g.weights = UnmanagedDeviceWeight((weight_t *) get_chunk_front(mem_stack, sizeof(weight_t) * coarse_g.n), coarse_g.n);
+        coarse_g.neighborhood = UnmanagedDeviceU32((u32 *) get_chunk_front(mem_stack, sizeof(u32) * (coarse_g.n + 1)), coarse_g.n + 1);
 
         UnmanagedDeviceVertex degrees;
         UnmanagedDeviceVertex sum_degrees;
@@ -332,115 +324,62 @@ namespace GPU_HeiPa {
         UnmanagedDeviceU32 hash_offsets;
         UnmanagedDeviceVertex hash_keys;
         UnmanagedDeviceWeight hash_vals;
-        // initialize helpers
-        {
-            HEIPA_PROFILE_SCOPE("contraction", "from_Graph_Mapping", "initialize_helpers");
+        KOKKOS_PROFILE_FENCE(exec_space);
 
-            degrees = UnmanagedDeviceVertex((vertex_t *) get_chunk_back(mem_stack, sizeof(vertex_t) * (coarse_g.n + 1)), (coarse_g.n + 1));
-            sum_degrees = UnmanagedDeviceVertex((vertex_t *) get_chunk_back(mem_stack, sizeof(vertex_t) * (coarse_g.n + 1)), (coarse_g.n + 1));
-            hash_offsets = UnmanagedDeviceU32((u32 *) get_chunk_back(mem_stack, sizeof(u32) * (coarse_g.n + 1)), coarse_g.n + 1);
-            hash_keys = UnmanagedDeviceVertex((vertex_t *) get_chunk_back(mem_stack, sizeof(vertex_t) * old_g.m), old_g.m);
-            hash_vals = UnmanagedDeviceWeight((weight_t *) get_chunk_back(mem_stack, sizeof(weight_t) * old_g.m), old_g.m);
-        }
+        // initialize helpers
+        HEIPA_PROFILE_SCOPE("contraction", "from_Graph_Mapping", "initialize_helpers");
+        degrees = UnmanagedDeviceVertex((vertex_t *) get_chunk_back(mem_stack, sizeof(vertex_t) * (coarse_g.n + 1)), (coarse_g.n + 1));
+        sum_degrees = UnmanagedDeviceVertex((vertex_t *) get_chunk_back(mem_stack, sizeof(vertex_t) * (coarse_g.n + 1)), (coarse_g.n + 1));
+        hash_offsets = UnmanagedDeviceU32((u32 *) get_chunk_back(mem_stack, sizeof(u32) * (coarse_g.n + 1)), coarse_g.n + 1);
+        hash_keys = UnmanagedDeviceVertex((vertex_t *) get_chunk_back(mem_stack, sizeof(vertex_t) * old_g.m), old_g.m);
+        hash_vals = UnmanagedDeviceWeight((weight_t *) get_chunk_back(mem_stack, sizeof(weight_t) * old_g.m), old_g.m);
+        KOKKOS_PROFILE_FENCE(exec_space);
 
         // set memory to 0
-        {
-            HEIPA_PROFILE_SCOPE("contraction", "from_Graph_Mapping", "initialize_set_0");
-
-            Kokkos::deep_copy(exec_space, coarse_g.weights, 0);
-            Kokkos::deep_copy(exec_space, sum_degrees, 0);
-            Kokkos::deep_copy(exec_space, hash_offsets, 0);
-            Kokkos::deep_copy(exec_space, hash_keys, coarse_g.n);
-            Kokkos::deep_copy(exec_space, hash_vals, 0);
-
-            KOKKOS_PROFILE_FENCE(exec_space);
-        }
+        HEIPA_PROFILE_SCOPE("contraction", "from_Graph_Mapping", "initialize_set_0");
+        Kokkos::deep_copy(exec_space, coarse_g.weights, 0);
+        Kokkos::deep_copy(exec_space, sum_degrees, 0);
+        Kokkos::deep_copy(exec_space, hash_offsets, 0);
+        Kokkos::deep_copy(exec_space, hash_keys, coarse_g.n);
+        Kokkos::deep_copy(exec_space, hash_vals, 0);
+        KOKKOS_PROFILE_FENCE(exec_space);
 
         // determine weight of new vertices and maximum degree
-        {
-            HEIPA_PROFILE_SCOPE("contraction", "from_Graph_Mapping", "max_degrees");
+        HEIPA_PROFILE_SCOPE("contraction", "from_Graph_Mapping", "max_degrees");
+        Kokkos::parallel_for("max_degrees", Kokkos::RangePolicy<DeviceExecutionSpace>(exec_space, 0, old_g.n), KOKKOS_LAMBDA(const vertex_t u) {
+            u32 deg = old_g.neighborhood(u + 1) - old_g.neighborhood(u);
+            weight_t u_w = uniform_vw ? 1 : old_g.weights(u);
+            vertex_t v = mapping.mapping(u);
 
-            Kokkos::parallel_for("max_degrees", Kokkos::RangePolicy<DeviceExecutionSpace>(exec_space, 0, old_g.n), KOKKOS_LAMBDA(const vertex_t u) {
-                u32 deg = old_g.neighborhood(u + 1) - old_g.neighborhood(u);
-                weight_t u_w = uniform_vw ? 1 : old_g.weights(u);
-                vertex_t v = mapping.mapping(u);
-
-                Kokkos::atomic_add(&sum_degrees(v), deg);
-                Kokkos::atomic_add(&coarse_g.weights(v), u_w);
-            });
-            KOKKOS_PROFILE_FENCE(exec_space);
-        }
+            Kokkos::atomic_add(&sum_degrees(v), deg);
+            Kokkos::atomic_add(&coarse_g.weights(v), u_w);
+        });
+        KOKKOS_PROFILE_FENCE(exec_space);
 
         // prefix sum over all degrees
-        {
-            HEIPA_PROFILE_SCOPE("contraction", "from_Graph_Mapping", "max_degrees_prefix_sum");
-
-            Kokkos::parallel_scan("prefix_sum_offsets", Kokkos::RangePolicy<DeviceExecutionSpace>(exec_space, 0, coarse_g.n + 1), KOKKOS_LAMBDA(const u32 i, u32 &running, const bool final) {
-                if (final) { hash_offsets(i) = running; }
-                running += sum_degrees(i);
-            });
-
-            KOKKOS_PROFILE_FENCE(exec_space);
-        }
+        HEIPA_PROFILE_SCOPE("contraction", "from_Graph_Mapping", "max_degrees_prefix_sum");
+        Kokkos::parallel_scan("prefix_sum_offsets", Kokkos::RangePolicy<DeviceExecutionSpace>(exec_space, 0, coarse_g.n + 1), KOKKOS_LAMBDA(const u32 i, u32 &running, const bool final) {
+            if (final) { hash_offsets(i) = running; }
+            running += sum_degrees(i);
+        });
+        KOKKOS_PROFILE_FENCE(exec_space);
 
         // hash edges
-        {
-            u32 avg_degree = old_g.n > 0 ? (old_g.m / old_g.n) : 0;
+        u32 avg_degree = old_g.n > 0 ? (old_g.m / old_g.n) : 0;
+        if (avg_degree > 32) {
+            // team-parallel over fine vertices: each team cooperatively scans one vertex's adjacency
 
-            if (avg_degree > 32) {
-                // team-parallel over fine vertices: each team cooperatively scans one vertex's adjacency
-                HEIPA_PROFILE_SCOPE("contraction", "from_Graph_Mapping", "hash_edges_team_parallel");
+            HEIPA_PROFILE_SCOPE("contraction", "from_Graph_Mapping", "hash_edges_team_parallel");
+            Kokkos::parallel_for("hash_edges_tp", Kokkos::TeamPolicy<DeviceExecutionSpace>(exec_space, old_g.n, Kokkos::AUTO), KOKKOS_LAMBDA(const Kokkos::TeamPolicy<DeviceExecutionSpace>::member_type &team) {
+                vertex_t old_u = team.league_rank();
+                vertex_t new_u = mapping.mapping(old_u);
+                u32 beg = hash_offsets(new_u);
+                u32 len = hash_offsets(new_u + 1) - beg;
 
-                Kokkos::parallel_for("hash_edges_tp", Kokkos::TeamPolicy<DeviceExecutionSpace>(exec_space, old_g.n, Kokkos::AUTO), KOKKOS_LAMBDA(const Kokkos::TeamPolicy<DeviceExecutionSpace>::member_type &team) {
-                    vertex_t old_u = team.league_rank();
-                    vertex_t new_u = mapping.mapping(old_u);
-                    u32 beg = hash_offsets(new_u);
-                    u32 len = hash_offsets(new_u + 1) - beg;
-
-                    Kokkos::parallel_for(Kokkos::TeamThreadRange(team, old_g.neighborhood(old_u), old_g.neighborhood(old_u + 1)), [=](const u32 j) {
-                        vertex_t v_new = mapping.mapping(old_g.edges_v(j));
-                        if (new_u == v_new) return;
-                        weight_t w = uniform_ew ? 1 : old_g.edges_w(j);
-
-                        u32 offset = mix32(v_new) % len;
-                        while (true) {
-                            u32 idx = beg + offset;
-                            vertex_t found_v = hash_keys(idx);
-
-                            if (found_v == v_new) {
-                                Kokkos::atomic_add(&hash_vals(idx), w);
-                                break;
-                            }
-                            if (found_v == coarse_g.n) {
-                                vertex_t old = Kokkos::atomic_compare_exchange(&hash_keys(idx), coarse_g.n, v_new);
-                                if (old == v_new || old == coarse_g.n) {
-                                    Kokkos::atomic_add(&hash_vals(idx), w);
-                                    break;
-                                }
-                            }
-                            offset++;
-                            if (offset >= len) offset = 0;
-                        }
-                    });
-                });
-
-                KOKKOS_PROFILE_FENCE(exec_space);
-            } else {
-                // edge-parallel: one thread per edge, good for low-degree graphs
-                HEIPA_PROFILE_SCOPE("contraction", "from_Graph_Mapping", "hash_edges_edge_parallel");
-
-                Kokkos::parallel_for("hash_edges_ep", Kokkos::RangePolicy<DeviceExecutionSpace>(exec_space, 0, old_g.m), KOKKOS_LAMBDA(const u32 i) {
-                    vertex_t u = old_g.edges_u(i);
-                    vertex_t v = old_g.edges_v(i);
-                    weight_t w = uniform_ew ? 1 : old_g.edges_w(i);
-
-                    vertex_t u_new = mapping.mapping(u);
-                    vertex_t v_new = mapping.mapping(v);
-
-                    if (u_new == v_new) { return; }
-
-                    u32 beg = hash_offsets(u_new);
-                    u32 len = hash_offsets(u_new + 1) - beg;
+                Kokkos::parallel_for(Kokkos::TeamThreadRange(team, old_g.neighborhood(old_u), old_g.neighborhood(old_u + 1)), [=](const u32 j) {
+                    vertex_t v_new = mapping.mapping(old_g.edges_v(j));
+                    if (new_u == v_new) return;
+                    weight_t w = uniform_ew ? 1 : old_g.edges_w(j);
 
                     u32 offset = mix32(v_new) % len;
                     while (true) {
@@ -462,113 +401,126 @@ namespace GPU_HeiPa {
                         if (offset >= len) offset = 0;
                     }
                 });
+            });
+            KOKKOS_PROFILE_FENCE(exec_space);
+        } else {
+            // edge-parallel: one thread per edge, good for low-degree graphs
+            HEIPA_PROFILE_SCOPE("contraction", "from_Graph_Mapping", "hash_edges_edge_parallel");
+            Kokkos::parallel_for("hash_edges_ep", Kokkos::RangePolicy<DeviceExecutionSpace>(exec_space, 0, old_g.m), KOKKOS_LAMBDA(const u32 i) {
+                vertex_t u = old_g.edges_u(i);
+                vertex_t v = old_g.edges_v(i);
+                weight_t w = uniform_ew ? 1 : old_g.edges_w(i);
 
-                KOKKOS_PROFILE_FENCE(exec_space);
-            }
+                vertex_t u_new = mapping.mapping(u);
+                vertex_t v_new = mapping.mapping(v);
+
+                if (u_new == v_new) { return; }
+
+                u32 beg = hash_offsets(u_new);
+                u32 len = hash_offsets(u_new + 1) - beg;
+
+                u32 offset = mix32(v_new) % len;
+                while (true) {
+                    u32 idx = beg + offset;
+                    vertex_t found_v = hash_keys(idx);
+
+                    if (found_v == v_new) {
+                        Kokkos::atomic_add(&hash_vals(idx), w);
+                        break;
+                    }
+                    if (found_v == coarse_g.n) {
+                        vertex_t old = Kokkos::atomic_compare_exchange(&hash_keys(idx), coarse_g.n, v_new);
+                        if (old == v_new || old == coarse_g.n) {
+                            Kokkos::atomic_add(&hash_vals(idx), w);
+                            break;
+                        }
+                    }
+                    offset++;
+                    if (offset >= len) offset = 0;
+                }
+            });
+            KOKKOS_PROFILE_FENCE(exec_space);
         }
 
         // count unique entries per coarse vertex
-        {
-            HEIPA_PROFILE_SCOPE("contraction", "from_Graph_Mapping", "count_unique");
-
-            u32 avg_hash_len = old_g.n > 0 ? (old_g.m / coarse_g.n) : 0;
-            if (avg_hash_len >= 12) {
-                Kokkos::parallel_for("count_unique", Kokkos::TeamPolicy<DeviceExecutionSpace>(exec_space, coarse_g.n, Kokkos::AUTO), KOKKOS_LAMBDA(const Kokkos::TeamPolicy<DeviceExecutionSpace>::member_type &team) {
-                    const vertex_t u = team.league_rank();
-                    u32 h_beg = hash_offsets(u);
-                    u32 h_end = hash_offsets(u + 1);
-                    u32 count = 0;
-                    Kokkos::parallel_reduce(Kokkos::TeamThreadRange(team, h_beg, h_end), [=](const u32 j, u32 &local) {
-                        local += (hash_keys(j) != coarse_g.n);
-                    }, count);
-                    Kokkos::single(Kokkos::PerTeam(team), [=]() {
-                        degrees(u) = count;
-                    });
-                });
-            } else {
-                Kokkos::parallel_for("count_unique", Kokkos::RangePolicy<DeviceExecutionSpace>(exec_space, 0, coarse_g.n), KOKKOS_LAMBDA(const vertex_t u) {
-                    u32 h_beg = hash_offsets(u);
-                    u32 h_end = hash_offsets(u + 1);
-                    u32 count = 0;
-                    for (u32 j = h_beg; j < h_end; ++j) {
-                        count += (hash_keys(j) != coarse_g.n);
-                    }
+        HEIPA_PROFILE_SCOPE("contraction", "from_Graph_Mapping", "count_unique");
+        u32 avg_hash_len = old_g.n > 0 ? (old_g.m / coarse_g.n) : 0;
+        if (avg_hash_len >= 12) {
+            Kokkos::parallel_for("count_unique", Kokkos::TeamPolicy<DeviceExecutionSpace>(exec_space, coarse_g.n, Kokkos::AUTO), KOKKOS_LAMBDA(const Kokkos::TeamPolicy<DeviceExecutionSpace>::member_type &team) {
+                const vertex_t u = team.league_rank();
+                u32 h_beg = hash_offsets(u);
+                u32 h_end = hash_offsets(u + 1);
+                u32 count = 0;
+                Kokkos::parallel_reduce(Kokkos::TeamThreadRange(team, h_beg, h_end), [=](const u32 j, u32 &local) {
+                    local += (hash_keys(j) != coarse_g.n);
+                }, count);
+                Kokkos::single(Kokkos::PerTeam(team), [=]() {
                     degrees(u) = count;
                 });
-            }
-
-            KOKKOS_PROFILE_FENCE(exec_space);
+            });
+        } else {
+            Kokkos::parallel_for("count_unique", Kokkos::RangePolicy<DeviceExecutionSpace>(exec_space, 0, coarse_g.n), KOKKOS_LAMBDA(const vertex_t u) {
+                u32 h_beg = hash_offsets(u);
+                u32 h_end = hash_offsets(u + 1);
+                u32 count = 0;
+                for (u32 j = h_beg; j < h_end; ++j) {
+                    count += (hash_keys(j) != coarse_g.n);
+                }
+                degrees(u) = count;
+            });
         }
+        KOKKOS_PROFILE_FENCE(exec_space);
 
         // build offsets
-        {
-            HEIPA_PROFILE_SCOPE("contraction", "from_Graph_Mapping", "build_offsets");
-
-            Kokkos::parallel_scan("build_offsets", Kokkos::RangePolicy<DeviceExecutionSpace>(exec_space, 0, coarse_g.n + 1), KOKKOS_LAMBDA(const u32 i, u32 &running, const bool final) {
-                if (final) { coarse_g.neighborhood(i) = running; }
-                running += degrees(i);
-            });
-            u32 temp;
-            Kokkos::deep_copy(exec_space, temp, Kokkos::subview(coarse_g.neighborhood, coarse_g.n)); // copy final number of edges m
-            exec_space.fence();
-            coarse_g.m = temp;
-
-            KOKKOS_PROFILE_FENCE(exec_space);
-        }
+        HEIPA_PROFILE_SCOPE("contraction", "from_Graph_Mapping", "build_offsets");
+        Kokkos::parallel_scan("build_offsets", Kokkos::RangePolicy<DeviceExecutionSpace>(exec_space, 0, coarse_g.n + 1), KOKKOS_LAMBDA(const u32 i, u32 &running, const bool final) {
+            if (final) { coarse_g.neighborhood(i) = running; }
+            running += degrees(i);
+        });
+        u32 temp;
+        Kokkos::deep_copy(exec_space, temp, Kokkos::subview(coarse_g.neighborhood, coarse_g.n)); // copy final number of edges m
+        exec_space.fence();
+        coarse_g.m = temp;
+        KOKKOS_PROFILE_FENCE(exec_space);
 
         // allocate edges for coarse graph
-        {
-            HEIPA_PROFILE_SCOPE("contraction", "from_Graph_Mapping", "allocate_edges");
-
-            coarse_g.edges_u = UnmanagedDeviceVertex((vertex_t *) get_chunk_front(mem_stack, sizeof(vertex_t) * coarse_g.m), coarse_g.m);
-            coarse_g.edges_v = UnmanagedDeviceVertex((vertex_t *) get_chunk_front(mem_stack, sizeof(vertex_t) * coarse_g.m), coarse_g.m);
-            coarse_g.edges_w = UnmanagedDeviceWeight((weight_t *) get_chunk_front(mem_stack, sizeof(weight_t) * coarse_g.m), coarse_g.m);
-
-            KOKKOS_PROFILE_FENCE(exec_space);
-        }
+        HEIPA_PROFILE_SCOPE("contraction", "from_Graph_Mapping", "allocate_edges");
+        coarse_g.edges_u = UnmanagedDeviceVertex((vertex_t *) get_chunk_front(mem_stack, sizeof(vertex_t) * coarse_g.m), coarse_g.m);
+        coarse_g.edges_v = UnmanagedDeviceVertex((vertex_t *) get_chunk_front(mem_stack, sizeof(vertex_t) * coarse_g.m), coarse_g.m);
+        coarse_g.edges_w = UnmanagedDeviceWeight((weight_t *) get_chunk_front(mem_stack, sizeof(weight_t) * coarse_g.m), coarse_g.m);
+        KOKKOS_PROFILE_FENCE(exec_space);
 
         // fill the coarse graph and u array
-        {
-            HEIPA_PROFILE_SCOPE("contraction", "from_Graph_Mapping", "fill_coarse_graph");
-
-            Kokkos::parallel_scan("fill_coarse_graph", Kokkos::RangePolicy<DeviceExecutionSpace>(exec_space, 0, old_g.m), KOKKOS_LAMBDA(const u32 i, u32 &running, const bool final) {
-                vertex_t v = hash_keys(i);
-                if (final && v != coarse_g.n) {
-                    coarse_g.edges_v(running) = v;
-                    coarse_g.edges_w(running) = hash_vals(i);
-                }
-                running += v != coarse_g.n;
-            });
-
-            KOKKOS_PROFILE_FENCE(exec_space);
-        }
+        HEIPA_PROFILE_SCOPE("contraction", "from_Graph_Mapping", "fill_coarse_graph");
+        Kokkos::parallel_scan("fill_coarse_graph", Kokkos::RangePolicy<DeviceExecutionSpace>(exec_space, 0, old_g.m), KOKKOS_LAMBDA(const u32 i, u32 &running, const bool final) {
+            vertex_t v = hash_keys(i);
+            if (final && v != coarse_g.n) {
+                coarse_g.edges_v(running) = v;
+                coarse_g.edges_w(running) = hash_vals(i);
+            }
+            running += v != coarse_g.n;
+        });
+        KOKKOS_PROFILE_FENCE(exec_space);
 
         // fill the u array
-        {
-            HEIPA_PROFILE_SCOPE("contraction", "from_Graph_Mapping", "fill_coarse_u");
-
-            Kokkos::parallel_for("fill_edges_u", Kokkos::RangePolicy<DeviceExecutionSpace>(exec_space, 0, coarse_g.n), KOKKOS_LAMBDA(const vertex_t u) {
-                u32 begin = coarse_g.neighborhood(u);
-                u32 end = coarse_g.neighborhood(u + 1);
-                for (u32 i = begin; i < end; ++i) {
-                    coarse_g.edges_u(i) = u;
-                }
-            });
-            KOKKOS_PROFILE_FENCE(exec_space);
-        }
+        HEIPA_PROFILE_SCOPE("contraction", "from_Graph_Mapping", "fill_coarse_u");
+        Kokkos::parallel_for("fill_edges_u", Kokkos::RangePolicy<DeviceExecutionSpace>(exec_space, 0, coarse_g.n), KOKKOS_LAMBDA(const vertex_t u) {
+            u32 begin = coarse_g.neighborhood(u);
+            u32 end = coarse_g.neighborhood(u + 1);
+            for (u32 i = begin; i < end; ++i) {
+                coarse_g.edges_u(i) = u;
+            }
+        });
+        KOKKOS_PROFILE_FENCE(exec_space);
 
         // deallocate mem
-        {
-            HEIPA_PROFILE_SCOPE("contraction", "from_Graph_Mapping", "deallocate");
-
-            pop_back(mem_stack);
-            pop_back(mem_stack);
-            pop_back(mem_stack);
-            pop_back(mem_stack);
-            pop_back(mem_stack);
-
-            KOKKOS_PROFILE_FENCE(exec_space);
-        }
+        HEIPA_PROFILE_SCOPE("contraction", "from_Graph_Mapping", "deallocate");
+        pop_back(mem_stack);
+        pop_back(mem_stack);
+        pop_back(mem_stack);
+        pop_back(mem_stack);
+        pop_back(mem_stack);
+        KOKKOS_PROFILE_FENCE(exec_space);
 
         return coarse_g;
     }

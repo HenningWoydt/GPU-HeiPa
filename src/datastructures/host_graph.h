@@ -265,19 +265,17 @@ namespace GPU_HeiPa {
         allocate_memory(g, n_rows, m, 0);
 
         // --- read vertex weights ---
-        {
-            std::ifstream vf(vertex_weight_file_path);
-            if (!vf) {
-                std::cerr << "Cannot open vertex weight file "
-                        << vertex_weight_file_path << "\n";
-                std::exit(EXIT_FAILURE);
-            }
+        std::ifstream vf(vertex_weight_file_path);
+        if (!vf) {
+            std::cerr << "Cannot open vertex weight file "
+                    << vertex_weight_file_path << "\n";
+            std::exit(EXIT_FAILURE);
+        }
 
-            g.g_weight = 0;
-            for (vertex_t u = 0; u < g.n; ++u) {
-                vf >> g.weights(u);
-                g.g_weight += g.weights(u);
-            }
+        g.g_weight = 0;
+        for (vertex_t u = 0; u < g.n; ++u) {
+            vf >> g.weights(u);
+            g.g_weight += g.weights(u);
         }
 
         // --- temporary degree counter ---
