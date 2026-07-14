@@ -91,9 +91,10 @@ namespace GPU_HeiPa {
         auto g_neigh = g.neighborhood;
         auto sg_begin = sg.edge_begin;
         auto sg_end = sg.edge_end;
+        auto sg_n = sg.n;
         Kokkos::parallel_for("convert_to_graph", Kokkos::RangePolicy<DeviceExecutionSpace>(exec_space, 0, sg.n), KOKKOS_LAMBDA(const vertex_t u) {
             g_neigh(u) = sg_begin(u);
-            if (u == sg.n - 1) {
+            if (u == sg_n - 1) {
                 g_neigh(u + 1) = sg_end(u);
             }
         });
@@ -127,13 +128,20 @@ namespace GPU_HeiPa {
         // 1. Calculate max degrees, coarse weights, and reduce max chunk size simultaneously
         HEIPA_PROFILE_SCOPE("initial_partitioning", "from_Graph_Mapping_small_SG", "calc_max_deg");
         u32 chunk_size = 0;
+        
+        auto old_g_edge_begin = old_g.edge_begin;
+        auto old_g_edge_end = old_g.edge_end;
+        auto old_g_weights = old_g.weights;
+        auto map_view = mapping.mapping;
+        auto cg_weights = coarse_g.weights;
+        
         Kokkos::parallel_for("calc_max_deg", Kokkos::RangePolicy<DeviceExecutionSpace>(exec_space, 0, old_g.n), KOKKOS_LAMBDA(const vertex_t u) {
-            vertex_t new_u = mapping.mapping(u);
-            u32 deg = old_g.edge_end(u) - old_g.edge_begin(u);
-            weight_t w = uniform_vw ? 1 : old_g.weights(u);
+            vertex_t new_u = map_view(u);
+            u32 deg = old_g_edge_end(u) - old_g_edge_begin(u);
+            weight_t w = uniform_vw ? 1 : old_g_weights(u);
 
             Kokkos::atomic_add(&max_degrees(new_u), deg);
-            Kokkos::atomic_add(&coarse_g.weights(new_u), w);
+            Kokkos::atomic_add(&cg_weights(new_u), w);
         });
 
         Kokkos::parallel_reduce("find_max_chunk", Kokkos::RangePolicy<DeviceExecutionSpace>(exec_space, 0, coarse_g.n), KOKKOS_LAMBDA(const vertex_t u, u32 &local_max) {
@@ -149,38 +157,46 @@ namespace GPU_HeiPa {
         coarse_g.edges_v = UnmanagedDeviceVertex((vertex_t *) get_chunk_front(mem_stack, sizeof(vertex_t) * coarse_g.m), coarse_g.m);
         coarse_g.edges_w = UnmanagedDeviceWeight((weight_t *) get_chunk_front(mem_stack, sizeof(weight_t) * coarse_g.m), coarse_g.m);
         
+        auto cg_edges_v = coarse_g.edges_v;
+        auto cg_edges_w = coarse_g.edges_w;
+        auto cg_edges_u = coarse_g.edges_u;
+        
         Kokkos::parallel_for("init_edges", Kokkos::RangePolicy<DeviceExecutionSpace>(exec_space, 0, coarse_g.m), KOKKOS_LAMBDA(const u32 i) {
-            coarse_g.edges_v(i) = SENTINEL;
-            coarse_g.edges_w(i) = 0;
+            cg_edges_v(i) = SENTINEL;
+            cg_edges_w(i) = 0;
         });
         KOKKOS_PROFILE_FENCE(exec_space);
 
         // 4. Lock-free linear probing insertion (Edge-parallel)
         HEIPA_PROFILE_SCOPE("initial_partitioning", "from_Graph_Mapping_small_SG", "insert_edges");
+        auto old_g_edges_v = old_g.edges_v;
+        auto old_g_edges_u = old_g.edges_u;
+        auto old_g_edges_w = old_g.edges_w;
+        
         Kokkos::parallel_for("insert_edges", Kokkos::RangePolicy<DeviceExecutionSpace>(exec_space, 0, old_g.edges_v.extent(0)), KOKKOS_LAMBDA(const u32 i) {
-            vertex_t old_v = old_g.edges_v(i);
+            vertex_t old_v = old_g_edges_v(i);
             if (old_v == SENTINEL) return; // skip sentinels in old_g
 
-            vertex_t old_u = old_g.edges_u(i);
-            vertex_t new_u = mapping.mapping(old_u);
-            vertex_t new_v = mapping.mapping(old_v);
+            vertex_t old_u = old_g_edges_u(i);
+            vertex_t new_u = map_view(old_u);
+            vertex_t new_v = map_view(old_v);
             if (new_u == new_v) return; // internal edge
 
-            weight_t w = uniform_ew ? 1 : old_g.edges_w(i);
+            weight_t w = uniform_ew ? 1 : old_g_edges_w(i);
             u32 begin = new_u * chunk_size;
             u32 limit = begin + chunk_size;
 
             for (u32 idx = begin; idx < limit; ++idx) {
-                vertex_t existing = coarse_g.edges_v(idx);
+                vertex_t existing = cg_edges_v(idx);
                 if (existing == new_v) {
-                    Kokkos::atomic_add(&coarse_g.edges_w(idx), w);
+                    Kokkos::atomic_add(&cg_edges_w(idx), w);
                     break;
                 }
                 if (existing == SENTINEL) {
-                    vertex_t old_val = Kokkos::atomic_compare_exchange(&coarse_g.edges_v(idx), SENTINEL, new_v);
+                    vertex_t old_val = Kokkos::atomic_compare_exchange(&cg_edges_v(idx), SENTINEL, new_v);
                     if (old_val == SENTINEL || old_val == new_v) {
-                        Kokkos::atomic_add(&coarse_g.edges_w(idx), w);
-                        coarse_g.edges_u(idx) = new_u;
+                        Kokkos::atomic_add(&cg_edges_w(idx), w);
+                        cg_edges_u(idx) = new_u;
                         break;
                     }
                 }
@@ -191,15 +207,18 @@ namespace GPU_HeiPa {
         // 5. Finalize edge_begin and edge_end (or fuse it into sorting!)
         if constexpr (!sort_by_degree) {
             HEIPA_PROFILE_SCOPE("initial_partitioning", "from_Graph_Mapping_small_SG", "finalize");
+            auto cg_edge_begin = coarse_g.edge_begin;
+            auto cg_edge_end = coarse_g.edge_end;
+            
             Kokkos::parallel_for("finalize_bounds", Kokkos::RangePolicy<DeviceExecutionSpace>(exec_space, 0, coarse_g.n), KOKKOS_LAMBDA(const vertex_t new_u) {
                 u32 start = new_u * chunk_size;
                 u32 limit = start + chunk_size;
-                coarse_g.edge_begin(new_u) = start;
+                cg_edge_begin(new_u) = start;
                 u32 end = start;
                 for (; end < limit; ++end) {
-                    if (coarse_g.edges_v(end) == SENTINEL) break;
+                    if (cg_edges_v(end) == SENTINEL) break;
                 }
-                coarse_g.edge_end(new_u) = end;
+                cg_edge_end(new_u) = end;
             });
             KOKKOS_PROFILE_FENCE(exec_space);
         } else {
@@ -217,12 +236,13 @@ namespace GPU_HeiPa {
             auto c_begin = coarse_g.edge_begin;
             auto c_end = coarse_g.edge_end;
             auto c_edges_v = coarse_g.edges_v;
-
+            auto c_n = coarse_g.n;
+            
             typedef Kokkos::TeamPolicy<DeviceExecutionSpace> TeamPolicy;
             typedef TeamPolicy::member_type TeamMember;
 
             Kokkos::parallel_for("sort_by_degree_csr_fused", TeamPolicy(exec_space, 1, Kokkos::AUTO), KOKKOS_LAMBDA(const TeamMember &team) {
-                Kokkos::parallel_for(Kokkos::TeamThreadRange(team, coarse_g.n), [&](const vertex_t u) {
+                Kokkos::parallel_for(Kokkos::TeamThreadRange(team, c_n), [&](const vertex_t u) {
                     // Fuse finalize with count_bins
                     u32 start = u * chunk_size;
                     u32 limit = start + chunk_size;
@@ -238,20 +258,20 @@ namespace GPU_HeiPa {
                 team.team_barrier();
 
                 u32 total = 0;
-                Kokkos::parallel_scan(Kokkos::TeamThreadRange(team, coarse_g.n + 1), [&](const u32 i, u32 &running, const bool final) {
+                Kokkos::parallel_scan(Kokkos::TeamThreadRange(team, c_n + 1), [&](const u32 i, u32 &running, const bool final) {
                     u32 val = bin_counts(i);
                     if (final) bin_counts(i) = running;
                     running += val;
                 }, total);
                 team.team_barrier();
 
-                Kokkos::parallel_for(Kokkos::TeamThreadRange(team, coarse_g.n), [&](const vertex_t u) {
+                Kokkos::parallel_for(Kokkos::TeamThreadRange(team, c_n), [&](const vertex_t u) {
                     u32 write_idx = Kokkos::atomic_fetch_add(&bin_counts(c_end(u) - c_begin(u)), 1);
                     sorted_old_ids(write_idx) = u;
                 });
                 team.team_barrier();
 
-                Kokkos::parallel_for(Kokkos::TeamThreadRange(team, coarse_g.n), [&](const vertex_t new_u) {
+                Kokkos::parallel_for(Kokkos::TeamThreadRange(team, c_n), [&](const vertex_t new_u) {
                     vertex_t old_u = sorted_old_ids(new_u);
                     d_perm(old_u) = new_u;
                     temp_begin(new_u) = c_begin(old_u);
@@ -260,11 +280,11 @@ namespace GPU_HeiPa {
                 });
                 team.team_barrier();
 
-                Kokkos::parallel_for(Kokkos::TeamThreadRange(team, coarse_g.n), [&](const vertex_t new_u) {
+                Kokkos::parallel_for(Kokkos::TeamThreadRange(team, c_n), [&](const vertex_t new_u) {
                     vertex_t old_u = sorted_old_ids(new_u);
                     for (u32 idx = c_begin(old_u); idx < c_end(old_u); ++idx) {
-                        coarse_g.edges_u(idx) = new_u;
-                        coarse_g.edges_v(idx) = d_perm(coarse_g.edges_v(idx));
+                        cg_edges_u(idx) = new_u;
+                        cg_edges_v(idx) = d_perm(c_edges_v(idx));
                     }
                 });
             });

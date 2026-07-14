@@ -29,151 +29,172 @@ namespace GPU_HeiPa {
         TwoHopMatcher thm = initialize_two_hop_matcher(g.n, g.m, partition.k, lmax, mem_stack);
         UnmanagedDeviceU32 d_nc = UnmanagedDeviceU32((u32 *) get_chunk_back(mem_stack, sizeof(u32) * 1), 1);
 
+        auto thm_vcmap = thm.vcmap;
+        auto thm_hn = thm.hn;
+        auto g_n = g.n;
+        auto g_weights = g.weights;
+        auto g_edge_begin = g.edge_begin;
+        auto g_edge_end = g.edge_end;
+        auto g_edges_v = g.edges_v;
+        auto g_edges_w = g.edges_w;
+        auto mapping_partners = mapping.partners;
+        auto mapping_mapping = mapping.mapping;
+
         Kokkos::parallel_for("hem_small_fused_mega", Kokkos::TeamPolicy<DeviceExecutionSpace>(exec_space, 1, Kokkos::AUTO), KOKKOS_LAMBDA(const TeamMember &team) {
-            // 0. Initialize arrays
-            Kokkos::parallel_for(Kokkos::TeamThreadRange(team, g.n), [&](const vertex_t u) {
-                thm.vcmap(u) = SENTINEL;
-                thm.hn(u) = SENTINEL;
+            // Phase 0: Initialize arrays
+            Kokkos::parallel_for(Kokkos::TeamThreadRange(team, g_n), [&](const vertex_t u) {
+                thm_vcmap(u) = SENTINEL;
+                thm_hn(u) = SENTINEL;
             });
             team.team_barrier();
 
-            // 1. Initial pick
-            Kokkos::parallel_for(Kokkos::TeamThreadRange(team, g.n), [&](const vertex_t u) {
+            // Phase 1: Initial pick
+            Kokkos::parallel_for(Kokkos::TeamThreadRange(team, g_n), [&](const vertex_t u) {
+                (void)g_weights;
+                (void)g_edges_w;
+
                 vertex_t h = SENTINEL;
                 weight_t max_ewt = 0;
                 u32 r = xorshiftHash(u ^ SEED);
                 u32 tiebreaker = 0;
 
-                weight_t wu = 1;
-                if constexpr (!uniform_v_weights) wu = g.weights(u);
+                // weight_t wu = uniform_v_weights ? 1 : g_weights(u);
 
-                u32 start = g.edge_begin(u);
-                u32 limit = g.edge_end(u);
+                u32 start = g_edge_begin(u);
+                u32 limit = g_edge_end(u);
                 for (u32 j = start; j < limit; j++) {
-                    vertex_t v = g.edges_v(j);
+                    vertex_t v = g_edges_v(j);
                     
-                    weight_t wv = 1;
-                    if constexpr (!uniform_v_weights) wv = g.weights(v);
+                    // weight_t wv = uniform_v_weights ? 1 : g_weights(v);
                     // if (wu + wv > lmax) continue;
 
                     if constexpr (!uniform_e_weights) {
-                        if (max_ewt < g.edges_w(j)) {
-                            max_ewt = g.edges_w(j);
+                        weight_t ew = g_edges_w(j);
+                        if (ew < max_ewt) continue;
+                        if (ew > max_ewt) {
+                            max_ewt = ew;
                             h = v;
                             tiebreaker = xorshiftHash(v + r);
                             continue;
                         }
-                        if (max_ewt != g.edges_w(j)) continue;
                     }
+
                     u32 tb = xorshiftHash(v + r);
                     if (tb >= tiebreaker) {
                         h = v;
                         tiebreaker = tb;
                     }
                 }
-                thm.hn(u) = h;
+                thm_hn(u) = h;
             });
             team.team_barrier();
 
-            // Main matching loop - fixed iterations
+            // Phase 2: Main matching loop - fixed iterations
             for (u32 round = 0; round < MAX_MATCHING_ROUNDS; ++round) {
                 u32 round_seed = SEED ^ (round * 0x9e3779b1u);
 
-                // 4 sub-rounds of commit
+                // Phase 2a: Commit sub-rounds
                 for (u32 r = 0; r < COMMIT_SUB_ROUNDS; r++) {
-                    Kokkos::parallel_for(Kokkos::TeamThreadRange(team, g.n), [&](const vertex_t u) {
-                        vertex_t v = thm.hn(u);
-                        if (v == SENTINEL || thm.vcmap(u) != SENTINEL) return;
+                    Kokkos::parallel_for(Kokkos::TeamThreadRange(team, g_n), [&](const vertex_t u) {
+                        vertex_t v = thm_hn(u);
+                        if (v == SENTINEL || thm_vcmap(u) != SENTINEL) return;
+                        
                         u32 h_u = xorshiftHash(u + r);
                         u32 h_v = xorshiftHash(v + r);
                         bool condition = (r > 0) ? (h_u < h_v) : (u < v);
-                        if (!condition) thm.vcmap(u) = SENTINEL - 1;
+                        if (!condition) thm_vcmap(u) = SENTINEL - 1;
                     });
                     team.team_barrier();
 
-                    Kokkos::parallel_for(Kokkos::TeamThreadRange(team, g.n), [&](const vertex_t u) {
-                        vertex_t v = thm.hn(u);
-                        if (v == SENTINEL || thm.vcmap(u) != SENTINEL) return;
+                    Kokkos::parallel_for(Kokkos::TeamThreadRange(team, g_n), [&](const vertex_t u) {
+                        vertex_t v = thm_hn(u);
+                        if (v == SENTINEL || thm_vcmap(u) != SENTINEL) return;
+                        
                         vertex_t cv = u < v ? u : v;
-                        if (Kokkos::atomic_compare_exchange(&thm.vcmap(v), SENTINEL - 1, cv) == SENTINEL - 1) {
-                            thm.vcmap(u) = cv;
+                        if (Kokkos::atomic_compare_exchange(&thm_vcmap(v), SENTINEL - 1, cv) == SENTINEL - 1) {
+                            thm_vcmap(u) = cv;
                         }
                     });
                     team.team_barrier();
 
-                    Kokkos::parallel_for(Kokkos::TeamThreadRange(team, g.n), [&](const vertex_t u) {
-                        if (thm.vcmap(u) == SENTINEL - 1) thm.vcmap(u) = SENTINEL;
+                    Kokkos::parallel_for(Kokkos::TeamThreadRange(team, g_n), [&](const vertex_t u) {
+                        if (thm_vcmap(u) == SENTINEL - 1) thm_vcmap(u) = SENTINEL;
                     });
                     team.team_barrier();
                 }
 
-                // Repick for unmatched
-                Kokkos::parallel_for(Kokkos::TeamThreadRange(team, g.n), [&](const vertex_t u) {
-                    if (thm.vcmap(u) != SENTINEL || thm.hn(u) == SENTINEL || thm.vcmap(thm.hn(u)) == SENTINEL) return;
+                // Phase 2b: Repick for unmatched
+                Kokkos::parallel_for(Kokkos::TeamThreadRange(team, g_n), [&](const vertex_t u) {
+                    (void)g_weights;
+                    (void)g_edges_w;
+
+                    if (thm_vcmap(u) != SENTINEL) return;
+                    if (thm_hn(u) == SENTINEL) return;
+                    if (thm_vcmap(thm_hn(u)) == SENTINEL) return;
 
                     vertex_t h = SENTINEL;
                     weight_t max_ewt = 0;
                     u32 r = xorshiftHash(u ^ round_seed);
                     u32 tiebreaker = 0;
 
-                    weight_t wu = 1;
-                    if constexpr (!uniform_v_weights) wu = g.weights(u);
+                    // weight_t wu = uniform_v_weights ? 1 : g_weights(u);
 
-                    u32 start = g.edge_begin(u);
-                    u32 limit = g.edge_end(u);
+                    u32 start = g_edge_begin(u);
+                    u32 limit = g_edge_end(u);
                     for (u32 j = start; j < limit; j++) {
-                        vertex_t v = g.edges_v(j);
-                        if (thm.vcmap(v) == SENTINEL) {
-                            weight_t wv = 1;
-                            if constexpr (!uniform_v_weights) wv = g.weights(v);
-                            // if (wu + wv > lmax) continue;
+                        vertex_t v = g_edges_v(j);
+                        if (thm_vcmap(v) != SENTINEL) continue;
 
-                            if constexpr (!uniform_e_weights) {
-                                if (max_ewt < g.edges_w(j)) {
-                                    max_ewt = g.edges_w(j);
-                                    h = v;
-                                    tiebreaker = xorshiftHash(v + r);
-                                    continue;
-                                }
-                                if (max_ewt != g.edges_w(j)) continue;
-                            }
-                            u32 tb = xorshiftHash(v + r);
-                            if (tb >= tiebreaker) {
+                        // weight_t wv = uniform_v_weights ? 1 : g_weights(v);
+                        // if (wu + wv > lmax) continue;
+
+                        if constexpr (!uniform_e_weights) {
+                            weight_t ew = g_edges_w(j);
+                            if (ew < max_ewt) continue;
+                            if (ew > max_ewt) {
+                                max_ewt = ew;
                                 h = v;
-                                tiebreaker = tb;
+                                tiebreaker = xorshiftHash(v + r);
+                                continue;
                             }
                         }
+
+                        u32 tb = xorshiftHash(v + r);
+                        if (tb >= tiebreaker) {
+                            h = v;
+                            tiebreaker = tb;
+                        }
                     }
-                    thm.hn(u) = h;
+                    thm_hn(u) = h;
                 });
                 team.team_barrier();
             }
 
-            // 1. Singletons and partners
-            Kokkos::parallel_for(Kokkos::TeamThreadRange(team, g.n), [&](const vertex_t i) {
-                if (thm.vcmap(i) == SENTINEL) thm.vcmap(i) = i;
-                mapping.partners(i) = thm.vcmap(i);
+            // Phase 3: Singletons and partners
+            Kokkos::parallel_for(Kokkos::TeamThreadRange(team, g_n), [&](const vertex_t i) {
+                if (thm_vcmap(i) == SENTINEL) thm_vcmap(i) = i;
+                mapping_partners(i) = thm_vcmap(i);
             });
             team.team_barrier();
 
-            // 2. Set coarse ids (block scan)
-            Kokkos::parallel_scan(Kokkos::TeamThreadRange(team, g.n), [&](const vertex_t i, vertex_t &update, const bool final) {
-                if (thm.vcmap(i) == i) {
-                    if (final) thm.vcmap(i) = update;
+            // Phase 4: Set coarse ids (block scan)
+            Kokkos::parallel_scan(Kokkos::TeamThreadRange(team, g_n), [&](const vertex_t i, vertex_t &update, const bool final) {
+                if (thm_vcmap(i) == i) {
+                    if (final) thm_vcmap(i) = update;
                     update++;
                 } else if (final) {
-                    thm.vcmap(i) += g.n;
+                    thm_vcmap(i) += g_n;
                 }
-                if (final && i == g.n - 1) {
+                if (final && i == g_n - 1) {
                     d_nc(0) = update;
                 }
             });
             team.team_barrier();
 
-            // 3. Propagate coarse ids & copy to mapping array
-            Kokkos::parallel_for(Kokkos::TeamThreadRange(team, g.n), [&](const vertex_t i) {
-                if (thm.vcmap(i) >= g.n) thm.vcmap(i) = thm.vcmap((vertex_t)thm.vcmap(i) - g.n);
-                mapping.mapping(i) = thm.vcmap(i);
+            // Phase 5: Propagate coarse ids & copy to mapping array
+            Kokkos::parallel_for(Kokkos::TeamThreadRange(team, g_n), [&](const vertex_t i) {
+                if (thm_vcmap(i) >= g_n) thm_vcmap(i) = thm_vcmap(thm_vcmap(i) - g_n);
+                mapping_mapping(i) = thm_vcmap(i);
             });
         });
 
