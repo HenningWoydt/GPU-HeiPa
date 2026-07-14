@@ -286,5 +286,6 @@ cmake .. -DCMAKE_BUILD_TYPE=Release \
          -DASSERT_ENABLED=OFF \
          -DENABLE_PROFILER=OFF
 cmake --build . --parallel "$JOBS" --target GPU-HeiPa-memetic
+cmake --build . --parallel "$JOBS" --target HenningTest
 #cmake --build . --parallel "$JOBS" --target GPU-HeiPa
 #cmake --build . --parallel "$JOBS" --target GPU-HeiProMap

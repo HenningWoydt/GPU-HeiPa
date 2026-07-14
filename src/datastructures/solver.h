@@ -324,9 +324,9 @@ namespace GPU_HeiPa {
 
                 level += 1;
 
-                if( level >= 20) {
-                    break;
-                }
+                // if( level >= 20) {
+                //     break;
+                // }
             }
 
                 

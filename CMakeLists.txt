@@ -71,6 +71,7 @@ if(GPU_HEIPA_BUILD_APPS)
     #add new executable for new solver (to execute both)
     #add_executable(GPU-HeiPa2k app/GPU-HeiPa-k2.cpp ${SOURCES} ${HEADERS})
     add_executable(GPU-HeiPa-memetic app/GPU-HeiPa-memetic.cpp ${SOURCES} ${HEADERS})
+    add_executable(HenningTest app/Henning_bugtest.cpp ${SOURCES} ${HEADERS})
     #add_executable(shrinking app/GPU-HeiPa-memeticShrinking.cpp ${SOURCES} ${HEADERS})
 
     target_link_libraries(GPU-HeiPa PRIVATE gpu_heipa)
@@ -82,18 +83,23 @@ if(GPU_HEIPA_BUILD_APPS)
 #)
 
     target_link_libraries(GPU-HeiPa-memetic PRIVATE gpu_heipa)
+    target_link_libraries(HenningTest PRIVATE gpu_heipa)
 
     # Apply ASSERT_ENABLED flag to all targets
     if(ASSERT_ENABLED)
         target_compile_definitions(GPU-HeiPa PRIVATE ASSERT_ENABLED=1)
         #target_compile_definitions(GPU-HeiProMap PRIVATE ASSERT_ENABLED=1)
         target_compile_definitions(GPU-HeiPa-memetic PRIVATE ASSERT_ENABLED=1)
+
+        target_compile_definitions(HenningTest PRIVATE ASSERT_ENABLED=1)
     endif()
 
     if(ENABLE_PROFILER)
         target_compile_definitions(GPU-HeiPa PRIVATE ENABLE_PROFILER=1)
         #target_compile_definitions(GPU-HeiProMap PRIVATE ENABLE_PROFILER=1)
         target_compile_definitions(GPU-HeiPa-memetic PRIVATE ENABLE_PROFILER=1)
+
+        target_compile_definitions(HenningTest PRIVATE ENABLE_PROFILER=1)
     endif()
 
 #target_link_libraries(shrinking
@@ -120,6 +126,7 @@ if(GPU_HEIPA_BUILD_APPS)
     if(Kokkos_ENABLE_CUDA)
         target_link_options(GPU-HeiPa PRIVATE "LINKER:--require-defined,cudaDeviceSynchronize")
         target_link_options(GPU-HeiPa-memetic PRIVATE "LINKER:--require-defined,cudaDeviceSynchronize")
+        target_link_options(HenningTest PRIVATE "LINKER:--require-defined,cudaDeviceSynchronize")
         #target_link_options(shrinking PRIVATE "LINKER:--require-defined,cudaDeviceSynchronize")
         #target_link_options(GPU-HeiProMap PRIVATE "LINKER:--require-defined,cudaDeviceSynchronize")
     endif()
