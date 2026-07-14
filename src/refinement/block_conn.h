@@ -61,21 +61,26 @@ namespace GPU_HeiPa {
 
         // set rows
         HEIPA_PROFILE_SCOPE("refinement", "BlockConnectivity_fs", "set_rows");
+        auto bc_row_init = bc.row;
+        auto bc_sizes_init = bc.sizes;
+        auto g_neighborhood_init = g.neighborhood;
+        auto p_k_init = partition.k;
+        
         Kokkos::parallel_scan("set_rows", Kokkos::RangePolicy<DeviceExecutionSpace>(exec_space, 0, g.n + 1), KOKKOS_LAMBDA(const u32 i, u32 &running, const bool final) {
             if (i == 0) {
                 // first slot is 0
-                if (final) bc.row(0) = 0;
+                if (final) bc_row_init(0) = 0;
                 return;
             }
 
             const vertex_t u = i - 1;
-            const u32 len = g.neighborhood(u + 1) - g.neighborhood(u);
-            const u32 c = len < partition.k ? len : partition.k;
+            const u32 len = g_neighborhood_init(u + 1) - g_neighborhood_init(u);
+            const u32 c = len < p_k_init ? len : p_k_init;
 
             // write inclusive row[i] = running + c
             if (final) {
-                bc.row(i) = running + c;
-                bc.sizes(u) = 0; // c;
+                bc_row_init(i) = running + c;
+                bc_sizes_init(u) = 0; // c;
             }
 
             running += c;
@@ -93,36 +98,46 @@ namespace GPU_HeiPa {
         Kokkos::deep_copy(exec_space, bc.weights, 0);
         KOKKOS_PROFILE_FENCE(exec_space);
 
+        auto g_edges_u = g.edges_u;
+        auto g_edges_v = g.edges_v;
+        auto g_edges_w = g.edges_w;
+        auto g_neighborhood = g.neighborhood;
+        auto p_map = partition.map;
+        auto bc_row = bc.row;
+        auto bc_ids = bc.ids;
+        auto bc_weights = bc.weights;
+        auto bc_sizes = bc.sizes;
+
         // first fill of the structure
         if (g.m / g.n < 16) {
             HEIPA_PROFILE_SCOPE("refinement", "BlockConnectivity_fs", "fill");
             Kokkos::parallel_for("fill", Kokkos::RangePolicy<DeviceExecutionSpace>(exec_space, 0, g.m), KOKKOS_LAMBDA(const u32 i) {
-                vertex_t u = g.edges_u(i);
-                vertex_t v = g.edges_v(i);
-                weight_t w = uniform_e_weights ? 1 : g.edges_w(i);
+                vertex_t u = g_edges_u(i);
+                vertex_t v = g_edges_v(i);
+                weight_t w = uniform_e_weights ? 1 : g_edges_w(i);
 
-                u32 r_beg = bc.row(u);
-                u32 r_end = bc.row(u + 1);
+                u32 r_beg = bc_row(u);
+                u32 r_end = bc_row(u + 1);
                 u32 r_len = r_end - r_beg;
 
-                partition_t v_id = partition.map(v);
+                partition_t v_id = p_map(v);
 
                 for (u32 j = 0; j < r_len; j++) {
                     u32 idx = r_beg + j;
-                    partition_t val = bc.ids(idx);
+                    partition_t val = bc_ids(idx);
                     if (val == v_id) {
-                        Kokkos::atomic_add(&bc.weights(idx), w);
+                        Kokkos::atomic_add(&bc_weights(idx), w);
                         return;
                     }
                     if (val == NULL_PART) {
-                        val = Kokkos::atomic_compare_exchange(&bc.ids(idx), NULL_PART, v_id);
+                        val = Kokkos::atomic_compare_exchange(&bc_ids(idx), NULL_PART, v_id);
                         if (val == NULL_PART) {
-                            Kokkos::atomic_add(&bc.weights(idx), w);
-                            Kokkos::atomic_inc(&bc.sizes(u));
+                            Kokkos::atomic_add(&bc_weights(idx), w);
+                            Kokkos::atomic_inc(&bc_sizes(u));
                             return;
                         }
                         if (val == v_id) {
-                            Kokkos::atomic_add(&bc.weights(idx), w);
+                            Kokkos::atomic_add(&bc_weights(idx), w);
                             return;
                         }
                     }
@@ -137,35 +152,35 @@ namespace GPU_HeiPa {
             Kokkos::parallel_for("fill_team_per_vertex", team_policy(exec_space, g.n, Kokkos::AUTO()), KOKKOS_LAMBDA(const member_type &team) {
                 vertex_t u = team.league_rank();
 
-                u32 r_beg = bc.row(u);
-                u32 r_end = bc.row(u + 1);
+                u32 r_beg = bc_row(u);
+                u32 r_end = bc_row(u + 1);
                 u32 r_len = r_end - r_beg;
 
-                Kokkos::parallel_for(Kokkos::TeamThreadRange(team, g.neighborhood(u), g.neighborhood(u + 1)), [&](const u32 i) {
-                    vertex_t v = g.edges_v(i);
-                    weight_t w = uniform_e_weights ? 1 : g.edges_w(i);
-                    partition_t v_id = partition.map(v);
+                Kokkos::parallel_for(Kokkos::TeamThreadRange(team, g_neighborhood(u), g_neighborhood(u + 1)), [&](const u32 i) {
+                    vertex_t v = g_edges_v(i);
+                    weight_t w = uniform_e_weights ? 1 : g_edges_w(i);
+                    partition_t v_id = p_map(v);
 
                     for (u32 j = 0; j < r_len; ++j) {
                         u32 idx = r_beg + j;
-                        partition_t val = bc.ids(idx);
+                        partition_t val = bc_ids(idx);
 
                         if (val == v_id) {
-                            Kokkos::atomic_add(&bc.weights(idx), w);
+                            Kokkos::atomic_add(&bc_weights(idx), w);
                             return;
                         }
 
                         if (val == NULL_PART) {
-                            val = Kokkos::atomic_compare_exchange(&bc.ids(idx), NULL_PART, v_id);
+                            val = Kokkos::atomic_compare_exchange(&bc_ids(idx), NULL_PART, v_id);
 
                             if (val == NULL_PART) {
-                                Kokkos::atomic_add(&bc.weights(idx), w);
-                                Kokkos::atomic_inc(&bc.sizes(u));
+                                Kokkos::atomic_add(&bc_weights(idx), w);
+                                Kokkos::atomic_inc(&bc_sizes(u));
                                 return;
                             }
 
                             if (val == v_id) {
-                                Kokkos::atomic_add(&bc.weights(idx), w);
+                                Kokkos::atomic_add(&bc_weights(idx), w);
                                 return;
                             }
                         }
@@ -209,18 +224,28 @@ namespace GPU_HeiPa {
 
         //recompute conn tables for each vertex adjacent to a moved vertex
         HEIPA_PROFILE_SCOPE("refinement", "JetLabelPropagation", "update_large_rebuild");
+        auto g_neighborhood = g.neighborhood;
+        auto g_edges_v = g.edges_v;
+        auto g_edges_w = g.edges_w;
+        auto p_map = partition.map;
+        auto bc_row = bc.row;
+        auto bc_ids = bc.ids;
+        auto bc_weights = bc.weights;
+        auto bc_sizes = bc.sizes;
+        auto p_k = partition.k;
+
         Kokkos::parallel_for("rebuild", Kokkos::TeamPolicy<DeviceExecutionSpace>(exec_space, (int) g.n, Kokkos::AUTO).set_scratch_size(0, Kokkos::PerTeam(partition.k * sizeof(weight_t) + partition.k * sizeof(partition_t) + 4 * sizeof(partition_t))), KOKKOS_LAMBDA(const Kokkos::TeamPolicy<DeviceExecutionSpace>::member_type &t) {
             vertex_t u = (vertex_t) t.league_rank();
 
             bool needs_update = false;
-            Kokkos::parallel_reduce(Kokkos::TeamThreadRange(t, g.neighborhood(u), g.neighborhood(u + 1)), [&](const u32 i, bool &local_update) {
-                const vertex_t v = g.edges_v(i);
+            Kokkos::parallel_reduce(Kokkos::TeamThreadRange(t, g_neighborhood(u), g_neighborhood(u + 1)), [&](const u32 i, bool &local_update) {
+                const vertex_t v = g_edges_v(i);
                 local_update = local_update || (moved_round(v) == round);
             }, Kokkos::LOr<bool>(needs_update));
 
             if (needs_update) {
-                u32 r_beg = bc.row(u);
-                u32 r_end = bc.row(u + 1);
+                u32 r_beg = bc_row(u);
+                u32 r_end = bc_row(u + 1);
                 u32 r_len = r_end - r_beg;
 
                 // build the row
@@ -237,13 +262,13 @@ namespace GPU_HeiPa {
                 t.team_barrier();
 
                 // construct conn table from scratch in shared memory
-                Kokkos::parallel_for(Kokkos::TeamThreadRange(t, g.neighborhood(u), g.neighborhood(u + 1)), [&](const u32 &i) {
-                    vertex_t v = g.edges_v(i);
-                    weight_t w = uniform_e_weights ? 1 : g.edges_w(i);
-                    partition_t v_id = partition.map(v);
+                Kokkos::parallel_for(Kokkos::TeamThreadRange(t, g_neighborhood(u), g_neighborhood(u + 1)), [&](const u32 &i) {
+                    vertex_t v = g_edges_v(i);
+                    weight_t w = uniform_e_weights ? 1 : g_edges_w(i);
+                    partition_t v_id = p_map(v);
                     u32 idx = v_id % r_len;
 
-                    if (r_len == partition.k) {
+                    if (r_len == p_k) {
                         if (NULL_PART == Kokkos::atomic_compare_exchange(s_ids + idx, NULL_PART, v_id)) {
                             Kokkos::atomic_add(n_needed_slots, 1);
                         }
@@ -268,34 +293,34 @@ namespace GPU_HeiPa {
                 if (new_size < r_len) {
                     // reset global memory
                     Kokkos::parallel_for(Kokkos::TeamThreadRange(t, r_beg, r_end), [&](const u32 i) {
-                        bc.weights(i) = 0;
-                        bc.ids(i) = NULL_PART;
+                        bc_weights(i) = 0;
+                        bc_ids(i) = NULL_PART;
                     });
 
                     t.team_barrier();
 
-                    bc.sizes(u) = new_size;
+                    bc_sizes(u) = new_size;
                     Kokkos::parallel_for(Kokkos::TeamThreadRange(t, 0, r_len), [&](const u32 &i) {
                         partition_t id = s_ids[i];
                         if (id != NULL_PART) {
                             u32 idx = id % new_size;
 
                             while (true) {
-                                partition_t found_id = Kokkos::atomic_compare_exchange(&bc.ids(r_beg + idx), NULL_PART, id);
+                                partition_t found_id = Kokkos::atomic_compare_exchange(&bc_ids(r_beg + idx), NULL_PART, id);
                                 if (found_id == NULL_PART || found_id == id) { break; }
                                 idx += 1;
                                 if (idx == new_size) { idx = 0; }
                             }
 
-                            bc.weights(r_beg + idx) = s_weights[i];
+                            bc_weights(r_beg + idx) = s_weights[i];
                         }
                     });
                 } else {
-                    bc.sizes(u) = r_len;
+                    bc_sizes(u) = r_len;
                     //copy conn table into global memory
                     Kokkos::parallel_for(Kokkos::TeamThreadRange(t, 0, r_len), [&](const u32 i) {
-                        bc.weights(r_beg + i) = s_weights[i];
-                        bc.ids(r_beg + i) = s_ids[i];
+                        bc_weights(r_beg + i) = s_weights[i];
+                        bc_ids(r_beg + i) = s_ids[i];
                     });
                 }
 
@@ -319,28 +344,38 @@ namespace GPU_HeiPa {
         u32 total_moves = (u32) moves.extent(0);
 
         HEIPA_PROFILE_SCOPE("refinement", "JetLabelPropagation", "update_small_remove_weight");
+        auto g_neighborhood = g.neighborhood;
+        auto g_edges_v = g.edges_v;
+        auto g_edges_w = g.edges_w;
+        auto bc_row = bc.row;
+        auto bc_sizes = bc.sizes;
+        auto bc_ids = bc.ids;
+        auto bc_weights = bc.weights;
+        auto p_k = partition.k;
+        auto p_map = partition.map;
+
         Kokkos::parallel_for("remove_weight", Kokkos::TeamPolicy<DeviceExecutionSpace>(exec_space, (int) total_moves, Kokkos::AUTO), KOKKOS_LAMBDA(const Kokkos::TeamPolicy<DeviceExecutionSpace>::member_type &t) {
             vertex_t u = moves((u32) t.league_rank());
             partition_t old_u_id = dest_part(u);
 
-            Kokkos::parallel_for(Kokkos::TeamThreadRange(t, g.neighborhood(u), g.neighborhood(u + 1)), [=](const u32 i) {
-                vertex_t v = g.edges_v(i);
-                weight_t w = uniform_e_weights ? 1 : g.edges_w(i);
+            Kokkos::parallel_for(Kokkos::TeamThreadRange(t, g_neighborhood(u), g_neighborhood(u + 1)), [=](const u32 i) {
+                vertex_t v = g_edges_v(i);
+                weight_t w = uniform_e_weights ? 1 : g_edges_w(i);
 
-                u32 r_beg = bc.row(v);
-                u32 size = bc.sizes(v);
+                u32 r_beg = bc_row(v);
+                u32 size = bc_sizes(v);
 
                 // find correct idx
                 partition_t idx = old_u_id % size;
-                while (Kokkos::atomic_load(&bc.ids(r_beg + idx)) != old_u_id) {
+                while (Kokkos::atomic_load(&bc_ids(r_beg + idx)) != old_u_id) {
                     idx += 1;
                     if (idx == size) { idx = 0; }
                 }
 
                 // remove weight
-                weight_t id_w = Kokkos::atomic_fetch_add(&bc.weights(r_beg + idx), -w);
+                weight_t id_w = Kokkos::atomic_fetch_add(&bc_weights(r_beg + idx), -w);
 
-                if (size != partition.k && id_w == w) { bc.ids(r_beg + idx) = HASH_RECLAIM; }
+                if (size != p_k && id_w == w) { bc_ids(r_beg + idx) = HASH_RECLAIM; }
             });
         });
         KOKKOS_PROFILE_FENCE(exec_space);
@@ -348,16 +383,16 @@ namespace GPU_HeiPa {
         HEIPA_PROFILE_SCOPE("refinement", "JetLabelPropagation", "update_small_add_weight");
         Kokkos::parallel_for("add_weight", Kokkos::TeamPolicy<DeviceExecutionSpace>(exec_space, (int) total_moves, Kokkos::AUTO), KOKKOS_LAMBDA(const Kokkos::TeamPolicy<DeviceExecutionSpace>::member_type &t) {
             vertex_t u = moves((u32) t.league_rank());
-            partition_t new_u_id = partition.map(u);
+            partition_t new_u_id = p_map(u);
 
-            Kokkos::parallel_for(Kokkos::TeamThreadRange(t, g.neighborhood(u), g.neighborhood(u + 1)), [=](const u32 i) {
-                vertex_t v = g.edges_v(i);
-                weight_t w = uniform_e_weights ? 1 : g.edges_w(i);
+            Kokkos::parallel_for(Kokkos::TeamThreadRange(t, g_neighborhood(u), g_neighborhood(u + 1)), [=](const u32 i) {
+                vertex_t v = g_edges_v(i);
+                weight_t w = uniform_e_weights ? 1 : g_edges_w(i);
 
                 dest_cache(v) = NULL_PART; // reset the cache
 
-                u32 r_beg = bc.row(v);
-                u32 size = bc.sizes(v);
+                u32 r_beg = bc_row(v);
+                u32 size = bc_sizes(v);
 
                 u32 idx = new_u_id % size;
 
@@ -365,7 +400,7 @@ namespace GPU_HeiPa {
                 bool success = false;
                 for (u32 j = 0; j < size; j++) {
                     idx = (new_u_id + j) % size;
-                    partition_t id = Kokkos::atomic_load(&bc.ids(r_beg + idx));
+                    partition_t id = Kokkos::atomic_load(&bc_ids(r_beg + idx));
 
                     if (id == new_u_id) {
                         success = true;
@@ -377,7 +412,7 @@ namespace GPU_HeiPa {
                 if (!success) {
                     for (u32 j = 0; j < size; j++) {
                         idx = (new_u_id + j) % size;
-                        partition_t id = Kokkos::atomic_load(&bc.ids(r_beg + idx));
+                        partition_t id = Kokkos::atomic_load(&bc_ids(r_beg + idx));
 
                         if (id == new_u_id) {
                             success = true;
@@ -385,7 +420,7 @@ namespace GPU_HeiPa {
                         }
 
                         if (id == NULL_PART || id == HASH_RECLAIM) {
-                            partition_t found_id = Kokkos::atomic_compare_exchange(&bc.ids(r_beg + idx), id, new_u_id);
+                            partition_t found_id = Kokkos::atomic_compare_exchange(&bc_ids(r_beg + idx), id, new_u_id);
                             if (found_id == new_u_id || found_id == NULL_PART || found_id == HASH_RECLAIM) {
                                 success = true;
                                 break;
@@ -397,7 +432,7 @@ namespace GPU_HeiPa {
                 if (!success) {
                     idx = size;
                     while (true) {
-                        partition_t id = Kokkos::atomic_load(&bc.ids(r_beg + idx));
+                        partition_t id = Kokkos::atomic_load(&bc_ids(r_beg + idx));
 
                         if (id == new_u_id) {
                             success = true;
@@ -405,9 +440,9 @@ namespace GPU_HeiPa {
                         }
 
                         if (id == NULL_PART || id == HASH_RECLAIM) {
-                            partition_t found_id = Kokkos::atomic_compare_exchange(&bc.ids(r_beg + idx), id, new_u_id);
+                            partition_t found_id = Kokkos::atomic_compare_exchange(&bc_ids(r_beg + idx), id, new_u_id);
                             if (found_id == id) {
-                                Kokkos::atomic_add(&bc.sizes(v), 1);
+                                Kokkos::atomic_add(&bc_sizes(v), 1);
                                 break;
                             }
                             if (found_id == new_u_id) { break; }
@@ -416,7 +451,7 @@ namespace GPU_HeiPa {
                         idx++;
                     }
                 }
-                Kokkos::atomic_add(&bc.weights(r_beg + idx), w);
+                Kokkos::atomic_add(&bc_weights(r_beg + idx), w);
             });
         });
         KOKKOS_PROFILE_FENCE(exec_space);
