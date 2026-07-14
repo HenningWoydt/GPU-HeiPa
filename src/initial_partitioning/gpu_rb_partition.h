@@ -278,6 +278,7 @@ namespace GPU_HeiPa {
         pop_back(mem_stack); // local_ids
         free_GraphBatch(batch, mem_stack);
         free_graph(graphs[0], mem_stack);
+
         KOKKOS_PROFILE_FENCE(exec_space);
     }
 } // namespace GPU_HeiPa

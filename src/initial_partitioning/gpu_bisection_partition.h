@@ -54,12 +54,11 @@ namespace GPU_HeiPa {
         std::vector<u8> active;
         std::vector<u32> curr_level;
         std::vector<u32> curr_load;
-        
     };
 
     inline void init_HierarchyManager(HierarchyManager &manager, const std::vector<partition_t> &t_hierarchy, size_t t_k) {
         manager.hierarchy = t_hierarchy;
-        
+
         size_t num_levels = manager.hierarchy.size();
         manager.unit_sizes.assign(num_levels, 1);
         size_t current = 1;
@@ -110,6 +109,7 @@ namespace GPU_HeiPa {
     }
 
     inline void gpu_bisect_partition(Graph &g, const std::vector<partition_t> &hierarchy, partition_t k, f64 imbalance, u64 seed, u32 threshold, Partition &partition, KokkosMemoryStack &mem_stack, DeviceExecutionSpace &exec_space) {
+        /*
         HEIPA_PROFILE_SCOPE("initial_partitioning", "gpu_bisection_partition", "gpu_bisect_partition");
         GraphBatch batch;
         init_GraphBatch(batch, g, k, mem_stack);
@@ -126,22 +126,21 @@ namespace GPU_HeiPa {
             assert_coarsening(graphs[graphs.size() - 2], graphs.back(), mappings.back(), exec_space);
             assert_state_pre_partition(graphs.back(), exec_space);
         }
-        {
-            HEIPA_PROFILE_SCOPE("initial_partitioning", "gpu_bisection_partition", "initial_partitioning_phase");
-            partition_t l_k, r_k;
-            split_into(manager, 0, l_k, r_k);
-            UnmanagedDevicePartition temp_partition(batch.get_partition_ptr(0), batch.n);
-            bisect(graphs.back(), l_k * lmax_global, r_k * lmax_global, temp_partition, exec_space);
-            partition_t left_id = 0;
-            partition_t right_id = l_k;
-            split(manager, 0, l_k, r_k);
-            auto map = partition.map;
-            Kokkos::parallel_for("update_partition_initial", Kokkos::RangePolicy<DeviceExecutionSpace>(exec_space, 0, graphs.back().n), KOKKOS_LAMBDA(const vertex_t u) {
-                map(u) = (temp_partition(u) == 0) ? left_id : right_id;
-            });
-            exec_space.fence();
-            recalculate_block_weights(graphs.back(), map, partition.bweights, exec_space);
-        }
+
+        HEIPA_PROFILE_SCOPE("initial_partitioning", "gpu_bisection_partition", "initial_partitioning_phase");
+        partition_t l_k, r_k;
+        split_into(manager, 0, l_k, r_k);
+        UnmanagedDevicePartition temp_partition(batch.get_partition_ptr(0), batch.n);
+        bisect(graphs.back(), l_k * lmax_global, r_k * lmax_global, temp_partition, exec_space);
+        partition_t left_id = 0;
+        partition_t right_id = l_k;
+        split(manager, 0, l_k, r_k);
+        auto map = partition.map;
+        Kokkos::parallel_for("update_partition_initial", Kokkos::RangePolicy<DeviceExecutionSpace>(exec_space, 0, graphs.back().n), KOKKOS_LAMBDA(const vertex_t u) {
+            map(u) = (temp_partition(u) == 0) ? left_id : right_id;
+        });
+        recalculate_block_weights(graphs.back(), map, partition.bweights, exec_space);
+
         HostU8 h_active_mask("h_active_mask", batch.k);
         HostVertex h_bsizes("h_bsizes", batch.k);
         HostWeight h_lmax_l("h_lmax_l", batch.k);
@@ -232,6 +231,8 @@ namespace GPU_HeiPa {
         pop_back(mem_stack); // local_degree
         pop_back(mem_stack); // local_ids
         free_GraphBatch(batch, mem_stack);
+
+        */
     }
 }
 
