@@ -10,8 +10,7 @@
 #include "../datastructures/small_graph.h"
 
 namespace GPU_HeiPa {
-
-    template<bool uniform_v_weights, bool uniform_e_weights>
+    template<bool uniform_v_weights, bool uniform_e_weights, EdgeRatingFunction rating_function = EdgeRatingFunction::EXPANSIONSTAR>
     inline Mapping heavy_edge_matching_small_get_mapping(const SmallGraph &g,
                                                          const Partition &partition,
                                                          const weight_t lmax,
@@ -50,29 +49,40 @@ namespace GPU_HeiPa {
 
             // Phase 1: Initial pick
             Kokkos::parallel_for(Kokkos::TeamThreadRange(team, g_n), [&](const vertex_t u) {
-                (void)g_weights;
-                (void)g_edges_w;
+                (void) g_weights;
+                (void) g_edges_w;
 
                 vertex_t h = SENTINEL;
-                weight_t max_ewt = 0;
+                f32 max_ewt = -1.0f;
                 u32 r = xorshiftHash(u ^ SEED);
                 u32 tiebreaker = 0;
 
-                // weight_t wu = uniform_v_weights ? 1 : g_weights(u);
+                weight_t u_w = uniform_v_weights ? 1 : g_weights(u);
 
                 u32 start = g_edge_begin(u);
                 u32 limit = g_edge_end(u);
                 for (u32 j = start; j < limit; j++) {
                     vertex_t v = g_edges_v(j);
-                    
-                    // weight_t wv = uniform_v_weights ? 1 : g_weights(v);
-                    // if (wu + wv > lmax) continue;
 
-                    if constexpr (!uniform_e_weights) {
-                        weight_t ew = g_edges_w(j);
-                        if (ew < max_ewt) continue;
-                        if (ew > max_ewt) {
-                            max_ewt = ew;
+                    weight_t v_w = uniform_v_weights ? 1 : g_weights(v);
+                    // if (u_w + v_w > lmax) continue;
+
+                    if constexpr (!(uniform_v_weights && uniform_e_weights)) {
+                        weight_t ew = uniform_e_weights ? 1 : g_edges_w(j);
+                        f32 edge_rating;
+                        if constexpr (rating_function == EdgeRatingFunction::WEIGHT) {
+                            edge_rating = (f32) ew;
+                        } else if constexpr (rating_function == EdgeRatingFunction::EXPANSION) {
+                            edge_rating = (f32) ew / (f32) (u_w + v_w);
+                        } else if constexpr (rating_function == EdgeRatingFunction::EXPANSIONSTAR) {
+                            edge_rating = (f32) ew / (f32) (u_w * v_w);
+                        } else if constexpr (rating_function == EdgeRatingFunction::EXPANSIONSTARSTAR) {
+                            edge_rating = (f32) (ew * ew) / (f32) (u_w * v_w);
+                        }
+
+                        if (edge_rating < max_ewt) continue;
+                        if (edge_rating > max_ewt) {
+                            max_ewt = edge_rating;
                             h = v;
                             tiebreaker = xorshiftHash(v + r);
                             continue;
@@ -98,7 +108,7 @@ namespace GPU_HeiPa {
                     Kokkos::parallel_for(Kokkos::TeamThreadRange(team, g_n), [&](const vertex_t u) {
                         vertex_t v = thm_hn(u);
                         if (v == SENTINEL || thm_vcmap(u) != SENTINEL) return;
-                        
+
                         u32 h_u = xorshiftHash(u + r);
                         u32 h_v = xorshiftHash(v + r);
                         bool condition = (r > 0) ? (h_u < h_v) : (u < v);
@@ -109,7 +119,7 @@ namespace GPU_HeiPa {
                     Kokkos::parallel_for(Kokkos::TeamThreadRange(team, g_n), [&](const vertex_t u) {
                         vertex_t v = thm_hn(u);
                         if (v == SENTINEL || thm_vcmap(u) != SENTINEL) return;
-                        
+
                         vertex_t cv = u < v ? u : v;
                         if (Kokkos::atomic_compare_exchange(&thm_vcmap(v), SENTINEL - 1, cv) == SENTINEL - 1) {
                             thm_vcmap(u) = cv;
@@ -125,19 +135,19 @@ namespace GPU_HeiPa {
 
                 // Phase 2b: Repick for unmatched
                 Kokkos::parallel_for(Kokkos::TeamThreadRange(team, g_n), [&](const vertex_t u) {
-                    (void)g_weights;
-                    (void)g_edges_w;
+                    (void) g_weights;
+                    (void) g_edges_w;
 
                     if (thm_vcmap(u) != SENTINEL) return;
                     if (thm_hn(u) == SENTINEL) return;
                     if (thm_vcmap(thm_hn(u)) == SENTINEL) return;
 
                     vertex_t h = SENTINEL;
-                    weight_t max_ewt = 0;
+                    f32 max_ewt = -1.0f;
                     u32 r = xorshiftHash(u ^ round_seed);
                     u32 tiebreaker = 0;
 
-                    // weight_t wu = uniform_v_weights ? 1 : g_weights(u);
+                    weight_t u_w = uniform_v_weights ? 1 : g_weights(u);
 
                     u32 start = g_edge_begin(u);
                     u32 limit = g_edge_end(u);
@@ -145,14 +155,25 @@ namespace GPU_HeiPa {
                         vertex_t v = g_edges_v(j);
                         if (thm_vcmap(v) != SENTINEL) continue;
 
-                        // weight_t wv = uniform_v_weights ? 1 : g_weights(v);
-                        // if (wu + wv > lmax) continue;
+                        weight_t v_w = uniform_v_weights ? 1 : g_weights(v);
+                        // if (u_w + v_w > lmax) continue;
 
-                        if constexpr (!uniform_e_weights) {
-                            weight_t ew = g_edges_w(j);
-                            if (ew < max_ewt) continue;
-                            if (ew > max_ewt) {
-                                max_ewt = ew;
+                        if constexpr (!(uniform_v_weights && uniform_e_weights)) {
+                            weight_t ew = uniform_e_weights ? 1 : g_edges_w(j);
+                            f32 edge_rating;
+                            if constexpr (rating_function == EdgeRatingFunction::WEIGHT) {
+                                edge_rating = (f32) ew;
+                            } else if constexpr (rating_function == EdgeRatingFunction::EXPANSION) {
+                                edge_rating = (f32) ew / (f32) (u_w + v_w);
+                            } else if constexpr (rating_function == EdgeRatingFunction::EXPANSIONSTAR) {
+                                edge_rating = (f32) ew / (f32) (u_w * v_w);
+                            } else if constexpr (rating_function == EdgeRatingFunction::EXPANSIONSTARSTAR) {
+                                edge_rating = (f32) (ew * ew) / (f32) (u_w * v_w);
+                            }
+
+                            if (edge_rating < max_ewt) continue;
+                            if (edge_rating > max_ewt) {
+                                max_ewt = edge_rating;
                                 h = v;
                                 tiebreaker = xorshiftHash(v + r);
                                 continue;
@@ -209,6 +230,7 @@ namespace GPU_HeiPa {
 
         return mapping;
     }
+
     inline Mapping dispatch_heavy_edge_matching_small_get_mapping(const SmallGraph &g,
                                                                   const Partition &partition,
                                                                   const weight_t lmax,

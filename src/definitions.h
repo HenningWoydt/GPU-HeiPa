@@ -130,6 +130,14 @@ namespace GPU_HeiPa {
     using HostPinnedWeight = Kokkos::View<weight_t *, Kokkos::SharedHostPinnedSpace>;
     using HostScalarPinnedWeight = Kokkos::View<weight_t, Kokkos::SharedHostPinnedSpace>;
     using Policy = Kokkos::RangePolicy<DeviceExecutionSpace>;
+
+    enum class EdgeRatingFunction {
+        WEIGHT,
+        EXPANSION,
+        EXPANSIONSTAR,
+        EXPANSIONSTARSTAR
+    };
 }
+
 
 #endif //GPU_HEIPA_DEFINITIONS_H
