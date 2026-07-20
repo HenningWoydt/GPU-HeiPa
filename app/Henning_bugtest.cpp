@@ -52,7 +52,7 @@ int main(int argc, char *argv[]) {
         {
             ScopedTimer _t("io", "main", "parse_args");
             std::vector<std::pair<std::string, std::string> > input = {
-                {"--graph", "../../Jet_graphs/graphs/com-LiveJournal.graph"},    
+                {"--graph", "../../GPU-HeiPa-Experiments/data/SuiteSparse/com-LiveJournal.graph"},
                 {"--k", "64"},
                 {"--imbalance", "0.03"},
                 {"--config", "default"},

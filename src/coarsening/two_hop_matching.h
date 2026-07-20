@@ -649,34 +649,42 @@ namespace GPU_HeiPa {
         heavy_edge_matching<uniform_v_weights, uniform_e_weights>(g, partition, thm, 12345u, exec_space);
 
         vertex_t unmapped = count_unmapped(g, thm, exec_space);
+        std::cout << "  Unmatched after HEM: " << unmapped << " (matched " << (g.n - unmapped) << ")" << std::endl;
 
-        //std::cout << "Number of vertices: " << g.n << std::endl;
-        //std::cout << "Unmatched after HEM: " << unmapped << std::endl;
-
+        vertex_t prev_unmapped = unmapped;
         if ((f64) unmapped / (f64) g.n > 0.25) {
-            
             leaf_matching(g, partition, thm, unmapped, mem_stack, exec_space);
-
             unmapped = count_unmapped(g, thm, exec_space);
         }
+        std::cout << "  Unmatched after leaf matching: " << unmapped << " (matched " << (prev_unmapped - unmapped) << ")" << std::endl;
 
-        //std::cout << "Unmatched after leaf matching: " << unmapped << std::endl;
         // Twin matches
+        prev_unmapped = unmapped;
         if ((f64) unmapped / (f64) g.n > 0.25) {
-            
             twin_matching(g, partition, thm, unmapped, mem_stack, exec_space);
-
             unmapped = count_unmapped(g, thm, exec_space);
         }
+        std::cout << "  Unmatched after twin matching: " << unmapped << " (matched " << (prev_unmapped - unmapped) << ")" << std::endl;
 
-        //std::cout << "Unmatched after twin matching: " << unmapped << std::endl;
         // Relative matches
+        prev_unmapped = unmapped;
         if ((f64) unmapped / (f64) g.n > 0.25) {
-            
             relative_matching<uniform_e_weights>(g, partition, thm, unmapped, mem_stack, exec_space);
         }
-
         unmapped = count_unmapped(g, thm, exec_space);
+        std::cout << "  Unmatched after relative matching: " << unmapped << " (matched " << (prev_unmapped - unmapped) << ")" << std::endl;
+
+        vertex_t theoretically_matchable_edges = 0;
+        Kokkos::parallel_reduce("count_matchable", Kokkos::RangePolicy<DeviceExecutionSpace>(exec_space, 0, g.n), KOKKOS_LAMBDA(vertex_t u, vertex_t &update) {
+            if (thm.vcmap(u) != SENTINEL) return;
+            for (u32 j = g.neighborhood(u); j < g.neighborhood(u + 1); j++) {
+                vertex_t v = g.edges_v(j);
+                if (thm.vcmap(v) == SENTINEL && partition.map(u) == partition.map(v)) {
+                    update++;
+                }
+            }
+        }, theoretically_matchable_edges);
+        std::cout << "  Edges between two unmatched vertices in same block: " << theoretically_matchable_edges / 2 << std::endl;
 
         //std::cout << "Unmatched after relative matching: " << unmapped << std::endl;
         //
@@ -715,7 +723,7 @@ namespace GPU_HeiPa {
 
             KOKKOS_PROFILE_FENCE(exec_space);
 
-            made_progress = (mapping.coarse_n < mapping.old_n);
+            made_progress = ((f64)mapping.coarse_n <= 0.99 * (f64)mapping.old_n);
         }
 
         {

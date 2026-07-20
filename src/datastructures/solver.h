@@ -118,6 +118,25 @@ namespace GPU_HeiPa {
                     << "\n";
         }
 
+        void print_block_analysis(const Graph &g, const Partition &partition, u32 level, DeviceExecutionSpace &exec_space) {
+            vertex_t internal_edges = 0;
+            Kokkos::parallel_reduce("count_internal", Kokkos::RangePolicy<DeviceExecutionSpace>(exec_space, 0, g.n), KOKKOS_LAMBDA(const vertex_t u, vertex_t &update) {
+                vertex_t local_internal = 0;
+                for (u32 j = g.neighborhood(u); j < g.neighborhood(u + 1); j++) {
+                    vertex_t v = g.edges_v(j);
+                    if (partition.map(u) == partition.map(v)) {
+                        local_internal++;
+                    }
+                }
+                update += local_internal;
+            }, internal_edges);
+            exec_space.fence();
+            
+            std::cout << "Level " << level << ": graph size = " << g.n 
+                      << " | internal edges = " << internal_edges / 2
+                      << " | total edges = " << g.m / 2 << std::endl;
+        }
+
         inline void print_all_levels(const std::vector<level_info> &infos) {
             std::cout
                     << std::setw(3) << "Lvl" << " | "
@@ -179,6 +198,7 @@ namespace GPU_HeiPa {
 
             u32 level = 0;
             while (graphs.back().n > max_n) {
+                print_block_analysis(graphs.back(), partition, level, exec_space);
                 #if ENABLE_PROFILER
                 ScopedTimer t_profiler{"hm", "solver", "profiling"};
                 level_infos.emplace_back();
@@ -187,7 +207,9 @@ namespace GPU_HeiPa {
                 level_infos[level].m = graphs.back().m;
                 t_profiler.stop();
                 #endif
-                coarsening(level, dev_mem_stack);
+                bool can_contract = false;
+                coarsening(level, dev_mem_stack, can_contract);
+                if (!can_contract) break;
                 contraction(level, dev_mem_stack);
 
                 level += 1;
@@ -305,6 +327,7 @@ namespace GPU_HeiPa {
 
 
             while (graphs.back().n > max_n) {
+                print_block_analysis(graphs.back(), partition, level, exec_space);
                 #if ENABLE_PROFILER
                 ScopedTimer t_profiler{"hm", "solver", "profiling"};
                 level_infos.emplace_back();
@@ -335,7 +358,7 @@ namespace GPU_HeiPa {
     auto duration = std::chrono::duration_cast<std::chrono::milliseconds>(end - start);
 
 
-            std::cout << "Finished V-cycle coarsening after " << duration << "ms" << std::endl;
+            std::cout << "Finished V-cycle coarsening after " << duration.count() << "ms" << std::endl;
             std::cout << "Now we are at level " << level  << std::endl;
 
             #if ENABLE_PROFILER
@@ -519,6 +542,7 @@ namespace GPU_HeiPa {
 
             u32 level = 0;
             while (graphs.back().n > max_n) {
+                print_block_analysis(graphs.back(), partition, level, exec_space);
                 #if ENABLE_PROFILER
                 level_infos.emplace_back();
                 level_infos[level].level = level;
@@ -526,7 +550,9 @@ namespace GPU_HeiPa {
                 level_infos[level].m = graphs.back().m;
                 #endif
 
-                coarsening(level, mem_stack);
+                bool can_contract = false;
+                coarsening(level, mem_stack, can_contract);
+                if (!can_contract) break;
                 contraction(level, mem_stack);
 
                 level += 1;
