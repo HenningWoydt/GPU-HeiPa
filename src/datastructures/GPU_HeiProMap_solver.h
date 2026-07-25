@@ -43,6 +43,7 @@
 #include "../utility/asserts.h"
 #include "../distance_oracles/distance_oracle_helpers.h"
 #include "../initial_partitioning/hierarchical_multisection.h"
+#include "../initial_partitioning/gpu_global_multisection.h"
 #include "../utility/comm_cost.h"
 #include "../refinement/promap_jet_label_propagation.h"
 
@@ -72,8 +73,11 @@ namespace GPU_HeiPa {
         weight_t curr_max_block_weight = 0;
         weight_t initial_comm_cost = 0;
         weight_t initial_max_block_weight = 0;
+        partition_t initial_empty_partitions = 0;
+        partition_t initial_oload_partitions = 0;
+        weight_t initial_sum_oload_weight = 0;
 
-        f64 down_upload_ms = 0.0;
+        f64 down_up_load_ms = 0.0;
         f64 misc_ms = 0.0;
         f64 coarsening_ms = 0.0;
         f64 contraction_ms = 0.0;
@@ -159,7 +163,7 @@ namespace GPU_HeiPa {
             Kokkos::deep_copy(exec_space, host_partition, partition.map);
             exec_space.fence("deep_copy host_partition");
 
-            down_upload_ms += get_milli_seconds(p, get_time_point());
+            down_up_load_ms += get_milli_seconds(p, get_time_point());
 
             // calc stats
             weight_t max_block_w = 0;
@@ -209,6 +213,9 @@ namespace GPU_HeiPa {
                 std::cout << "------- Stat -------" << std::endl;
                 std::cout << "Init. comm-cost   : " << initial_comm_cost << std::endl;
                 std::cout << "Init. max block w : " << initial_max_block_weight << std::endl;
+                std::cout << "Init. #empty part : " << initial_empty_partitions << std::endl;
+                std::cout << "Init. #oload part : " << initial_oload_partitions << std::endl;
+                std::cout << "Init. #oload sumw : " << initial_sum_oload_weight << std::endl;
                 std::cout << "Final comm-cost   : " << curr_comm_cost << std::endl;
                 std::cout << "Final max block w : " << max_block_w << std::endl;
                 std::cout << "#empty partitions : " << n_empty_partitions << std::endl;
@@ -216,13 +223,15 @@ namespace GPU_HeiPa {
                 std::cout << "Sum oload weights : " << sum_too_much << std::endl;
 
                 std::cout << "------- Time -------" << std::endl;
+                std::cout << "Total solve time  : " << duration << std::endl;
                 std::cout << "Coarsening        : " << coarsening_ms << std::endl;
                 std::cout << "Contraction       : " << contraction_ms << std::endl;
                 std::cout << "Init. Part.       : " << initial_partitioning_ms << std::endl;
                 std::cout << "Uncontraction     : " << uncontraction_ms << std::endl;
                 std::cout << "Refinement        : " << refinement_ms << std::endl;
+                std::cout << "Down/Upload       : " << down_up_load_ms << std::endl;
                 std::cout << "Misc              : " << misc_ms << std::endl;
-                std::cout << "ALL               : " << misc_ms + coarsening_ms + contraction_ms + initial_partitioning_ms + uncontraction_ms + refinement_ms << std::endl;
+                std::cout << "ALL               : " << misc_ms + coarsening_ms + contraction_ms + initial_partitioning_ms + uncontraction_ms + refinement_ms + down_up_load_ms << std::endl;
             }
 
             if (config.verbose_level >= 2) {
@@ -243,7 +252,7 @@ namespace GPU_HeiPa {
         void internal_solve(HostGraph &host_g) {
             initialize(host_g);
 
-            const partition_t c = 8;
+            const partition_t c = 32;
             const partition_t max_n = c * k;
 
             u32 level = 0;
@@ -332,7 +341,7 @@ namespace GPU_HeiPa {
             distances = config.distance;
             lmax = (weight_t) std::ceil((1.0 + config.imbalance) * ((f64) host_g.g_weight / (f64) config.k));
 
-            graphs.emplace_back(from_HostGraph(host_g, mem_stack, down_upload_ms, exec_space));
+            graphs.emplace_back(from_HostGraph(host_g, mem_stack, down_up_load_ms, exec_space));
 
             // initialize distance oracle
             HEIPA_PROFILE_SCOPE("misc", "distance_oracle", "initialize");
@@ -400,9 +409,11 @@ namespace GPU_HeiPa {
             auto p = get_time_point();
 
             if (config.initial_partitioning == "global_multisection") {
-                global_multisection(graphs.back(), config.hierarchy, k, config.imbalance, config.seed, partition, exec_space);
+                global_multisection(graphs.back(), config.hierarchy, k, config.imbalance, config.seed, config.seq_partitioner, partition, exec_space);
+            } else if (config.initial_partitioning == "gpu_global_multisection") {
+                gpu_global_multisection(graphs.back(), config.hierarchy, k, config.imbalance, config.seed, partition, mem_stack, exec_space);
             } else if (config.initial_partitioning == "gpu_bisection") {
-                gpu_bisect_partition(graphs.back(), config.hierarchy, k, config.imbalance, config.seed, 24, partition, mem_stack, exec_space);
+                gpu_bisect_partition(graphs.back(), config.hierarchy, k, config.imbalance, config.seed, 16, partition, mem_stack, exec_space);
             } else {
                 std::cerr << "Unknown initial partitioning config: " << config.initial_partitioning << std::endl;
                 exit(EXIT_FAILURE);
@@ -422,6 +433,9 @@ namespace GPU_HeiPa {
             curr_comm_cost = initial_comm_cost;
             initial_max_block_weight = max_weight(partition);
             curr_max_block_weight = initial_max_block_weight;
+            initial_empty_partitions = n_empty_blocks(partition);
+            initial_oload_partitions = n_oload_blocks(partition);
+            initial_sum_oload_weight = sum_oload_weight(partition);
 
             exec_space.fence();
             initial_partitioning_ms += get_milli_seconds(p, get_time_point());

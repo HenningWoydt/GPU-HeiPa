@@ -34,6 +34,66 @@
 #include "../datastructures/partition.h"
 
 namespace GPU_HeiPa {
+    inline void metis_partition_host(HostGraph &g,
+                                     int k,
+                                     f64 imbalance,
+                                     u64 seed,
+                                     HostPartition &host_part) {
+        HEIPA_PROFILE_SCOPE("initial_partitioning", "metis_partition", "total");
+        idx_t nvtxs = static_cast<idx_t>(g.n);
+        idx_t ncon = 1; 
+        idx_t nparts = static_cast<idx_t>(k);
+        
+        static_assert(sizeof(idx_t) == sizeof(int32_t) || sizeof(idx_t) == sizeof(int64_t), "Unsupported METIS idx_t size");
+
+        std::vector<idx_t> metis_xadj(g.n + 1);
+        std::vector<idx_t> metis_adjncy(g.m);
+        std::vector<idx_t> metis_vwgt;
+        std::vector<idx_t> metis_adjwgt;
+        std::vector<idx_t> metis_part(g.n);
+
+        HEIPA_PROFILE_SCOPE("misc", "metis_partition", "type_conversion");
+        for (vertex_t i = 0; i <= g.n; ++i) metis_xadj[i] = static_cast<idx_t>(g.neighborhood(i));
+        for (vertex_t i = 0; i < g.m; ++i) metis_adjncy[i] = static_cast<idx_t>(g.edges_v(i));
+
+        if (!g.uniform_vertex_weights) {
+            metis_vwgt.resize(g.n);
+            for (vertex_t i = 0; i < g.n; ++i) metis_vwgt[i] = static_cast<idx_t>(g.weights(i));
+        }
+
+        if (!g.uniform_edge_weights) {
+            metis_adjwgt.resize(g.m);
+            for (vertex_t i = 0; i < g.m; ++i) metis_adjwgt[i] = static_cast<idx_t>(g.edges_w(i));
+        }
+
+        idx_t options[METIS_NOPTIONS];
+        METIS_SetDefaultOptions(options);
+        options[METIS_OPTION_SEED] = static_cast<idx_t>(seed);
+        options[METIS_OPTION_UFACTOR] = static_cast<idx_t>(imbalance * 1000.0); 
+
+        idx_t objval;
+        HEIPA_PROFILE_SCOPE("misc", "metis_partition", "metis_core_call");
+        int result = METIS_PartGraphKway(&nvtxs,
+                                         &ncon,
+                                         metis_xadj.data(),
+                                         metis_adjncy.data(),
+                                         g.uniform_vertex_weights ? nullptr : metis_vwgt.data(),
+                                         nullptr, 
+                                         g.uniform_edge_weights ? nullptr : metis_adjwgt.data(),
+                                         &nparts,
+                                         nullptr, 
+                                         nullptr, 
+                                         options,
+                                         &objval,
+                                         metis_part.data());
+
+        if (result != METIS_OK) {
+            printf("METIS_PartGraphKway failed with error code %d\n", result);
+        }
+
+        for (vertex_t i = 0; i < g.n; ++i) host_part(i) = static_cast<partition_t>(metis_part[i]);
+    }
+
     inline void metis_partition(Graph &g,
                                 int k,
                                 f64 imbalance,

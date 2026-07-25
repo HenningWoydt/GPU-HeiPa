@@ -221,6 +221,7 @@ namespace GPU_HeiPa {
 
         u32 nc;
         Kokkos::deep_copy(exec_space, nc, Kokkos::subview(d_nc, 0));
+        exec_space.fence();
         mapping.coarse_n = nc;
 
         pop_back(mem_stack); // d_nc

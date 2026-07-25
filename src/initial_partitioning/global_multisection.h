@@ -34,6 +34,7 @@
 #include "../datastructures/graph.h"
 #include "../datastructures/partition.h"
 #include "kway_partitioner/kway_core.h"
+#include "metis_wrapper.h"
 
 namespace GPU_HeiPa {
     inline f64 determine_adaptive_imbalance(const f64 global_imbalance,
@@ -141,6 +142,7 @@ namespace GPU_HeiPa {
                                     partition_t global_k,
                                     vertex_t global_n,
                                     u64 seed,
+                                    const std::string &seq_partitioner,
                                     HostPartition &temp_partition,
                                     HostPartition &global_partition) {
         const partition_t l = (partition_t) hierarchy.size();
@@ -152,10 +154,11 @@ namespace GPU_HeiPa {
         #endif
 
         // partition current graph into k_here blocks (writes temp_partition for vertices 0..g.n-1)
-        // kaffpa_partition(g, (int) k, imb, seed, temp_partition, FAST);
-        // metis_partition(g, (int) k, imb, seed, temp_partition, METIS_KWAY);
-        kway_partition(g, (int) k, imb, seed, temp_partition);
-        // recursive_bisec_partition(g, k, imb, seed, temp_partition);
+        if (seq_partitioner == "metis") {
+            metis_partition_host(g, (int) k, imb, seed, temp_partition);
+        } else {
+            kway_partition(g, (int) k, imb, seed, temp_partition);
+        }
 
         #if ASSERT_ENABLED
         for (vertex_t u = 0; u < g.n; ++u) { ASSERT(temp_partition[u] < k); }
@@ -193,6 +196,7 @@ namespace GPU_HeiPa {
                                 global_k,
                                 global_n,
                                 seed,
+                                seq_partitioner,
                                 temp_partition,
                                 global_partition);
             identifier.pop_back();
@@ -204,6 +208,7 @@ namespace GPU_HeiPa {
                                          partition_t k,
                                          f64 imbalance,
                                          u64 seed,
+                                         const std::string &seq_partitioner,
                                          HostPartition &partition) {
         HEIPA_PROFILE_SCOPE("initial_partitioning", "global_multisection", "global_multisection_host");
 
@@ -247,6 +252,7 @@ namespace GPU_HeiPa {
                             global_k,
                             g.n,
                             seed,
+                            seq_partitioner,
                             temp_partition,
                             partition);
     }
@@ -256,6 +262,7 @@ namespace GPU_HeiPa {
                                     partition_t k,
                                     f64 imbalance,
                                     u64 seed,
+                                    const std::string &seq_partitioner,
                                     Partition &partition,
                                     DeviceExecutionSpace &exec_space) {
         HEIPA_PROFILE_SCOPE("initial_partitioning", "global_multisection", "init_host");
@@ -266,7 +273,7 @@ namespace GPU_HeiPa {
         host_g = to_host_graph(g, exec_space);
         host_partition = HostPartition(Kokkos::view_alloc(Kokkos::WithoutInitializing, "host_partition"), g.n);
 
-        global_multisection_host(host_g, hierarchy, k, imbalance, seed, host_partition);
+        global_multisection_host(host_g, hierarchy, k, imbalance, seed, seq_partitioner, host_partition);
 
         // upload the partition
         HEIPA_PROFILE_SCOPE("initial_partitioning", "global_multisection", "upload_partition");

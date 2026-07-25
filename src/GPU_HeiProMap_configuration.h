@@ -45,7 +45,8 @@ namespace GPU_HeiPa {
             {"--config", "-c", "Algorithm Config {IM, HM, HM-ultra}.", "", "", false},
             {"--verbose-level", "", "Whether to print.", "1", "", false},
             {"--n-bytes-requested", "", "Total bytes requested from device.", "8589934592", "", false},
-            {"--initial-partitioning", "", "Initial partitioning algorithm {global_multisection, gpu_bisection}", "gpu_bisection", "", false},
+            {"--initial-partitioning", "", "Initial partitioning algorithm {global_multisection, gpu_bisection}", "global_multisection", "", false},
+            {"--seq-partitioner", "", "Sequential partitioning algorithm {kway, metis}. Only useful if global_multisection is used.", "kway", "", false},
         };
 
     public:
@@ -69,7 +70,8 @@ namespace GPU_HeiPa {
         std::string config;
         
         // initial partitioning algorithm
-        std::string initial_partitioning = "gpu_bisection";
+        std::string initial_partitioning = "global_multisection";
+        std::string seq_partitioner = "kway";
 
         // random initialization
         u64 seed = 0;
@@ -126,6 +128,7 @@ namespace GPU_HeiPa {
             config = get("--config");
 
             initial_partitioning = get("--initial-partitioning");
+            seq_partitioner = get("--seq-partitioner");
 
             // random initialization
             seed = std::random_device{}();
@@ -213,6 +216,8 @@ namespace GPU_HeiPa {
             s += tabs + to_JSON_MACRO(config);
             s += tabs + to_JSON_MACRO(seed);
             s += tabs + to_JSON_MACRO(device_space);
+            s += tabs + to_JSON_MACRO(initial_partitioning);
+            s += tabs + to_JSON_MACRO(seq_partitioner);
 
             s.pop_back();
             s.pop_back();
