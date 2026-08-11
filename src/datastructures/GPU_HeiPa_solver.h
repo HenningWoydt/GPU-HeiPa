@@ -104,7 +104,7 @@ namespace GPU_HeiPa {
         std::vector<level_info> level_infos;
         #endif
 
-        inline void print_level_row(const level_info &L) {
+        static inline void print_level_row(const level_info &L) {
             std::cout
                     << std::setw(3) << L.level << " | "
                     << std::setw(8) << L.n << " | "
@@ -122,7 +122,7 @@ namespace GPU_HeiPa {
                     << "\n";
         }
 
-        inline void print_all_levels(const std::vector<level_info> &infos) {
+        static inline void print_all_levels(const std::vector<level_info> &infos) {
             std::cout
                     << std::setw(3) << "Lvl" << " | "
                     << std::setw(8) << "n" << " | "
@@ -149,95 +149,31 @@ namespace GPU_HeiPa {
         }
 
         Solver(Graph &dev_g,
-               partition_t t_k,
-               f64 imbalance,
-               u64 seed,
-               bool t_use_ultra,
+               Configuration t_config,
                UnmanagedDevicePartition &dev_partition,
                KokkosMemoryStack &dev_mem_stack,
-               DeviceExecutionSpace &t_exec_space) : exec_space(t_exec_space) {
+               DeviceExecutionSpace &t_exec_space) : config(std::move(t_config)), exec_space(t_exec_space) {
             // Main stack: Graph + coarsening overhead
             HEIPA_PROFILE_SCOPE("hm", "solver", "initialize");
 
             n = dev_g.n;
             m = dev_g.m;
-            k = t_k;
-            lmax = (weight_t) std::ceil((1.0 + imbalance) * ((f64) dev_g.g_weight / (f64) k));
-
-            config.imbalance = imbalance;
-            config.k = k;
-            config.seed = seed;
-            config.verbose_level = 0; // or whatever you want
-            use_ultra = t_use_ultra;
+            k = config.k;
+            lmax = (weight_t) std::ceil((1.0 + config.imbalance) * ((f64) dev_g.g_weight / (f64) k));
+            use_ultra = config.config == "ultra";
 
             graphs.emplace_back(dev_g);
 
             partition = initialize_partition(n, k, lmax, dev_mem_stack, exec_space);
 
+            KOKKOS_PROFILE_FENCE(exec_space);
             assert_state_pre_partition(graphs.back(), exec_space);
 
-            const partition_t c = 8;
-            const partition_t max_n = c * k;
-
-            u32 level = 0;
-            while (graphs.back().n > max_n) {
-                #if ENABLE_PROFILER
-                level_infos.emplace_back();
-                level_infos[level].level = level;
-                level_infos[level].n = graphs.back().n;
-                level_infos[level].m = graphs.back().m;
-                #endif
-                coarsening(level, dev_mem_stack);
-                contraction(level, dev_mem_stack);
-
-                level += 1;
-            }
-
-            #if ENABLE_PROFILER
-            level_infos.emplace_back();
-            level_infos[level].level = level;
-            level_infos[level].n = graphs.back().n;
-            level_infos[level].m = graphs.back().m;
-            #endif
-
-            initial_partitioning(dev_mem_stack);
-
-            #if ENABLE_PROFILER
-            level_infos[level].max_b_weight = max_weight(partition);
-            level_infos[level].imb = (f64) level_infos[level].max_b_weight / ((f64) dev_g.g_weight / (f64) config.k);
-            if (graphs.back().uniform_edge_weights) {
-                level_infos[level].edge_cut = edge_cut<true>(graphs.back(), partition, exec_space);
-            } else {
-                level_infos[level].edge_cut = edge_cut<false>(graphs.back(), partition, exec_space);
-            }
-            level_infos[level].empty_partitions = n_empty_blocks(partition);
-            level_infos[level].oload_partitions = n_oload_blocks(partition);
-            level_infos[level].sum_oload_weights = sum_oload_weight(partition);
-            #endif
-
-            while (!mappings.empty()) {
-                level -= 1;
-
-                uncontraction(level, dev_mem_stack);
-                refinement(level, dev_mem_stack);
-
-                #if ENABLE_PROFILER
-                level_infos[level].max_b_weight = max_weight(partition);
-                level_infos[level].imb = (f64) level_infos[level].max_b_weight / ((f64) dev_g.g_weight / (f64) config.k);
-                if (graphs.back().uniform_edge_weights) {
-                    level_infos[level].edge_cut = edge_cut<true>(graphs.back(), partition, exec_space);
-                } else {
-                    level_infos[level].edge_cut = edge_cut<false>(graphs.back(), partition, exec_space);
-                }
-                level_infos[level].empty_partitions = n_empty_blocks(partition);
-                level_infos[level].oload_partitions = n_oload_blocks(partition);
-                level_infos[level].sum_oload_weights = sum_oload_weight(partition);
-                #endif
-            }
+            solve_device_graph(dev_mem_stack);
 
             HEIPA_PROFILE_SCOPE("hm", "solver", "copy_res");
             Kokkos::deep_copy(exec_space, dev_partition, partition.map);
-            exec_space.fence("deep_copy dev_partition");
+            KOKKOS_PROFILE_FENCE(exec_space);
 
             free_partition(partition, dev_mem_stack);
         }
@@ -247,15 +183,15 @@ namespace GPU_HeiPa {
 
             KokkosMemoryStack mem_stack = initialize_kokkos_memory_stack(config.n_bytes_requested, "Stack");
 
-            internal_solve(host_g, mem_stack);
+            initialize(host_g, mem_stack);
+            solve_device_graph(mem_stack);
 
             auto p = get_time_point();
 
             HEIPA_PROFILE_SCOPE("up/download", "Solver", "download_partition");
-            HostPartition host_partition;
-            host_partition = HostPartition(Kokkos::view_alloc(Kokkos::WithoutInitializing, "host_partition"), graphs.back().n);
+            HostPartition host_partition = HostPartition(Kokkos::view_alloc(Kokkos::WithoutInitializing, "host_partition"), graphs.back().n);
             Kokkos::deep_copy(exec_space, host_partition, partition.map);
-            exec_space.fence("deep_copy host_partition");
+            exec_space.fence();
 
             f64 down_ms = get_milli_seconds(p, get_time_point());
             down_up_load_ms += down_ms;
@@ -272,6 +208,7 @@ namespace GPU_HeiPa {
                     n_overloaded_partitions += partition_host.bweights(id) > lmax;
                     sum_too_much += std::max((weight_t) 0, partition_host.bweights(id) - lmax);
                 }
+                KOKKOS_PROFILE_FENCE(exec_space);
             }
 
             // free all memory
@@ -283,6 +220,7 @@ namespace GPU_HeiPa {
 
             assert_is_empty(mem_stack);
             destroy(mem_stack);
+            KOKKOS_PROFILE_FENCE(exec_space);
 
             misc_ms += get_milli_seconds(p, get_time_point());
             misc_ms -= down_ms;
@@ -332,8 +270,7 @@ namespace GPU_HeiPa {
         }
 
     private:
-        void internal_solve(HostGraph &host_g, KokkosMemoryStack &mem_stack) {
-            initialize(host_g, mem_stack);
+        void solve_device_graph(KokkosMemoryStack &mem_stack) {
 
             partition_t c = 16;
             if (config.initial_partitioning == "kway") { c = 8; }
@@ -371,7 +308,7 @@ namespace GPU_HeiPa {
             #if ENABLE_PROFILER
             HEIPA_PROFILE_SCOPE("misc", "internal_solve", "overhead");
             level_infos[level].max_b_weight = max_weight(partition);
-            level_infos[level].imb = (f64) level_infos[level].max_b_weight / ((f64) host_g.g_weight / (f64) config.k);
+            level_infos[level].imb = (f64) level_infos[level].max_b_weight / ((f64) graphs[0].g_weight / (f64) config.k);
             if (graphs.back().uniform_edge_weights) {
                 level_infos[level].edge_cut = edge_cut<true>(graphs.back(), partition, exec_space);
             } else {
@@ -392,7 +329,7 @@ namespace GPU_HeiPa {
                 #if ENABLE_PROFILER
                 HEIPA_PROFILE_SCOPE("misc", "internal_solve", "overhead");
                 level_infos[level].max_b_weight = max_weight(partition);
-                level_infos[level].imb = (f64) level_infos[level].max_b_weight / ((f64) host_g.g_weight / (f64) config.k);
+                level_infos[level].imb = (f64) level_infos[level].max_b_weight / ((f64) graphs[0].g_weight / (f64) config.k);
                 if (graphs.back().uniform_edge_weights) {
                     level_infos[level].edge_cut = edge_cut<true>(graphs.back(), partition, exec_space);
                 } else {

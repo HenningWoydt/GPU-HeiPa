@@ -68,6 +68,7 @@ namespace GPU_HeiPa {
 
         // partitioning algorithm
         std::string config;
+        bool use_ultra = false;
         
         // initial partitioning algorithm
         std::string initial_partitioning = "global_multisection";
@@ -126,6 +127,9 @@ namespace GPU_HeiPa {
 
             // partitioning algorithm
             config = get("--config");
+            if (config.find("ultra") != std::string::npos) {
+                use_ultra = true;
+            }
 
             initial_partitioning = get("--initial-partitioning");
             seq_partitioner = get("--seq-partitioner");
@@ -214,6 +218,7 @@ namespace GPU_HeiPa {
             s += tabs + to_JSON_MACRO(k);
             s += tabs + to_JSON_MACRO(imbalance);
             s += tabs + to_JSON_MACRO(config);
+            s += tabs + to_JSON_MACRO(use_ultra);
             s += tabs + to_JSON_MACRO(seed);
             s += tabs + to_JSON_MACRO(device_space);
             s += tabs + to_JSON_MACRO(initial_partitioning);

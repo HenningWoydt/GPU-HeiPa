@@ -33,24 +33,21 @@
 #include "../definitions.h"
 #include "../datastructures/graph.h"
 #include "../datastructures/GPU_HeiPa_solver.h"
+#include "../GPU_HeiProMap_configuration.h"
 
 namespace GPU_HeiPa {
     inline void gpu_heipa_partition(Graph &device_g,
-                                    partition_t k,
-                                    f64 imbalance,
-                                    u64 seed,
-                                    bool use_ultra,
+                                    const Configuration &config,
                                     UnmanagedDevicePartition &partition,
                                     KokkosMemoryStack &mem_stack,
                                     DeviceExecutionSpace &exec_space) {
-        if (k == 1) {
+        if (config.k == 1) {
             HEIPA_PROFILE_SCOPE("hm", "recursive", "partition k=1");
             Kokkos::deep_copy(exec_space, partition, 0);
-            exec_space.fence();
             return;
         }
 
-        Solver solver(device_g, k, imbalance, seed, use_ultra, partition, mem_stack, exec_space);
+        Solver solver(device_g, config, partition, mem_stack, exec_space);
     }
 
     template<bool uniform_vw, bool uniform_ew>
@@ -76,11 +73,20 @@ namespace GPU_HeiPa {
 
         // Allocate temp partition for *this* node
         UnmanagedDevicePartition tmp_part = UnmanagedDevicePartition((partition_t *) get_chunk_front(mem_stack, sizeof(partition_t) * device_g.n), device_g.n);
+        KOKKOS_PROFILE_FENCE(exec_space);
 
         const f64 imb = determine_adaptive_imbalance(global_imbalance, global_g_weight, global_k, device_g.g_weight, k_rem[l - 1 - identifier.size()], l - identifier.size());
 
+        Configuration heipa_config;
+        heipa_config.k = k;
+        heipa_config.imbalance = imb;
+        heipa_config.seed = seed;
+        heipa_config.config = use_ultra ? "ultra" : "default";
+        heipa_config.verbose_level = 0;
+        heipa_config.initial_partitioning = "kway";
+
         // 1) Partition current device graph into k blocks
-        gpu_heipa_partition(device_g, k, imb, seed, use_ultra, tmp_part, mem_stack, exec_space);
+        gpu_heipa_partition(device_g, heipa_config, tmp_part, mem_stack, exec_space);
 
         // 2) Leaf: last split -> write into global_partition
         if (identifier.size() == (size_t) (l - 1)) {
@@ -93,7 +99,7 @@ namespace GPU_HeiPa {
                 const vertex_t orig_u = n_to_o(u);
                 global_partition(orig_u) = offset + tmp_part(u);
             });
-            exec_space.fence();
+            KOKKOS_PROFILE_FENCE(exec_space);
 
             pop_front(mem_stack); // tmp_part
             return;
@@ -127,8 +133,6 @@ namespace GPU_HeiPa {
                 }
             }, sub_m);
 
-            exec_space.fence();
-
             // Empty block => skip
             if (sub_n == 0) {
                 continue;
@@ -154,11 +158,9 @@ namespace GPU_HeiPa {
                     prefix += 1;
                 }
             });
-            exec_space.fence();
 
             // init neighborhood(0)
             Kokkos::parallel_for("InitNeighborhood0", Kokkos::RangePolicy<DeviceExecutionSpace>(exec_space, 0, 1), KOKKOS_LAMBDA(const int) { child_g.neighborhood(0) = 0; });
-            exec_space.fence();
 
             // --- Fill edges + neighborhood offsets
             Kokkos::parallel_scan("FillEdges", Kokkos::RangePolicy<DeviceExecutionSpace>(exec_space, 0, device_g.n), KOKKOS_LAMBDA(const vertex_t u, u32 &edge_prefix, const bool final) {
@@ -189,7 +191,6 @@ namespace GPU_HeiPa {
                     edge_prefix += cnt;
                 }
             });
-            exec_space.fence();
 
             // fill the u array
             Kokkos::parallel_for("fill_edges_u", Kokkos::RangePolicy<DeviceExecutionSpace>(exec_space, 0, child_g.n), KOKKOS_LAMBDA(const vertex_t u) {
@@ -199,7 +200,6 @@ namespace GPU_HeiPa {
                     child_g.edges_u(i) = u;
                 }
             });
-            exec_space.fence();
 
             // We no longer need child_o_to_n after edges built
             pop_back(mem_stack);
@@ -236,51 +236,46 @@ namespace GPU_HeiPa {
     }
 
     inline HostPartition hierarchical_multisection(const HostGraph &g,
-                                                   const std::vector<partition_t> &hierarchy,
-                                                   partition_t global_k,
-                                                   f64 imbalance,
-                                                   u64 seed,
-                                                   bool use_ultra) {
+                                                   const ProMapConfiguration &config) {
         HEIPA_PROFILE_SCOPE("hm", "initialize", "allocate");
 
         DeviceExecutionSpace exec_space = DeviceExecutionSpace();
 
-        KokkosMemoryStack mem_stack = initialize_kokkos_memory_stack(30 * (size_t) g.n * sizeof(vertex_t) + 10 * (size_t) g.m * sizeof(vertex_t), "Stack");
+        KokkosMemoryStack mem_stack = initialize_kokkos_memory_stack(config.n_bytes_requested, "Stack");
 
         f64 time = 0.0;
         Graph dev_g = from_HostGraph(g, mem_stack, time, exec_space);
         UnmanagedDevicePartition dev_global_part = UnmanagedDevicePartition((partition_t *) get_chunk_front(mem_stack, sizeof(partition_t) * g.n), g.n);
         UnmanagedDeviceVertex dev_n_to_o = UnmanagedDeviceVertex((vertex_t *) get_chunk_front(mem_stack, sizeof(vertex_t) * g.n), g.n);
-        exec_space.fence();
+        KOKKOS_PROFILE_FENCE(exec_space);
 
         Kokkos::parallel_for("InitIdMap", Kokkos::RangePolicy<DeviceExecutionSpace>(exec_space, 0, g.n), KOKKOS_LAMBDA(const vertex_t u) { dev_n_to_o(u) = u; });
-        exec_space.fence();
 
-        partition_t l = (partition_t) hierarchy.size();
+        partition_t l = (partition_t) config.hierarchy.size();
 
         // index_vec as in your iterative version
         std::vector<partition_t> index_vec = {1};
-        for (partition_t i = 0; i < l - 1; ++i) { index_vec.push_back(index_vec[i] * hierarchy[i]); }
+        for (partition_t i = 0; i < l - 1; ++i) { index_vec.push_back(index_vec[i] * config.hierarchy[i]); }
 
         // k_rem as in your iterative version
         std::vector<partition_t> k_rem(l);
         u32 p = 1;
         for (partition_t i = 0; i < l; ++i) {
-            k_rem[i] = p * hierarchy[i];
-            p *= hierarchy[i];
+            k_rem[i] = p * config.hierarchy[i];
+            p *= config.hierarchy[i];
         }
 
         std::vector<partition_t> identifier;
         identifier.reserve(l);
 
         if (dev_g.uniform_vertex_weights && dev_g.uniform_edge_weights) {
-            recursive_multisection_device<true, true>(dev_g, dev_n_to_o, hierarchy, (u64) (l - 1), imbalance, g.g_weight, global_k, g.n, seed, use_ultra, index_vec, k_rem, identifier, dev_global_part, mem_stack, exec_space);
+            recursive_multisection_device<true, true>(dev_g, dev_n_to_o, config.hierarchy, (u64) (l - 1), config.imbalance, g.g_weight, config.k, g.n, config.seed, config.use_ultra, index_vec, k_rem, identifier, dev_global_part, mem_stack, exec_space);
         } else if (dev_g.uniform_vertex_weights) {
-            recursive_multisection_device<true, false>(dev_g, dev_n_to_o, hierarchy, (u64) (l - 1), imbalance, g.g_weight, global_k, g.n, seed, use_ultra, index_vec, k_rem, identifier, dev_global_part, mem_stack, exec_space);
+            recursive_multisection_device<true, false>(dev_g, dev_n_to_o, config.hierarchy, (u64) (l - 1), config.imbalance, g.g_weight, config.k, g.n, config.seed, config.use_ultra, index_vec, k_rem, identifier, dev_global_part, mem_stack, exec_space);
         } else if (dev_g.uniform_edge_weights) {
-            recursive_multisection_device<false, true>(dev_g, dev_n_to_o, hierarchy, (u64) (l - 1), imbalance, g.g_weight, global_k, g.n, seed, use_ultra, index_vec, k_rem, identifier, dev_global_part, mem_stack, exec_space);
+            recursive_multisection_device<false, true>(dev_g, dev_n_to_o, config.hierarchy, (u64) (l - 1), config.imbalance, g.g_weight, config.k, g.n, config.seed, config.use_ultra, index_vec, k_rem, identifier, dev_global_part, mem_stack, exec_space);
         } else {
-            recursive_multisection_device<false, false>(dev_g, dev_n_to_o, hierarchy, (u64) (l - 1), imbalance, g.g_weight, global_k, g.n, seed, use_ultra, index_vec, k_rem, identifier, dev_global_part, mem_stack, exec_space);
+            recursive_multisection_device<false, false>(dev_g, dev_n_to_o, config.hierarchy, (u64) (l - 1), config.imbalance, g.g_weight, config.k, g.n, config.seed, config.use_ultra, index_vec, k_rem, identifier, dev_global_part, mem_stack, exec_space);
         }
 
         HEIPA_PROFILE_SCOPE("hm", "io", "copy_to_host");
@@ -288,7 +283,7 @@ namespace GPU_HeiPa {
         // copy back to host
         HostPartition host_part = HostPartition(Kokkos::view_alloc(Kokkos::WithoutInitializing, "host_partition"), g.n);;
         Kokkos::deep_copy(exec_space, host_part, dev_global_part);
-        exec_space.fence();
+        KOKKOS_PROFILE_FENCE(exec_space);
 
         // cleanup (reverse order)
         pop_front(mem_stack); // dev_n_to_o

@@ -244,8 +244,7 @@ namespace GPU_HeiPa {
         }
 
         HostPartition solve_multisection(HostGraph &host_g) {
-            bool use_ultra = config.config == "HM-ultra";
-            return hierarchical_multisection(host_g, config.hierarchy, config.k, config.imbalance, config.seed, use_ultra);
+            return hierarchical_multisection(host_g, config);
         }
 
     private:
