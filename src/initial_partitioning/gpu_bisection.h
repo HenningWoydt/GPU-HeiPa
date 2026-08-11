@@ -531,8 +531,10 @@ namespace GPU_HeiPa {
             }
 
             const partition_t tk = current_targets_dev(graph_id);
-            const weight_t lmax_left = lmax_global * (tk / 2);
-            const weight_t lmax_right = lmax_global * (tk - tk / 2);
+            const partition_t left_tk = tk & 0xFFFF;
+            const partition_t right_tk = tk >> 16;
+            const weight_t lmax_left = lmax_global * left_tk;
+            const weight_t lmax_right = lmax_global * right_tk;
             const weight_t g_weight = d_actual_g_weight(graph_id);
 
             u8 *base = g_mem.data() + (u64) graph_id * n_bytes_one_graph;
@@ -588,17 +590,19 @@ namespace GPU_HeiPa {
                             best_v = v;
                         }
                     }
+
                     if (best_v == gn) break;
                     weight_t vw = uvw ? 1 : g_w[best_v];
                     if (w1 + vw > g_weight / 2) break;
+
                     add_to_part(best_v);
                 }
 
                 const weight_t wl = g_weight - w1;
                 const u64 p_l = wl > lmax_left ? (u64) (wl - lmax_left) : 0;
                 const u64 p_r = w1 > lmax_right ? (u64) (w1 - lmax_right) : 0;
-                u64 penalty = p_l * p_l + p_r * p_r;
 
+                u64 penalty = p_l * p_l + p_r * p_r;
                 if (wl == 0 || w1 == 0) penalty += EMPTY_BLOCK_PENALTY;
 
                 if (penalty < heuristic_best.penalty || (penalty == heuristic_best.penalty && cut < heuristic_best.cut)) {
@@ -729,8 +733,10 @@ namespace GPU_HeiPa {
                 if (gn <= 1) return;
 
                 const partition_t tk = current_targets_dev(graph_id);
-                const weight_t lmax_left = lmax_global * (tk / 2);
-                const weight_t lmax_right = lmax_global * (tk - tk / 2);
+                const partition_t left_tk = tk & 0xFFFF;
+                const partition_t right_tk = tk >> 16;
+                const weight_t lmax_left = lmax_global * left_tk;
+                const weight_t lmax_right = lmax_global * right_tk;
                 const weight_t g_weight = d_actual_g_weight(graph_id);
 
                 u8 *base = g_mem.data() + (u64) graph_id * n_bytes_one_graph;
@@ -853,8 +859,10 @@ namespace GPU_HeiPa {
             const vertex_t gn = d_actual_n(graph_id);
             const u32 gm = d_actual_m(graph_id);
             const partition_t tk = current_targets_dev(graph_id);
-            const weight_t lmax_left = lmax_global * (tk / 2);
-            const weight_t lmax_right = lmax_global * (tk - tk / 2);
+            const partition_t left_tk = tk & 0xFFFF;
+            const partition_t right_tk = tk >> 16;
+            const weight_t lmax_left = lmax_global * left_tk;
+            const weight_t lmax_right = lmax_global * right_tk;
             const weight_t g_weight = d_actual_g_weight(graph_id);
             const vertex_t last = gn - 1;
             const u64 num_configs = 1ULL << last;

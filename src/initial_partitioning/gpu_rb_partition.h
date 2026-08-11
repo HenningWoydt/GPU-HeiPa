@@ -95,7 +95,9 @@ namespace GPU_HeiPa {
         HEIPA_PROFILE_SCOPE("initial_partitioning", "gpu_rb_partition", "init_targets");
         Kokkos::parallel_for("init_targets", Kokkos::RangePolicy<DeviceExecutionSpace>(exec_space, 0, k), KOKKOS_LAMBDA(const int id) {
             partition.bweights(id) = (id == 0) ? g.g_weight : 0;
-            current_targets_dev(id) = (id == 0) ? k : 0;
+            partition_t left_k = k / 2;
+            partition_t right_k = k - left_k;
+            current_targets_dev(id) = (id == 0) ? ((left_k & 0xFFFF) | (right_k << 16)) : 0;
         });
         KOKKOS_PROFILE_FENCE(exec_space);
 
@@ -141,7 +143,11 @@ namespace GPU_HeiPa {
                     for (u32 id = 0; id < k; ++id) {
                         bool active = false;
                         
-                        if (current_targets_dev(id) > 1) {
+                        partition_t packed_targets = current_targets_dev(id);
+                        partition_t left_targets = packed_targets & 0xFFFF;
+                        partition_t right_targets = packed_targets >> 16;
+                        
+                        if (left_targets + right_targets > 1) {
                             if (has_mapping) {
                                 active = (bsizes(id) > threshold);
                             } else {
@@ -188,9 +194,10 @@ namespace GPU_HeiPa {
                     if (!active_mask(id)) return;
 
                     // 2. Calculate targets for left and right bisection splits
-                    partition_t total_targets = current_targets_dev(id);
-                    partition_t left_targets = total_targets / 2;
-                    partition_t right_targets = total_targets - left_targets;
+                    partition_t packed_targets = current_targets_dev(id);
+                    partition_t left_targets = packed_targets & 0xFFFF;
+                    partition_t right_targets = packed_targets >> 16;
+                    partition_t total_targets = left_targets + right_targets;
 
                     vertex_t sub_n = d_actual_n(id);
                     partition_t *sub_part_ptr = batch.get_partition_ptr(id);
@@ -198,8 +205,12 @@ namespace GPU_HeiPa {
 
                     // 3. Update the global targets array for the next level of bisection
                     Kokkos::single(Kokkos::PerTeam(team), [&]() {
-                        current_targets_dev(id) = left_targets;
-                        current_targets_dev(id + left_targets) = right_targets;
+                        partition_t left_l_k = left_targets / 2;
+                        partition_t left_r_k = left_targets - left_l_k;
+                        partition_t right_l_k = right_targets / 2;
+                        partition_t right_r_k = right_targets - right_l_k;
+                        current_targets_dev(id) = (left_l_k & 0xFFFF) | (left_r_k << 16);
+                        current_targets_dev(id + left_targets) = (right_l_k & 0xFFFF) | (right_r_k << 16);
                     });
                     team.team_barrier();
 

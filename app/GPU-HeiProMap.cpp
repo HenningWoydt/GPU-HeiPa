@@ -65,7 +65,8 @@ int main(int argc, char *argv[]) {
                 {"--imbalance", "0.03"},
                 {"--config", "IM"},
                 {"--verbose-level", "2"},
-                {"--initial-partitioning", "gpu_bisection"}
+                {"--initial-partitioning", "gpu_bisection"},
+                {"--seq-partitioner", "metis"}
             };
 
             std::vector<std::string> args = {"GPU-HeiProMap"};

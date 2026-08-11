@@ -37,13 +37,13 @@
 #include "../coarsening/two_hop_matching.h"
 #include "../initial_partitioning/global_multisection.h"
 #include "../initial_partitioning/gpu_bisection_partition.h"
+#include "../initial_partitioning/gpu_rb_partition.h"
 #include "../definitions.h"
 #include "../GPU_HeiProMap_configuration.h"
 #include "../utility/profiler.h"
 #include "../utility/asserts.h"
 #include "../distance_oracles/distance_oracle_helpers.h"
 #include "../initial_partitioning/hierarchical_multisection.h"
-#include "../initial_partitioning/gpu_global_multisection.h"
 #include "../utility/comm_cost.h"
 #include "../refinement/promap_jet_label_propagation.h"
 
@@ -410,8 +410,6 @@ namespace GPU_HeiPa {
 
             if (config.initial_partitioning == "global_multisection") {
                 global_multisection(graphs.back(), config.hierarchy, k, config.imbalance, config.seed, config.seq_partitioner, partition, exec_space);
-            } else if (config.initial_partitioning == "gpu_global_multisection") {
-                gpu_global_multisection(graphs.back(), config.hierarchy, k, config.imbalance, config.seed, partition, mem_stack, exec_space);
             } else if (config.initial_partitioning == "gpu_bisection") {
                 gpu_bisect_partition(graphs.back(), config.hierarchy, k, config.imbalance, config.seed, 16, partition, mem_stack, exec_space);
             } else {
