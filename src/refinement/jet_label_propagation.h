@@ -675,7 +675,12 @@ namespace GPU_HeiPa {
                 gain = best_id_w - own_conn;
 
                 if (best_id_w <= 0) {
-                    best_id = underloaded_blocks_b(u % n_underloaded_blocks_b());
+                    u32 n_under = n_underloaded_blocks_b();
+                    if (n_under > 0) {
+                        best_id = underloaded_blocks_b(u % n_under);
+                    } else {
+                        best_id = u_id;
+                    }
                     gain = -own_conn;
                 }
             }

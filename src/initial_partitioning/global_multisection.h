@@ -45,6 +45,10 @@ namespace GPU_HeiPa {
                                             const u64 depth) {
         f64 local_imbalance = (1.0 + global_imbalance) * ((f64) (local_k_rem * (u64) global_g_weight) / (f64) (global_k * (u64) local_g_weight));
         local_imbalance = std::pow(local_imbalance, (f64) 1 / (f64) depth) - 1.0;
+        if (local_imbalance < 0.0) {
+            std::cout << "WARNING: adaptive imbalance became negative! " << local_imbalance << " (clamping to 0.0)" << std::endl;
+            local_imbalance = 0.0;
+        }
         return local_imbalance;
     }
 

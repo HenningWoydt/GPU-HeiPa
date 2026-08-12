@@ -269,7 +269,7 @@ namespace GPU_HeiPa {
             return host_partition;
         }
 
-    private:
+    public:
         void solve_device_graph(KokkosMemoryStack &mem_stack) {
 
             partition_t c = 16;

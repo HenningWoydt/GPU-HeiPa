@@ -36,18 +36,54 @@
 #include "../GPU_HeiProMap_configuration.h"
 
 namespace GPU_HeiPa {
+
+    struct HMStats {
+        f64 coarsening_ms = 0;
+        f64 contraction_ms = 0;
+        f64 initial_partitioning_ms = 0;
+        f64 uncontraction_ms = 0;
+        f64 refinement_ms = 0;
+        f64 down_up_load_ms = 0;
+        f64 misc_ms = 0;
+        f64 subgraph_generation_ms = 0;
+
+        void print(f64 total_duration) const {
+            std::cout << "------- Time -------" << std::endl;
+            std::cout << "Total solve time  : " << total_duration << std::endl;
+            std::cout << "Coarsening        : " << coarsening_ms << std::endl;
+            std::cout << "Contraction       : " << contraction_ms << std::endl;
+            std::cout << "Init. Part.       : " << initial_partitioning_ms << std::endl;
+            std::cout << "Uncontraction     : " << uncontraction_ms << std::endl;
+            std::cout << "Refinement        : " << refinement_ms << std::endl;
+            std::cout << "Down/Upload       : " << down_up_load_ms << std::endl;
+            std::cout << "Misc              : " << misc_ms << std::endl;
+            std::cout << "Subgraph Gen.     : " << subgraph_generation_ms << std::endl;
+            std::cout << "ALL               : " << coarsening_ms + contraction_ms + initial_partitioning_ms + uncontraction_ms + refinement_ms + down_up_load_ms + misc_ms + subgraph_generation_ms << std::endl;
+        }
+    };
+
     inline void gpu_heipa_partition(Graph &device_g,
-                                    const Configuration &config,
+                                    const Configuration &heipa_config,
+                                    HMStats &stats,
                                     UnmanagedDevicePartition &partition,
                                     KokkosMemoryStack &mem_stack,
                                     DeviceExecutionSpace &exec_space) {
-        if (config.k == 1) {
+        if (heipa_config.k == 1) {
             HEIPA_PROFILE_SCOPE("hm", "recursive", "partition k=1");
             Kokkos::deep_copy(exec_space, partition, 0);
             return;
         }
 
-        Solver solver(device_g, config, partition, mem_stack, exec_space);
+        Solver solver(device_g, heipa_config, partition, mem_stack, exec_space);
+        solver.solve_device_graph(mem_stack);
+
+        stats.coarsening_ms += solver.coarsening_ms;
+        stats.contraction_ms += solver.contraction_ms;
+        stats.initial_partitioning_ms += solver.initial_partitioning_ms;
+        stats.uncontraction_ms += solver.uncontraction_ms;
+        stats.refinement_ms += solver.refinement_ms;
+        stats.down_up_load_ms += solver.down_up_load_ms;
+        stats.misc_ms += solver.misc_ms;
     }
 
     template<bool uniform_vw, bool uniform_ew>
@@ -64,6 +100,7 @@ namespace GPU_HeiPa {
                                               const std::vector<partition_t> &index_vec, // as in your host code
                                               const std::vector<partition_t> &k_rem,
                                               std::vector<partition_t> &identifier, // path of ids
+                                              HMStats &stats,
                                               UnmanagedDevicePartition &global_partition, // size global_n
                                               KokkosMemoryStack &mem_stack,
                                               DeviceExecutionSpace &exec_space) {
@@ -86,7 +123,7 @@ namespace GPU_HeiPa {
         heipa_config.initial_partitioning = "kway";
 
         // 1) Partition current device graph into k blocks
-        gpu_heipa_partition(device_g, heipa_config, tmp_part, mem_stack, exec_space);
+        gpu_heipa_partition(device_g, heipa_config, stats, tmp_part, mem_stack, exec_space);
 
         // 2) Leaf: last split -> write into global_partition
         if (identifier.size() == (size_t) (l - 1)) {
@@ -107,6 +144,7 @@ namespace GPU_HeiPa {
 
         // 3) Non-leaf: build each child and recurse immediately
         for (partition_t id = 0; id < k; ++id) {
+            auto sp_subgraph = get_time_point();
             HEIPA_PROFILE_SCOPE("hm", "recursive", "generate_subgraph");
 
             // --- First pass: compute sub_n, sub_m, sub_weight for this id
@@ -204,6 +242,8 @@ namespace GPU_HeiPa {
             // We no longer need child_o_to_n after edges built
             pop_back(mem_stack);
 
+            stats.subgraph_generation_ms += get_milli_seconds(sp_subgraph, get_time_point());
+
             // --- Recurse into this child
             identifier.push_back(id);
             recursive_multisection_device<uniform_vw, uniform_ew>(
@@ -220,6 +260,7 @@ namespace GPU_HeiPa {
                 index_vec,
                 k_rem,
                 identifier,
+                stats,
                 global_partition,
                 mem_stack,
                 exec_space
@@ -237,9 +278,11 @@ namespace GPU_HeiPa {
 
     inline HostPartition hierarchical_multisection(const HostGraph &g,
                                                    const ProMapConfiguration &config) {
+        auto sp = get_time_point();
         HEIPA_PROFILE_SCOPE("hm", "initialize", "allocate");
 
         DeviceExecutionSpace exec_space = DeviceExecutionSpace();
+        HMStats stats;
 
         KokkosMemoryStack mem_stack = initialize_kokkos_memory_stack(config.n_bytes_requested, "Stack");
 
@@ -269,13 +312,13 @@ namespace GPU_HeiPa {
         identifier.reserve(l);
 
         if (dev_g.uniform_vertex_weights && dev_g.uniform_edge_weights) {
-            recursive_multisection_device<true, true>(dev_g, dev_n_to_o, config.hierarchy, (u64) (l - 1), config.imbalance, g.g_weight, config.k, g.n, config.seed, config.use_ultra, index_vec, k_rem, identifier, dev_global_part, mem_stack, exec_space);
+            recursive_multisection_device<true, true>(dev_g, dev_n_to_o, config.hierarchy, (u64) (l - 1), config.imbalance, g.g_weight, config.k, g.n, config.seed, config.use_ultra, index_vec, k_rem, identifier, stats, dev_global_part, mem_stack, exec_space);
         } else if (dev_g.uniform_vertex_weights) {
-            recursive_multisection_device<true, false>(dev_g, dev_n_to_o, config.hierarchy, (u64) (l - 1), config.imbalance, g.g_weight, config.k, g.n, config.seed, config.use_ultra, index_vec, k_rem, identifier, dev_global_part, mem_stack, exec_space);
+            recursive_multisection_device<true, false>(dev_g, dev_n_to_o, config.hierarchy, (u64) (l - 1), config.imbalance, g.g_weight, config.k, g.n, config.seed, config.use_ultra, index_vec, k_rem, identifier, stats, dev_global_part, mem_stack, exec_space);
         } else if (dev_g.uniform_edge_weights) {
-            recursive_multisection_device<false, true>(dev_g, dev_n_to_o, config.hierarchy, (u64) (l - 1), config.imbalance, g.g_weight, config.k, g.n, config.seed, config.use_ultra, index_vec, k_rem, identifier, dev_global_part, mem_stack, exec_space);
+            recursive_multisection_device<false, true>(dev_g, dev_n_to_o, config.hierarchy, (u64) (l - 1), config.imbalance, g.g_weight, config.k, g.n, config.seed, config.use_ultra, index_vec, k_rem, identifier, stats, dev_global_part, mem_stack, exec_space);
         } else {
-            recursive_multisection_device<false, false>(dev_g, dev_n_to_o, config.hierarchy, (u64) (l - 1), config.imbalance, g.g_weight, config.k, g.n, config.seed, config.use_ultra, index_vec, k_rem, identifier, dev_global_part, mem_stack, exec_space);
+            recursive_multisection_device<false, false>(dev_g, dev_n_to_o, config.hierarchy, (u64) (l - 1), config.imbalance, g.g_weight, config.k, g.n, config.seed, config.use_ultra, index_vec, k_rem, identifier, stats, dev_global_part, mem_stack, exec_space);
         }
 
         HEIPA_PROFILE_SCOPE("hm", "io", "copy_to_host");
@@ -289,6 +332,8 @@ namespace GPU_HeiPa {
         pop_front(mem_stack); // dev_n_to_o
         pop_front(mem_stack); // dev_global_part
         free_graph(dev_g, mem_stack);
+
+        stats.print(get_milli_seconds(sp, get_time_point()));
 
         return host_part;
     }
