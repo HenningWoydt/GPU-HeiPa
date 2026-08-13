@@ -55,7 +55,8 @@ namespace GPU_HeiPa {
 
     inline void free_mapping(Mapping &mapping,
                              KokkosMemoryStack &mem_stack) {
-        pop_front(mem_stack);
+        pop_front(mem_stack); // for mapping.partners
+        pop_front(mem_stack); // for mapping.mapping
     }
 }
 

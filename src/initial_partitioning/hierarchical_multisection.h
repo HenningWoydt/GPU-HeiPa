@@ -245,6 +245,9 @@ namespace GPU_HeiPa {
             stats.subgraph_generation_ms += get_milli_seconds(sp_subgraph, get_time_point());
 
             // --- Recurse into this child
+            const size_t bytes_in_use_before = mem_stack.n_bytes_in_use;
+            const size_t bytes_in_use_back_before = mem_stack.n_bytes_in_use_back;
+            
             identifier.push_back(id);
             recursive_multisection_device<uniform_vw, uniform_ew>(
                 child_g,
@@ -266,6 +269,13 @@ namespace GPU_HeiPa {
                 exec_space
             );
             identifier.pop_back();
+            
+            if (bytes_in_use_before != mem_stack.n_bytes_in_use || bytes_in_use_back_before != mem_stack.n_bytes_in_use_back) {
+                std::cerr << "ERROR: Memory leak detected during recursion in hierarchical_multisection!" << std::endl;
+                std::cerr << "       Front before: " << bytes_in_use_before << "  after: " << mem_stack.n_bytes_in_use << std::endl;
+                std::cerr << "       Back before:  " << bytes_in_use_back_before << "  after: " << mem_stack.n_bytes_in_use_back << std::endl;
+                abort();
+            }
 
             // --- Free child allocations (reverse of allocations for this child)
             pop_front(mem_stack); // child_n_to_o
