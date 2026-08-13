@@ -41,12 +41,14 @@ namespace GPU_HeiPa {
             {"--mapping", "-m", "Output filepath to the generated mapping.", "GPU-HeiProMap_par.txt", "", false},
             {"--hierarchy", "-h", "Hierarchy in the form a1:a2:...:al .", "", "", false},
             {"--distance", "-d", "Distance in the form d1:d2:...:dl .", "", "", false},
+            {"--distance-oracle", "", "Distance oracle {matrix}.", "matrix", "", false},
             {"--imbalance", "-e", "Allowed imbalance (for example 0.03).", "0.03", "", false},
             {"--config", "-c", "Algorithm Config {IM, HM, HM-ultra}.", "", "", false},
             {"--initial-partitioning", "", "Initial partitioning algorithm {global_multisection, gpu_bisection}", "global_multisection", "", false},
             {"--seq-partitioner", "", "Sequential partitioning algorithm {kway, metis}. Only useful if global_multisection is used.", "kway", "", false},
             {"--verbose-level", "", "Whether to print.", "1", "", false},
             {"--n-bytes-requested", "", "Total bytes requested from device.", "8589934592", "", false},
+            {"--seed", "", "Random seed.", "0", "", false},
         };
 
     public:
@@ -135,7 +137,11 @@ namespace GPU_HeiPa {
             seq_partitioner = get("--seq-partitioner");
 
             // random initialization
-            seed = std::random_device{}();
+            if (is_set("--seed")) {
+                seed = std::stoull(get("--seed"));
+            } else {
+                seed = std::random_device{}();
+            }
 
             if (is_set("--verbose-level")) {
                 verbose_level = std::stoi(get("--verbose-level"));
@@ -145,7 +151,7 @@ namespace GPU_HeiPa {
                 n_bytes_requested = std::stoull(get("--n-bytes-requested"));
             }
 
-            // distance_oracle_string = get("--distance-oracle");
+            distance_oracle_string = get("--distance-oracle");
 
             device_space = get_kokkos_execution_space_as_str();
         }

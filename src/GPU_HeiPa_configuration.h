@@ -58,6 +58,7 @@ namespace GPU_HeiPa {
             {"--initial-partitioning", "", "Initial partitioning algorithm {kway, gpu_bisection, metis}.", "kway", "", false},
             {"--verbose-level", "", "Whether to print.", "1", "", false},
             {"--n-bytes-requested", "", "Total bytes requested from device.", "8589934592", "", false},
+            {"--seed", "", "Random seed.", "0", "", false},
         };
 
     public:
@@ -121,7 +122,11 @@ namespace GPU_HeiPa {
             initial_partitioning = get("--initial-partitioning");
 
             // random initialization
-            seed = std::random_device{}();
+            if (is_set("--seed")) {
+                seed = std::stoull(get("--seed"));
+            } else {
+                seed = std::random_device{}();
+            }
 
             verbose_level = 1;
             if (is_set("--verbose-level")) {
