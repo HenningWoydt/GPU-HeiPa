@@ -43,10 +43,10 @@ namespace GPU_HeiPa {
             {"--distance", "-d", "Distance in the form d1:d2:...:dl .", "", "", false},
             {"--imbalance", "-e", "Allowed imbalance (for example 0.03).", "0.03", "", false},
             {"--config", "-c", "Algorithm Config {IM, HM, HM-ultra}.", "", "", false},
-            {"--verbose-level", "", "Whether to print.", "1", "", false},
-            {"--n-bytes-requested", "", "Total bytes requested from device.", "8589934592", "", false},
             {"--initial-partitioning", "", "Initial partitioning algorithm {global_multisection, gpu_bisection}", "global_multisection", "", false},
             {"--seq-partitioner", "", "Sequential partitioning algorithm {kway, metis}. Only useful if global_multisection is used.", "kway", "", false},
+            {"--verbose-level", "", "Whether to print.", "1", "", false},
+            {"--n-bytes-requested", "", "Total bytes requested from device.", "8589934592", "", false},
         };
 
     public:

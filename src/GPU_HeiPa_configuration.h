@@ -54,9 +54,10 @@ namespace GPU_HeiPa {
             {"--k", "-k", "Number of blocks k", "", "", false},
             {"--imbalance", "-e", "Allowed imbalance (for example 0.03).", "0.03", "", false},
             {"--coarsening", "", "Coarsening Config {two-hop, independent-edge-set}.", "two-hop", "", false},
-            {"--initial-partitioning", "", "Initial partitioning algorithm {kway, gpu_bisection, metis}.", "kway", "", false},
             {"--config", "-c", "Algorithm Config {default, ultra}.", "", "", false},
+            {"--initial-partitioning", "", "Initial partitioning algorithm {kway, gpu_bisection, metis}.", "kway", "", false},
             {"--verbose-level", "", "Whether to print.", "1", "", false},
+            {"--n-bytes-requested", "", "Total bytes requested from device.", "8589934592", "", false},
         };
 
     public:
@@ -125,6 +126,10 @@ namespace GPU_HeiPa {
             verbose_level = 1;
             if (is_set("--verbose-level")) {
                 verbose_level = std::stoi(get("--verbose-level"));
+            }
+
+            if (is_set("--n-bytes-requested")) {
+                n_bytes_requested = std::stoull(get("--n-bytes-requested"));
             }
 
             device_space = get_kokkos_execution_space_as_str();
