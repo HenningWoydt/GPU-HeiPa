@@ -748,6 +748,8 @@ namespace GPU_HeiPa {
         }, lp.cut_change1);
         KOKKOS_PROFILE_FENCE(exec_space);
 
+        exec_space.fence();
+
         // update cut
         curr_max_weight = lp.max_part();
         curr_comm_cost += lp.cut_change1();
