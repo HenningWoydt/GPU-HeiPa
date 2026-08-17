@@ -304,6 +304,9 @@ namespace GPU_HeiPa {
 
         f64 time = 0.0;
         Graph dev_g = from_HostGraph(g, mem_stack, time, exec_space);
+        stats.down_up_load_ms += time;
+        
+        auto misc_start = get_time_point();
         UnmanagedDevicePartition dev_global_part = UnmanagedDevicePartition((partition_t *) get_chunk_front(mem_stack, sizeof(partition_t) * g.n), g.n);
         UnmanagedDeviceVertex dev_n_to_o = UnmanagedDeviceVertex((vertex_t *) get_chunk_front(mem_stack, sizeof(vertex_t) * g.n), g.n);
         KOKKOS_PROFILE_FENCE(exec_space);
@@ -326,6 +329,7 @@ namespace GPU_HeiPa {
 
         std::vector<partition_t> identifier;
         identifier.reserve(l);
+        stats.misc_ms += get_milli_seconds(misc_start, get_time_point());
 
         if (dev_g.uniform_vertex_weights && dev_g.uniform_edge_weights) {
             recursive_multisection_device<true, true>(dev_g, dev_n_to_o, config.hierarchy, (u64) (l - 1), config.imbalance, g.g_weight, config.k, g.n, config.seed, config.use_ultra, index_vec, k_rem, identifier, stats, dev_global_part, mem_stack, exec_space);
@@ -340,10 +344,13 @@ namespace GPU_HeiPa {
         HEIPA_PROFILE_SCOPE("hm", "io", "copy_to_host");
 
         // copy back to host
+        auto dl_start = get_time_point();
         HostPartition host_part = HostPartition(Kokkos::view_alloc(Kokkos::WithoutInitializing, "host_partition"), g.n);;
         Kokkos::deep_copy(exec_space, host_part, dev_global_part);
         KOKKOS_PROFILE_FENCE(exec_space);
+        stats.down_up_load_ms += get_milli_seconds(dl_start, get_time_point());
 
+        auto misc_end_start = get_time_point();
         if (config.verbose_level >= 1) {
             Partition global_partition = initialize_partition(g.n, config.k, (weight_t) std::ceil((1.0 + config.imbalance) * ((f64) g.g_weight / (f64) config.k)), mem_stack, exec_space);
             Kokkos::deep_copy(exec_space, global_partition.map, dev_global_part);
@@ -364,6 +371,7 @@ namespace GPU_HeiPa {
         pop_front(mem_stack); // dev_n_to_o
         pop_front(mem_stack); // dev_global_part
         free_graph(dev_g, mem_stack);
+        stats.misc_ms += get_milli_seconds(misc_end_start, get_time_point());
 
         stats.print(get_milli_seconds(sp, get_time_point()));
 
