@@ -35,6 +35,8 @@
 #include "../datastructures/GPU_HeiPa_solver.h"
 #include "../GPU_HeiProMap_configuration.h"
 
+#include "../utility/comm_cost.h"
+#include "../distance_oracles/distance_oracle_helpers.h"
 namespace GPU_HeiPa {
 
     struct HMStats {
@@ -46,8 +48,13 @@ namespace GPU_HeiPa {
         f64 down_up_load_ms = 0;
         f64 misc_ms = 0;
         f64 subgraph_generation_ms = 0;
+        weight_t final_comm_cost = 0;
+        weight_t final_max_weight = 0;
 
         void print(f64 total_duration) const {
+            std::cout << "------- Stat -------" << std::endl;
+            std::cout << "Final comm-cost   : " << final_comm_cost << std::endl;
+            std::cout << "Final max block w : " << final_max_weight << std::endl;
             std::cout << "------- Time -------" << std::endl;
             std::cout << "Total solve time  : " << total_duration << std::endl;
             std::cout << "Coarsening        : " << coarsening_ms << std::endl;
@@ -336,6 +343,22 @@ namespace GPU_HeiPa {
         HostPartition host_part = HostPartition(Kokkos::view_alloc(Kokkos::WithoutInitializing, "host_partition"), g.n);;
         Kokkos::deep_copy(exec_space, host_part, dev_global_part);
         KOKKOS_PROFILE_FENCE(exec_space);
+
+        if (config.verbose_level >= 1) {
+            Partition global_partition = initialize_partition(g.n, config.k, (weight_t) std::ceil((1.0 + config.imbalance) * ((f64) g.g_weight / (f64) config.k)), mem_stack, exec_space);
+            Kokkos::deep_copy(exec_space, global_partition.map, dev_global_part);
+            if (dev_g.uniform_vertex_weights) recalculate_weights<true>(global_partition, dev_g, exec_space);
+            else recalculate_weights<false>(global_partition, dev_g, exec_space);
+            
+            std::vector<partition_t> hier = config.hierarchy;
+            std::vector<weight_t> dist = config.distance;
+            auto d_oracle = initialize_distance_oracle<DistanceOracleMatrix>(config.k, hier, dist, mem_stack, exec_space);
+            stats.final_comm_cost = dev_g.uniform_edge_weights ? comm_cost<true>(dev_g, global_partition, d_oracle, exec_space) : comm_cost<false>(dev_g, global_partition, d_oracle, exec_space);
+            stats.final_max_weight = max_weight(global_partition);
+            
+            free_distance_oracle<DistanceOracleMatrix>(d_oracle, mem_stack);
+            free_partition(global_partition, mem_stack);
+        }
 
         // cleanup (reverse order)
         pop_front(mem_stack); // dev_n_to_o
