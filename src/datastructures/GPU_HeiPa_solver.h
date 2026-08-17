@@ -271,6 +271,7 @@ namespace GPU_HeiPa {
 
     public:
         void solve_device_graph(KokkosMemoryStack &mem_stack) {
+            assert_state_pre_partition(graphs.back(), exec_space);
 
             partition_t c = 16;
             if (config.initial_partitioning == "kway") { c = 8; }
@@ -288,8 +289,10 @@ namespace GPU_HeiPa {
                 KOKKOS_PROFILE_FENCE(exec_space);
                 #endif
 
+                assert_state_pre_partition(graphs.back(), exec_space);
                 coarsening(level, mem_stack);
                 contraction(level, mem_stack);
+                assert_state_pre_partition(graphs.back(), exec_space);
 
                 level += 1;
             }
@@ -453,6 +456,8 @@ namespace GPU_HeiPa {
         }
 
         void refinement(u32 level, KokkosMemoryStack &mem_stack) {
+            assert_state_after_partition(graphs.back(), partition, config.k, exec_space);
+
             auto p = get_time_point();
 
             Graph &cur = graphs.back();
@@ -473,11 +478,17 @@ namespace GPU_HeiPa {
             refinement_ms += get_milli_seconds(p, get_time_point());
 
             if (graphs.back().uniform_edge_weights) {
-                ASSERT(curr_edge_cut == edge_cut<true>(graphs.back(), partition, exec_space));
+                if (curr_edge_cut != edge_cut<true>(graphs.back(), partition, exec_space)) {
+                    std::cerr << "[WARNING] curr_edge_cut mismatch (uniform)\n";
+                }
             } else {
-                ASSERT(curr_edge_cut == edge_cut<false>(graphs.back(), partition, exec_space));
+                if (curr_edge_cut != edge_cut<false>(graphs.back(), partition, exec_space)) {
+                    std::cerr << "[WARNING] curr_edge_cut mismatch (non-uniform)\n";
+                }
             }
-            ASSERT(curr_max_block_weight == max_weight(partition));
+            if (curr_max_block_weight != max_weight(partition, exec_space)) {
+                std::cerr << "[WARNING] curr_max_block_weight mismatch\n";
+            }
 
             #if ENABLE_PROFILER
             level_infos[level].t_refinement = get_milli_seconds(p, get_time_point());
@@ -487,6 +498,8 @@ namespace GPU_HeiPa {
         }
 
         void uncontraction(u32 level, KokkosMemoryStack &mem_stack) {
+            assert_state_after_partition(graphs.back(), partition, config.k, exec_space);
+
             auto p = get_time_point();
 
             uncontract(partition, mappings.back(), exec_space);

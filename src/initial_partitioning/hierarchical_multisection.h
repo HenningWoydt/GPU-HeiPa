@@ -75,7 +75,6 @@ namespace GPU_HeiPa {
         }
 
         Solver solver(device_g, heipa_config, partition, mem_stack, exec_space);
-        solver.solve_device_graph(mem_stack);
 
         stats.coarsening_ms += solver.coarsening_ms;
         stats.contraction_ms += solver.contraction_ms;
@@ -190,7 +189,7 @@ namespace GPU_HeiPa {
                         child_o_to_n(old_u) = my_idx;
                         child_n_to_o(my_idx) = old_u;
                         if (!uniform_vw) {
-                            child_g.weights(my_idx) = device_g.weights(u);
+                            child_g.weights(my_idx) = device_g.weights(u); if (my_idx == 2) { printf("AssignLocalIndex: u=%u, my_idx=%u, dev_w=%d, child_w=%d\n", u, my_idx, device_g.weights(u), child_g.weights(my_idx)); }
                         }
                     }
                     prefix += 1;

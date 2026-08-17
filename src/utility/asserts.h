@@ -93,6 +93,18 @@ namespace GPU_HeiPa {
         }
     }
 
+    inline void assert_positive_vertices(const HostGraph &host_g) {
+        if (host_g.uniform_vertex_weights) return;
+
+        for (vertex_t u = 0; u < host_g.n; ++u) {
+            weight_t w = host_g.weights(u);
+            if (w <= 0) {
+                std::cerr << "INVALID VERTEX WEIGHT! u: " << u << " weight: " << w << std::endl;
+                ASSERT(w > 0);
+            }
+        }
+    }
+
     inline void assert_edges_u(const HostGraph &host_g,
                                const UnmanagedHostVertex &host_edges_u) {
         u32 i = 0;
@@ -122,14 +134,25 @@ namespace GPU_HeiPa {
                                 const partition_t k) {
         std::vector<weight_t> weights(k, 0);
 
+        weight_t total_sum = 0;
         for (vertex_t u = 0; u < g.n; ++u) {
             partition_t u_id = partition.map(u);
-
-            weights[u_id] += g.uniform_vertex_weights ? 1 : g.weights(u);
+            weight_t u_w = g.uniform_vertex_weights ? 1 : g.weights(u);
+            weights[u_id] += u_w; 
+            total_sum += u_w;
         }
 
+        weight_t bweights_sum = 0;
         for (partition_t id = 0; id < k; ++id) {
-            ASSERT(weights[id] == partition.bweights(id));
+            bweights_sum += partition.bweights(id);
+            if (weights[id] != partition.bweights(id)) {
+                std::cerr << "[WARNING] assert_bweights mismatch for id " << id << ": expected (sum) " << weights[id] << ", got (partition.bweights) " << partition.bweights(id) << "\n";
+                ASSERT(false);
+            }
+        }
+        if (total_sum != g.g_weight || total_sum != bweights_sum) {
+            std::cerr << "[WARNING] assert_bweights TOTAL SUM MISMATCH: total_sum=" << total_sum << ", g.g_weight=" << g.g_weight << ", bweights_sum=" << bweights_sum << ", g.n=" << g.n << "\n";
+            ASSERT(false);
         }
     }
 
@@ -252,6 +275,7 @@ namespace GPU_HeiPa {
         assert_no_loops(host_g);
         assert_no_double_edges(host_g);
         assert_positive_edges(host_g);
+        assert_positive_vertices(host_g);
         assert_edges_u(host_g, host_edges_u);
     }
 
@@ -271,6 +295,7 @@ namespace GPU_HeiPa {
         assert_no_loops(host_g);
         assert_no_double_edges(host_g);
         assert_positive_edges(host_g);
+        assert_positive_vertices(host_g);
         assert_edges_u(host_g, host_edges_u);
 
         assert_partition(host_g, host_p_manager, k);

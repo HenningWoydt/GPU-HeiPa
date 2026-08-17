@@ -366,8 +366,6 @@ namespace GPU_HeiPa {
             lp.vtx2(u) = NO_BLOCK_ID;
 
             if (u_id_w > lp.lmax && (uniform_v_weights ? 1 : g.weights(u)) <= 2 * lp.max_vwgt() && (uniform_v_weights ? 1 : g.weights(u)) < 2 * (u_id_w - opt_weight)) {
-                weight_t own_conn = 0;
-                weight_t count = 0;
                 weight_t sum_conn = 0;
 
                 u32 r_beg = bc.row(u);
