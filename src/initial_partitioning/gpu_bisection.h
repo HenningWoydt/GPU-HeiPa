@@ -214,7 +214,7 @@ namespace GPU_HeiPa {
 
                 evaluate_current(gray, wr, cut, local_best);
 
-                #pragma unroll
+                // #pragma unroll
                 for (u64 i = begin + 1; i < end; i++) {
                     #if defined(__CUDA_ARCH__) || defined(__HIP_DEVICE_COMPILE__)
                     const vertex_t flip_u = (vertex_t) __ffsll(i) - 1;
@@ -542,7 +542,7 @@ namespace GPU_HeiPa {
             base += n_bytes_weights;
             u32 *g_n = (u32 *) base;
             base += n_bytes_neighborhood;
-            vertex_t *g_eu = (vertex_t *) base;
+            // vertex_t *g_eu = (vertex_t *) base;
             base += n_bytes_edges_u;
             vertex_t *g_ev = (vertex_t *) base;
             base += n_bytes_edges_v;
@@ -744,7 +744,7 @@ namespace GPU_HeiPa {
                 base += n_bytes_weights;
                 u32 *g_n = (u32 *) base;
                 base += n_bytes_neighborhood;
-                vertex_t *g_eu = (vertex_t *) base;
+                // vertex_t *g_eu = (vertex_t *) base;
                 base += n_bytes_edges_u;
                 vertex_t *g_ev = (vertex_t *) base;
                 base += n_bytes_edges_v;
@@ -1003,7 +1003,7 @@ namespace GPU_HeiPa {
 
                 evaluate_current(gray, wr, cut, local_best);
 
-                #pragma unroll
+                // #pragma unroll
                 for (u64 i = begin + 1; i < end; i++) {
                     #if defined(__CUDA_ARCH__) || defined(__HIP_DEVICE_COMPILE__)
                     const vertex_t flip_u = (vertex_t) __ffsll(i) - 1;
@@ -1141,7 +1141,7 @@ namespace GPU_HeiPa {
         bool has_mapping = (mapping != nullptr);
         vertex_t old_n = has_mapping ? mapping->old_n : 0;
         UnmanagedDeviceVertex mapping_view = has_mapping ? mapping->mapping : UnmanagedDeviceVertex();
-        u32 k = sizes.extent(0);
+        u32 k = (u32) sizes.extent(0);
 
         Kokkos::parallel_for("calculate_block_sizes_fused", Kokkos::TeamPolicy<DeviceExecutionSpace>(exec_space, 1, Kokkos::AUTO()), KOKKOS_LAMBDA(const Kokkos::TeamPolicy<DeviceExecutionSpace>::member_type &team) {
             Kokkos::parallel_for(Kokkos::TeamThreadRange(team, k), [&](const int i) {

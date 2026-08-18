@@ -197,7 +197,7 @@ namespace GPU_HeiPa {
                     partition_t packed_targets = current_targets_dev(id);
                     partition_t left_targets = packed_targets & 0xFFFF;
                     partition_t right_targets = packed_targets >> 16;
-                    partition_t total_targets = left_targets + right_targets;
+                    // partition_t total_targets = left_targets + right_targets;
 
                     vertex_t sub_n = d_actual_n(id);
                     partition_t *sub_part_ptr = batch.get_partition_ptr(id);

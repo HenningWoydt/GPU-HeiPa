@@ -58,11 +58,11 @@ namespace GPU_HeiPa {
 
     inline void init_HierarchyManager(HierarchyManager &manager, const std::vector<partition_t> &t_hierarchy, size_t t_k) {
         manager.hierarchy = t_hierarchy;
-        manager.total_k = t_k;
+        manager.total_k = (partition_t) t_k;
         manager.active.assign(t_k, 0);
         manager.active[0] = 1;
         manager.curr_load.assign(t_k, 0);
-        manager.curr_load[0] = t_k;
+        manager.curr_load[0] = (weight_t) t_k;
         
         manager.unit_sizes.clear();
         partition_t current_unit = 1;

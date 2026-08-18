@@ -146,7 +146,7 @@ namespace GPU_HeiPa {
                 seed = std::random_device{}();
             }
 
-            c = std::stoull(get("--c-limit"));
+            c = (partition_t) std::stoull(get("--c-limit"));
 
             if (is_set("--verbose-level")) {
                 verbose_level = std::stoi(get("--verbose-level"));
