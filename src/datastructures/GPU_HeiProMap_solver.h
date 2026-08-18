@@ -252,13 +252,10 @@ namespace GPU_HeiPa {
         void internal_solve(HostGraph &host_g) {
             initialize(host_g);
 
-            const partition_t c = 32;
+            const partition_t c = config.c;
             const partition_t max_n = c * k;
 
             u32 level = 0;
-            if (config.verbose_level >= 1) {
-                std::cout << "Starting coarsening (target max_n: " << max_n << ")..." << std::endl;
-            }
             while (graphs.back().n > max_n) {
                 #if ENABLE_PROFILER
                 level_infos.emplace_back();
@@ -270,15 +267,7 @@ namespace GPU_HeiPa {
                 coarsening(level);
                 contraction(level);
 
-                if (config.verbose_level >= 2) {
-                    std::cout << "Level " << level << ": n=" << graphs.back().n << ", m=" << graphs.back().m << std::endl;
-                }
-
                 level += 1;
-            }
-
-            if (config.verbose_level >= 1) {
-                std::cout << "Coarsening finished at level " << level << " (n=" << graphs.back().n << "). Starting initial partitioning..." << std::endl;
             }
 
             #if ENABLE_PROFILER
@@ -289,10 +278,6 @@ namespace GPU_HeiPa {
             #endif
 
             initial_partitioning();
-
-            if (config.verbose_level >= 1) {
-                std::cout << "Initial partitioning finished. Starting uncontraction and refinement..." << std::endl;
-            }
 
             #if ENABLE_PROFILER
             level_infos[level].max_b_weight = max_weight(partition);
