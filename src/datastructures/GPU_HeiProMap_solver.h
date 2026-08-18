@@ -171,7 +171,7 @@ namespace GPU_HeiPa {
             size_t n_empty_partitions = 0;
             size_t n_overloaded_partitions = 0;
             weight_t sum_too_much = 0;
-            if (config.verbose_level >= 1) {
+            if (config.verbose_level >= 2) {
                 HEIPA_PROFILE_SCOPE("misc", "Solver", "calc_stats");
                 max_block_w = max_weight(partition, exec_space);
                 n_empty_partitions = n_empty_blocks(partition, exec_space);
@@ -206,7 +206,9 @@ namespace GPU_HeiPa {
                 std::cout << "distances         : " << to_str(distances) << std::endl;
                 std::cout << "imbalance         : " << config.imbalance << std::endl;
                 std::cout << "Lmax              : " << lmax << std::endl;
+            }
 
+            if (config.verbose_level >= 2) {
                 std::cout << "------- Stat -------" << std::endl;
                 std::cout << "Init. comm-cost   : " << initial_comm_cost << std::endl;
                 std::cout << "Init. max block w : " << initial_max_block_weight << std::endl;
@@ -218,7 +220,9 @@ namespace GPU_HeiPa {
                 std::cout << "#empty partitions : " << n_empty_partitions << std::endl;
                 std::cout << "#oload partitions : " << n_overloaded_partitions << std::endl;
                 std::cout << "Sum oload weights : " << sum_too_much << std::endl;
+            }
 
+            if (config.verbose_level >= 1) {
                 std::cout << "------- Time -------" << std::endl;
                 std::cout << "Total solve time  : " << duration << std::endl;
                 std::cout << "Coarsening        : " << coarsening_ms << std::endl;
