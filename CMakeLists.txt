@@ -13,7 +13,6 @@ set(CMAKE_CXX_STANDARD 20)
 set(CMAKE_CXX_STANDARD_REQUIRED ON)
 set(CMAKE_CXX_EXTENSIONS OFF)
 set(CMAKE_POSITION_INDEPENDENT_CODE ON)
-set(CMAKE_EXPORT_COMPILE_COMMANDS ON)
 
 # --- Kokkos Setup ---
 set(KokkosKernels_DIR "${CMAKE_CURRENT_SOURCE_DIR}/extern/local/kokkos-kernels/lib/cmake/KokkosKernels")
@@ -53,10 +52,18 @@ include_directories(${METIS_INCLUDE_DIR})
 # --- Compiler Flags ---
 set(CMAKE_CXX_FLAGS_RELEASE "-O3 -DNDEBUG -march=native -pipe -finline-functions -ftree-vectorize -funroll-loops -falign-loops -fno-rtti -Wall -Wextra -pedantic -Wno-unused-variable -Wno-unused-parameter -Wconversion -Wsign-conversion -Wfloat-conversion")
 set(CMAKE_CXX_FLAGS_RELWITHDEBINFO "-O3 -g -march=native -DNDEBUG -pipe -fno-inline-functions -ftree-vectorize -funroll-loops -falign-loops -fno-rtti -Wall -Wextra -pedantic -Wno-unused-variable -Wno-unused-parameter -Wconversion -Wsign-conversion -Wfloat-conversion")
-set(CMAKE_CXX_FLAGS_DEBUG "-g -march=native -pipe -Wall -Wextra -Wno-unused-variable -Wno-unused-parameter -Wconversion -Wsign-conversion -Wfloat-conversion -pedantic")
+set(CMAKE_CXX_FLAGS_DEBUG "-O0 -g -march=native -pipe -Wall -Wextra -Wno-unused-variable -Wno-unused-parameter -Wconversion -Wsign-conversion -Wfloat-conversion -pedantic")
 
 option(ENABLE_PROFILER "Enable profiler" OFF)
 option(ASSERT_ENABLED "Enable assertions" OFF)
+
+if(ENABLE_PROFILER)
+    add_compile_definitions(ENABLE_PROFILER=1)
+endif()
+
+if(ASSERT_ENABLED)
+    add_compile_definitions(ASSERT_ENABLED=1)
+endif()
 
 
 file(GLOB_RECURSE SOURCES CONFIGURE_DEPENDS "src/*.cpp")
