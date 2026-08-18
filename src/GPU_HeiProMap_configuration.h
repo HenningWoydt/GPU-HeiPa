@@ -49,7 +49,7 @@ namespace GPU_HeiPa {
             {"--verbose-level", "", "Whether to print.", "1", "", false},
             {"--n-bytes-requested", "", "Total bytes requested from device.", "8589934592", "", false},
             {"--seed", "", "Random seed.", "0", "", false},
-            {"--c", "", "Contraction limit parameter c.", "8", "", false},
+            {"--c-limit", "", "Contraction limit parameter c.", "8", "", false},
         };
 
     public:
@@ -146,7 +146,7 @@ namespace GPU_HeiPa {
                 seed = std::random_device{}();
             }
 
-            c = std::stoull(get("--c"));
+            c = std::stoull(get("--c-limit"));
 
             if (is_set("--verbose-level")) {
                 verbose_level = std::stoi(get("--verbose-level"));
