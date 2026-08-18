@@ -161,6 +161,20 @@ namespace GPU_HeiPa {
         return s;
     }
 
+    inline partition_t n_empty_blocks(const Partition &partition, DeviceExecutionSpace &exec_space) {
+        partition_t s = 0;
+
+        Kokkos::parallel_reduce("compute_max_weight", Kokkos::RangePolicy<DeviceExecutionSpace>(exec_space, 0, partition.k), KOKKOS_LAMBDA(const partition_t i, partition_t &local_s) {
+                                    if (partition.bweights(i) == 0) {
+                                        local_s += 1;
+                                    }
+                                },
+                                Kokkos::Sum<partition_t>(s)
+        );
+
+        return s;
+    }
+
     inline partition_t n_oload_blocks(const Partition &partition) {
         partition_t s = 0;
 
@@ -175,10 +189,38 @@ namespace GPU_HeiPa {
         return s;
     }
 
+    inline partition_t n_oload_blocks(const Partition &partition, DeviceExecutionSpace &exec_space) {
+        partition_t s = 0;
+
+        Kokkos::parallel_reduce("compute_max_weight", Kokkos::RangePolicy<DeviceExecutionSpace>(exec_space, 0, partition.k), KOKKOS_LAMBDA(const partition_t i, partition_t &local_s) {
+                                    if (partition.bweights(i) > partition.lmax) {
+                                        local_s += 1;
+                                    }
+                                },
+                                Kokkos::Sum<partition_t>(s)
+        );
+
+        return s;
+    }
+
     inline weight_t sum_oload_weight(const Partition &partition) {
         weight_t s = 0;
 
         Kokkos::parallel_reduce("compute_max_weight", Kokkos::RangePolicy<DeviceExecutionSpace>(0, partition.k), KOKKOS_LAMBDA(const partition_t i, weight_t &local_s) {
+                                    if (partition.bweights(i) > partition.lmax) {
+                                        local_s += partition.bweights(i) - partition.lmax;
+                                    }
+                                },
+                                Kokkos::Sum<weight_t>(s)
+        );
+
+        return s;
+    }
+
+    inline weight_t sum_oload_weight(const Partition &partition, DeviceExecutionSpace &exec_space) {
+        weight_t s = 0;
+
+        Kokkos::parallel_reduce("compute_max_weight", Kokkos::RangePolicy<DeviceExecutionSpace>(exec_space, 0, partition.k), KOKKOS_LAMBDA(const partition_t i, weight_t &local_s) {
                                     if (partition.bweights(i) > partition.lmax) {
                                         local_s += partition.bweights(i) - partition.lmax;
                                     }

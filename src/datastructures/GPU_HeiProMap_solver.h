@@ -171,16 +171,12 @@ namespace GPU_HeiPa {
             size_t n_empty_partitions = 0;
             size_t n_overloaded_partitions = 0;
             weight_t sum_too_much = 0;
-            PartitionHost partition_host;
             if (config.verbose_level >= 1) {
                 HEIPA_PROFILE_SCOPE("misc", "Solver", "calc_stats");
-                max_block_w = max_weight(partition);
-                partition_host = to_host_partition(partition, exec_space);
-                for (partition_t id = 0; id < config.k; ++id) {
-                    n_empty_partitions += partition_host.bweights(id) == 0;
-                    n_overloaded_partitions += partition_host.bweights(id) > lmax;
-                    sum_too_much += std::max((weight_t) 0, partition_host.bweights(id) - lmax);
-                }
+                max_block_w = max_weight(partition, exec_space);
+                n_empty_partitions = n_empty_blocks(partition, exec_space);
+                n_overloaded_partitions = n_oload_blocks(partition, exec_space);
+                sum_too_much = sum_oload_weight(partition, exec_space);
             }
 
             // free all memory
