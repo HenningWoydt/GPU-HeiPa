@@ -164,6 +164,7 @@ namespace GPU_HeiPa {
             exec_space.fence("deep_copy host_partition");
 
             down_up_load_ms += get_milli_seconds(p, get_time_point());
+            p = get_time_point();
 
             // calc stats
             weight_t max_block_w = 0;
@@ -350,7 +351,7 @@ namespace GPU_HeiPa {
             HEIPA_PROFILE_SCOPE("misc", "partition", "initialize");
             partition = initialize_partition(n, k, lmax, mem_stack, exec_space);
 
-            misc_ms += get_milli_seconds(p, get_time_point());
+            misc_ms += get_milli_seconds(p, get_time_point()) - down_up_load_ms;
 
             assert_state_pre_partition(graphs.back(), exec_space);
         }
