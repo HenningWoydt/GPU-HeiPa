@@ -80,8 +80,6 @@ namespace GPU_HeiPa {
 
             d_oracle.w_mtx(idx) = dev_distance(level);
         });
-        exec_space.fence();
-
 
         pop_back(mem_stack);
         pop_back(mem_stack);
