@@ -57,18 +57,7 @@ set(CMAKE_CXX_FLAGS_DEBUG "-g -march=native -pipe -Wall -Wextra -Wno-unused-vari
 
 option(ENABLE_PROFILER "Enable profiler" OFF)
 option(ASSERT_ENABLED "Enable assertions" OFF)
-option(BUILD_TESTING "Build tests" OFF)
 
-if(BUILD_TESTING)
-    include(FetchContent)
-    FetchContent_Declare(
-      googletest
-      URL https://github.com/google/googletest/archive/refs/tags/v1.14.0.tar.gz
-    )
-    set(gtest_force_shared_crt ON CACHE BOOL "" FORCE)
-    FetchContent_MakeAvailable(googletest)
-    enable_testing()
-endif()
 
 file(GLOB_RECURSE SOURCES CONFIGURE_DEPENDS "src/*.cpp")
 file(GLOB_RECURSE HEADERS CONFIGURE_DEPENDS "src/*.h")
@@ -122,6 +111,3 @@ target_compile_options(GPU-HeiProMap PRIVATE
         -Wno-sign-conversion
 )
 
-if(BUILD_TESTING)
-    add_subdirectory(tests)
-endif()
