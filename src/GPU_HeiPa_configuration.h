@@ -59,6 +59,7 @@ namespace GPU_HeiPa {
             {"--verbose-level", "", "Whether to print.", "1", "", false},
             {"--n-bytes-requested", "", "Total bytes requested from device.", "8589934592", "", false},
             {"--seed", "", "Random seed.", "0", "", false},
+            {"--c-limit", "", "Contraction limit parameter c.", "8", "", false},
         };
 
     public:
@@ -76,6 +77,8 @@ namespace GPU_HeiPa {
 
         // random initialization
         u64 seed = 0;
+
+        partition_t c = 8;
 
         int verbose_level = 1;
 
@@ -127,6 +130,8 @@ namespace GPU_HeiPa {
             } else {
                 seed = std::random_device{}();
             }
+
+            c = (partition_t) std::stoull(get("--c-limit"));
 
             verbose_level = 1;
             if (is_set("--verbose-level")) {
@@ -208,6 +213,7 @@ namespace GPU_HeiPa {
             s += tabs + to_JSON_MACRO(k);
             s += tabs + to_JSON_MACRO(imbalance);
             s += tabs + to_JSON_MACRO(config);
+            s += tabs + to_JSON_MACRO(c);
             s += tabs + to_JSON_MACRO(seed);
             s += tabs + to_JSON_MACRO(device_space);
 

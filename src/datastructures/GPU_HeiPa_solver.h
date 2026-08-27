@@ -273,9 +273,7 @@ namespace GPU_HeiPa {
         void solve_device_graph(KokkosMemoryStack &mem_stack) {
             assert_state_pre_partition(graphs.back(), exec_space);
 
-            partition_t c = 16;
-            if (config.initial_partitioning == "kway") { c = 8; }
-            if (config.initial_partitioning == "metis") { c = 8; }
+            const partition_t c = config.c;
             const partition_t max_n = c * k;
 
             u32 level = 0;
@@ -421,7 +419,7 @@ namespace GPU_HeiPa {
             if (config.initial_partitioning == "kway") {
                 kway_partition(graphs.back(), (int) k, config.imbalance, config.seed, partition, exec_space);
             } else if (config.initial_partitioning == "gpu_bisection") {
-                gpu_rb_partition(graphs.back(), k, config.imbalance, config.seed, 16, partition, mem_stack, exec_space);
+                gpu_rb_partition(graphs.back(), k, config.imbalance, config.seed, config.c, partition, mem_stack, exec_space);
             } else if (config.initial_partitioning == "metis") {
                 metis_partition(graphs.back(), (int) k, config.imbalance, config.seed, partition, exec_space);
             } else {
