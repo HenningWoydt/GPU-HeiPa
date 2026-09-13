@@ -66,7 +66,8 @@ namespace GPU_HeiPa {
         const vertex_t gn = g.n;
         const u32 gm = g.m;
         const vertex_t last = gn - 1;
-        const u64 num_configs = 1ULL << last;
+        const u32 shift = (last >= 28) ? 28 : last;
+        const u64 num_configs = 1ULL << shift;
 
         const int team_size = 256;
         const u64 configs_per_team = (u64) team_size * CHUNK;
@@ -246,7 +247,8 @@ namespace GPU_HeiPa {
                 teams_per_graph(id) = 0;
                 return;
             }
-            const u64 num_configs = 1ULL << (gn - 1);
+            const u32 shift = (gn - 1 >= 28) ? 28 : (gn - 1);
+            const u64 num_configs = 1ULL << shift;
             const u64 configs_per_team = (u64) TEAM_SIZE * CHUNK;
             const u32 num_teams = (u32) ((num_configs + configs_per_team - 1) / configs_per_team);
             teams_per_graph(id) = num_teams;
