@@ -177,7 +177,7 @@ namespace GPU_HeiPa {
                 HEIPA_PROFILE_SCOPE("initial_partitioning", "gpu_rb_partition", "split_graphs");
                 bool g_uvw = graphs.back().uniform_vertex_weights;
                 bool g_uew = graphs.back().uniform_edge_weights;
-                dispatch_batched_bisection(bisection_method, g_uvw, g_uew, batch, active_mask, current_targets_dev, lmax_global, mem_stack, exec_space);
+                dispatch_batched_bisection(bisection_method, g_uvw, g_uew, batch, active_mask, current_targets_dev, lmax_global, mem_stack, exec_space, seed);
                 KOKKOS_PROFILE_FENCE(exec_space);
 
                 HEIPA_PROFILE_SCOPE("initial_partitioning", "gpu_rb_partition", "insert_solution_and_weights");

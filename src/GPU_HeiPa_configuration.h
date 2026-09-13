@@ -56,10 +56,11 @@ namespace GPU_HeiPa {
             {"--coarsening", "", "Coarsening Config {two-hop, independent-edge-set}.", "two-hop", "", false},
             {"--config", "-c", "Algorithm Config {default, ultra}.", "", "", false},
             {"--initial-partitioning", "", "Initial partitioning algorithm {kway, gpu_bisection, metis}.", "kway", "", false},
+            {"--bisection-method", "", "Bisection method {brute-force, heuristic, brute-force-with-heuristic}.", "grasp", "", false},
             {"--verbose-level", "", "Whether to print.", "1", "", false},
             {"--n-bytes-requested", "", "Total bytes requested from device.", "8589934592", "", false},
             {"--seed", "", "Random seed.", "0", "", false},
-            {"--c-limit", "", "Contraction limit parameter c.", "8", "", false},
+            {"--c-limit", "", "Contraction limit parameter c.", "64", "", false},
         };
 
     public:
@@ -74,6 +75,7 @@ namespace GPU_HeiPa {
         // partitioning algorithm
         std::string config;
         std::string initial_partitioning;
+        std::string bisection_method = "brute-force";
 
         // random initialization
         u64 seed = 0;
@@ -123,6 +125,7 @@ namespace GPU_HeiPa {
             // partitioning algorithm
             config = get("--config");
             initial_partitioning = get("--initial-partitioning");
+            bisection_method = get("--bisection-method");
 
             // random initialization
             if (is_set("--seed")) {
@@ -213,6 +216,8 @@ namespace GPU_HeiPa {
             s += tabs + to_JSON_MACRO(k);
             s += tabs + to_JSON_MACRO(imbalance);
             s += tabs + to_JSON_MACRO(config);
+            s += tabs + to_JSON_MACRO(initial_partitioning);
+            s += tabs + to_JSON_MACRO(bisection_method);
             s += tabs + to_JSON_MACRO(c);
             s += tabs + to_JSON_MACRO(seed);
             s += tabs + to_JSON_MACRO(device_space);

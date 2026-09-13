@@ -36,7 +36,6 @@
 #include "partition.h"
 #include "../coarsening/two_hop_matching.h"
 #include "../initial_partitioning/global_multisection.h"
-#include "../initial_partitioning/gpu_bisection_partition.h"
 #include "../initial_partitioning/gpu_rb_partition.h"
 #include "../definitions.h"
 #include "../GPU_HeiProMap_configuration.h"
@@ -395,8 +394,6 @@ namespace GPU_HeiPa {
 
             if (config.initial_partitioning == "global_multisection") {
                 global_multisection(graphs.back(), config.hierarchy, k, config.imbalance, config.seed, config.seq_partitioner, partition, exec_space);
-            } else if (config.initial_partitioning == "gpu_bisection") {
-                gpu_bisect_partition(graphs.back(), config.hierarchy, k, config.imbalance, config.seed, 16, partition, mem_stack, exec_space);
             } else {
                 std::cerr << "Unknown initial partitioning config: " << config.initial_partitioning << std::endl;
                 exit(EXIT_FAILURE);
