@@ -44,7 +44,7 @@ namespace GPU_HeiPa {
             {"--distance-oracle", "", "Distance oracle {matrix}.", "matrix", "", false},
             {"--imbalance", "-e", "Allowed imbalance (for example 0.03).", "0.03", "", false},
             {"--config", "-c", "Algorithm Config {IM, HM, HM-ultra}.", "", "", false},
-            {"--initial-partitioning", "", "Initial partitioning algorithm {global_multisection, gpu_bisection}", "global_multisection", "", false},
+            {"--initial-partitioning", "", "Initial partitioning algorithm {global_multisection, biml_bisection}", "global_multisection", "", false},
             {"--bisection-method", "", "Bisection method {brute-force, heuristic, brute-force-with-heuristic}.", "brute-force", "", false},
             {"--seq-partitioner", "", "Sequential partitioning algorithm {kway, metis}. Only useful if global_multisection is used.", "kway", "", false},
             {"--verbose-level", "", "Whether to print.", "1", "", false},

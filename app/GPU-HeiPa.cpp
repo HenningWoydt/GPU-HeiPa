@@ -74,7 +74,7 @@ int main(int argc, char *argv[]) {
                 {"--config", "default"},
                 {"--verbose-level", "1"},
                 // {"--initial-partitioning", "kway"},
-                {"--initial-partitioning", "gpu_bisection"}
+                {"--initial-partitioning", "biml_bisection"}
             };
 
             std::vector<std::string> args = {"GPU-HeiPa"};

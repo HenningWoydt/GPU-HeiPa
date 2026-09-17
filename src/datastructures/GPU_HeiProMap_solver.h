@@ -36,7 +36,7 @@
 #include "partition.h"
 #include "../coarsening/two_hop_matching.h"
 #include "../initial_partitioning/global_multisection.h"
-#include "../initial_partitioning/gpu_rb_partition.h"
+#include "../initial_partitioning/biml_bisection.h"
 #include "../definitions.h"
 #include "../GPU_HeiProMap_configuration.h"
 #include "../utility/profiler.h"

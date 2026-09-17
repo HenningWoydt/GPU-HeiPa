@@ -24,8 +24,8 @@
  * SOFTWARE.
  ******************************************************************************/
 
-#ifndef GPU_HEIPA_GPU_BISECTION_BRUTE_FORCE_H
-#define GPU_HEIPA_GPU_BISECTION_BRUTE_FORCE_H
+#ifndef GPU_HEIPA_BISECTION_BRUTE_FORCE_H
+#define GPU_HEIPA_BISECTION_BRUTE_FORCE_H
 
 #include <Kokkos_Core.hpp>
 

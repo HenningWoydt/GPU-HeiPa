@@ -41,7 +41,7 @@
 #include "../refinement/jet_label_propagation.h"
 #include "../initial_partitioning/kway_partitioner/kway_core.h"
 #include "../initial_partitioning/metis_wrapper.h"
-#include "../initial_partitioning/gpu_rb_partition.h"
+#include "../initial_partitioning/biml_bisection.h"
 #include "../definitions.h"
 #include "../GPU_HeiPa_configuration.h"
 #include "../utility/profiler.h"
@@ -418,7 +418,7 @@ namespace GPU_HeiPa {
             // Use configured initial partitioning algorithm
             if (config.initial_partitioning == "kway") {
                 kway_partition(graphs.back(), (int) k, config.imbalance, config.seed, partition, exec_space);
-            } else if (config.initial_partitioning == "gpu_bisection") {
+            } else if (config.initial_partitioning == "biml_bisection" || config.initial_partitioning == "gpu_bisection") {
                 BisectionMethod method = BisectionMethod::BRUTE_FORCE;
                 if (config.bisection_method == "heuristic" || config.bisection_method == "heuristic-only" || config.bisection_method == "HEURISTIC_ONLY") {
                     method = BisectionMethod::HEURISTIC_ONLY;
@@ -432,7 +432,7 @@ namespace GPU_HeiPa {
                     std::cerr << "Unknown bisection method: " << config.bisection_method << std::endl;
                     exit(EXIT_FAILURE);
                 }
-                gpu_rb_partition(graphs.back(), k, config.imbalance, config.seed, config.c, partition, mem_stack, exec_space, method);
+                biml_bisection(graphs.back(), k, config.imbalance, config.seed, config.c, partition, mem_stack, exec_space, method);
             } else if (config.initial_partitioning == "metis") {
                 metis_partition(graphs.back(), (int) k, config.imbalance, config.seed, partition, exec_space);
             } else {
