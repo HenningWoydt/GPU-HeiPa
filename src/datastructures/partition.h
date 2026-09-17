@@ -264,14 +264,14 @@ namespace GPU_HeiPa {
         const auto k_to_copy = std::min((size_t)partition.k, (size_t)partition.bweights.extent(0));
 
         if (n_to_copy > 0) {
-            Kokkos::deep_copy(exec_space, 
-                Kokkos::subview(host_partition.map, std::make_pair((size_t)0, n_to_copy)), 
+            Kokkos::deep_copy(exec_space,
+                Kokkos::subview(host_partition.map, std::make_pair((size_t)0, n_to_copy)),
                 Kokkos::subview(partition.map, std::make_pair((size_t)0, n_to_copy)));
         }
 
         if (k_to_copy > 0) {
-            Kokkos::deep_copy(exec_space, 
-                Kokkos::subview(host_partition.bweights, std::make_pair((size_t)0, k_to_copy)), 
+            Kokkos::deep_copy(exec_space,
+                Kokkos::subview(host_partition.bweights, std::make_pair((size_t)0, k_to_copy)),
                 Kokkos::subview(partition.bweights, std::make_pair((size_t)0, k_to_copy)));
         }
 

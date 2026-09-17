@@ -2,59 +2,23 @@
 #define GPU_HEIPA_HELPERS_H
 
 #include "../definitions.h"
+#include "../refinement/block_conn.h"
 #include "../datastructures/partition.h"
 #include "../utility/hungarian_algorithm.h"
 
 namespace GPU_HeiPa {
-    struct KeyTuple {
-        u32 key_count;
-        u64 key;
-    };
+
 
     enum class PopulationManagement {
         steadystate,
         shrinking // #partitions == (level + 1)
     };
 
-    inline u32 next_power_of_two(
-        u32 k
-    ) {
-        if (k <= 1) return 1;
 
-        k--;
-        k |= k >> 1;
-        k |= k >> 2;
-        k |= k >> 4;
-        k |= k >> 8;
-        k |= k >> 16;
-        return k + 1;
-    }
 
-    // basically returns log2(k)
-    // and k should always be power of 2
-    u32 bits_needed(u32 k) {
-        u32 b = 0;
-        k--;
-        while (k > 0) {
-            k >>= 1;
-            b++;
-        }
-        return b;
-    }
+    //! ----------------------------------------------------------------
 
-    KOKKOS_FUNCTION u64 determine_key(
-        vertex_t u,
-        const Kokkos::View<int *> &parent_ids,
-        const Kokkos::View<Partition *> &population,
-        u32 num_bits
-    ) {
-        u64 key = 0;
-        for (size_t i = 0; i < parent_ids.size(); ++i) {
-            u64 val = static_cast<u64>(population[parent_ids[i]].map(u));
-            key |= (val & 0xFF) << (num_bits * i); //! do i even need this &0xFF ?
-        }
-        return key;
-    }
+
 
 
     inline u32 max_matching(

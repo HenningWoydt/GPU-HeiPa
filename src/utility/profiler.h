@@ -391,7 +391,7 @@ namespace GPU_HeiPa {
 
 #ifdef _WIN32
             if (use_colors) {
-                // enable_ansi_on_windows(); 
+                // enable_ansi_on_windows();
             }
 #endif
 
@@ -620,7 +620,7 @@ namespace GPU_HeiPa {
 
                     GroupProfile& gp = groups[std::string(key.group)];
                     FunctionProfile& fp = gp.functions[std::string(key.function)];
-                    
+
                     TimingStats& kernel_stats = fp.kernels[std::string(key.kernel)];
                     kernel_stats.total_ms += stats.total_ms;
                     kernel_stats.calls += stats.calls;

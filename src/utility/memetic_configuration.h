@@ -56,6 +56,7 @@ namespace GPU_HeiPa {
             {"--imbalance", "-e", "Allowed imbalance (for example 0.03).", "0.03", "", false},
             {"--config", "-c", "Broad Config.", "", "", false},
             {"--distance", "", "Distance computation mode: exact or sampled.", "exact", "", false},
+            {"--crossover-mode", "", "Crossover mode: signature (current) or paper (BBC from paper).", "signature", "", false},
             {"--leftover-strategy", "", "Leftover distribution strategy: random, balanced, gain, mixed.", "mixed", "", false},
             {"--alpha", "", "Alpha parameter for mixed leftover strategy.", "100.0", "", false},
             {"--extent", "", "Extent parameter for backbone crossover in range [1, k].", "1", "", false},
@@ -69,7 +70,11 @@ namespace GPU_HeiPa {
             {"--num-crossovers", "", "Number of crossovers per generation.", "1", "", false},
             {"--num-parents", "", "Number of parents for crossover.", "2", "", false},
             {"--tournament-size", "", "Tournament size for selection.", "2", "", false},
-            {"--perform-memetic-refinement", "", "Enable memetic refinement (true/false).", "true", "", false},
+            {"--inactive-percentile", "", "Disable crossover below this normalized level percentile in range [0, 1].", "0.1", "", false},
+            {"--mutation-percentile", "", "Enable mutation below this normalized level percentile in range [0, 1].", "0.1", "", false},
+            {"--mutation-rate", "", "Mutation probability threshold in range [0, 1].", "0.5", "", false},
+            {"--starting-temp", "", "Starting temperature for simulated annealing.", "8.0", "", false},
+            {"--cooling-factor", "", "Cooling factor for simulated annealing in range (0, 1].", "0.9", "", false},
         };
 
     public:
@@ -82,6 +87,7 @@ namespace GPU_HeiPa {
 
         std::string config;
         std::string distance = "exact";
+        std::string crossover_mode = "signature";
         std::string leftover_strategy = "mixed";
         f64 alpha = 100.0;
         partition_t extent = 1;
@@ -92,14 +98,18 @@ namespace GPU_HeiPa {
 
         std::string device_space;
 
-        size_t num_cpu_threads = 4;
+        size_t num_cpu_threads = 1;
         size_t num_individuals = 20;
         std::string population_management = "shrinking";
-        size_t reduction_factor = 1;
+        size_t reduction_factor = 5;
         u32 num_crossovers = 1;
         u32 num_parents = 2;
         u32 tournament_size = 2;
-        bool perform_memetic_refinement = true;
+        f32 inactive_percentile = 0.0f;
+        f32 mutation_percentile = 0.2f;
+        f32 mutation_rate = 0.5f;
+        f64 starting_temp = 8.0;
+        f64 cooling_factor = 0.9;
 
         MemeticConfiguration() = default;
 
@@ -132,6 +142,7 @@ namespace GPU_HeiPa {
             imbalance = std::stod(get("--imbalance"));
             config = get("--config");
             distance = get("--distance");
+            crossover_mode = get("--crossover-mode");
             leftover_strategy = get("--leftover-strategy");
             alpha = std::stod(get("--alpha"));
             extent = (partition_t) std::stoul(get("--extent"));
@@ -170,22 +181,20 @@ namespace GPU_HeiPa {
             if (is_set("--tournament-size")) {
                 tournament_size = (u32) std::stoul(get("--tournament-size"));
             }
-
-            {
-                std::string refinement = get("--perform-memetic-refinement");
-                for (char &c: refinement) {
-                    c = (char) std::tolower((unsigned char) c);
-                }
-
-                if (refinement == "1" || refinement == "true" || refinement == "yes" || refinement == "on") {
-                    perform_memetic_refinement = true;
-                } else if (refinement == "0" || refinement == "false" || refinement == "no" || refinement == "off") {
-                    perform_memetic_refinement = false;
-                } else {
-                    std::cerr << "Warning: perform memetic refinement value \"" << refinement
-                            << "\" is invalid. Falling back to \"true\"." << std::endl;
-                    perform_memetic_refinement = true;
-                }
+            if (is_set("--inactive-percentile")) {
+                inactive_percentile = (f32) std::stof(get("--inactive-percentile"));
+            }
+            if (is_set("--mutation-percentile")) {
+                mutation_percentile = (f32) std::stof(get("--mutation-percentile"));
+            }
+            if (is_set("--mutation-rate")) {
+                mutation_rate = (f32) std::stof(get("--mutation-rate"));
+            }
+            if (is_set("--starting-temp")) {
+                starting_temp = std::stod(get("--starting-temp"));
+            }
+            if (is_set("--cooling-factor")) {
+                cooling_factor = std::stod(get("--cooling-factor"));
             }
 
             validate_memetic_parameters();
@@ -235,6 +244,18 @@ namespace GPU_HeiPa {
                 std::cerr << "Warning: distance mode \"" << distance
                         << "\" is invalid. Falling back to \"exact\"." << std::endl;
                 distance = "exact";
+            }
+
+            for (char &c: crossover_mode) {
+                c = (char) std::tolower((unsigned char) c);
+            }
+            if (crossover_mode == "paper_bbc" || crossover_mode == "paperbbc") {
+                crossover_mode = "paper";
+            }
+            if (crossover_mode != "signature" && crossover_mode != "paper") {
+                std::cerr << "Warning: crossover mode \"" << crossover_mode
+                        << "\" is invalid. Falling back to \"signature\"." << std::endl;
+                crossover_mode = "signature";
             }
 
             for (char &c: leftover_strategy) {
@@ -317,6 +338,36 @@ namespace GPU_HeiPa {
                 tournament_size = (u32) num_individuals;
             }
 
+            if (inactive_percentile < 0.0f || inactive_percentile > 1.0f) {
+                std::cerr << "Warning: inactive_percentile (" << inactive_percentile
+                        << ") is outside [0, 1], setting to 0.1." << std::endl;
+                inactive_percentile = 0.1f;
+            }
+
+            if (mutation_percentile < 0.0f || mutation_percentile > 1.0f) {
+                std::cerr << "Warning: mutation_percentile (" << mutation_percentile
+                        << ") is outside [0, 1], setting to 0.1." << std::endl;
+                mutation_percentile = 0.1f;
+            }
+
+            if (mutation_rate < 0.0f || mutation_rate > 1.0f) {
+                std::cerr << "Warning: mutation_rate (" << mutation_rate
+                        << ") is outside [0, 1], setting to 0.5." << std::endl;
+                mutation_rate = 0.5f;
+            }
+
+            if (starting_temp <= 0.0) {
+                std::cerr << "Warning: starting_temp (" << starting_temp
+                        << ") must be positive, setting to 8.0." << std::endl;
+                starting_temp = 8.0;
+            }
+
+            if (cooling_factor <= 0.0 || cooling_factor > 1.0) {
+                std::cerr << "Warning: cooling_factor (" << cooling_factor
+                        << ") must be in (0, 1], setting to 0.9." << std::endl;
+                cooling_factor = 0.9;
+            }
+
             if (extent < 1) {
                 std::cerr << "Warning: extent is < 1, setting to 1." << std::endl;
                 extent = 1;
@@ -353,7 +404,11 @@ namespace GPU_HeiPa {
             s += tabs + to_JSON_MACRO(num_crossovers);
             s += tabs + to_JSON_MACRO(num_parents);
             s += tabs + to_JSON_MACRO(tournament_size);
-            s += tabs + to_JSON_MACRO(perform_memetic_refinement);
+            s += tabs + to_JSON_MACRO(inactive_percentile);
+            s += tabs + to_JSON_MACRO(mutation_percentile);
+            s += tabs + to_JSON_MACRO(mutation_rate);
+            s += tabs + to_JSON_MACRO(starting_temp);
+            s += tabs + to_JSON_MACRO(cooling_factor);
 
             s.pop_back();
             s.pop_back();

@@ -65,7 +65,7 @@ namespace GPU_HeiPa {
         auto bc_sizes_init = bc.sizes;
         auto g_neighborhood_init = g.neighborhood;
         auto p_k_init = partition.k;
-        
+
         Kokkos::parallel_scan("set_rows", Kokkos::RangePolicy<DeviceExecutionSpace>(exec_space, 0, g.n + 1), KOKKOS_LAMBDA(const u32 i, u32 &running, const bool final) {
             if (i == 0) {
                 // first slot is 0
