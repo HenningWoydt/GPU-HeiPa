@@ -267,7 +267,7 @@ namespace GPU_HeiPa {
         bool uvw = g.uniform_vertex_weights;
         bool uew = g.uniform_edge_weights;
 
-        auto d_gids_ptr = batch.get_global_ids_ptr(0);
+        auto d_gids_ptr = (vertex_t *) batch.global_ids_memory.data();
         vertex_t total_coarse_m = 0;
         Kokkos::parallel_scan("scan_coarse_csr", Kokkos::RangePolicy<DeviceExecutionSpace>(exec_space, 0, gn), KOKKOS_LAMBDA(const vertex_t u, u32 &running, bool final) {
             u32 deg = g_end(u) - g_beg(u);
@@ -392,6 +392,9 @@ namespace GPU_HeiPa {
             HEIPA_PROFILE_SCOPE("initial_partitioning", "recursive_bisection", "contraction");
             graphs.push_back(dispatch_from_Graph_Mapping_small<true>(graphs.back(), mappings.back(), mem_stack, exec_space));
             KOKKOS_PROFILE_FENCE(exec_space);
+            if (graphs.back().n == graphs[graphs.size() - 2].n) {
+                break;
+            }
         }
 
         // --- Phase 2: Initial Bisection of coarsest graph ---
