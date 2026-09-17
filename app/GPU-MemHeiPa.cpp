@@ -28,9 +28,8 @@
 
 #include <Kokkos_Core.hpp>
 
-#include "../src/datastructures/memeticSolver.h"
-#include "../src/datastructures/memeticSolverShrinking.h"
-#include "../src/utility/memetic_configuration.h"
+#include "../src/datastructures/GPU_MemHeiPa_solver.h"
+#include "../src/GPU_MemHeiPa_configuration.h"
 
 using namespace GPU_HeiPa;
 
@@ -110,31 +109,8 @@ int main(int argc, char *argv[]) {
 
 
         auto sp_solver = get_time_point();
-        HostPartition host_partition;
-        std::cout << config.population_management << std::endl;
-        if (config.population_management == "shrinking") {
-            host_partition = memeticSolverShrinking(config).solve(host_g);
-        }else{
-            host_partition = memeticSolver(config).solve(host_g);
-        }
-
-        
+        HostPartition host_partition = memeticSolverShrinking(config).solve(host_g);
         Kokkos::fence();
-        /*
-        
-        int * map = new int[host_g.n];
-        for(int i = 0; i < host_g.n ; ++i) {
-            map[i] = static_cast<int>(host_partition(i));
-        }
-
-        if (config.population_management == "shrinking") {
-            host_partition = memeticSolverShrinking(config).solve(host_g, map);
-        }else{
-            host_partition = memeticSolver(config).solve(host_g);
-        }
-
-        Kokkos::fence();
-        */
 
 
         if (verbose_level >= 1) {
@@ -171,7 +147,7 @@ int main(int argc, char *argv[]) {
 
     auto ep = get_time_point();
     if (verbose_level >= 2) {
-        std::cout << "Total Time in GPU-HeiPa.cpp : " << get_seconds(sp, ep) << " seconds." << std::endl;
+        std::cout << "Total Time in GPU-MemHeiPa.cpp : " << get_seconds(sp, ep) << " seconds." << std::endl;
     }
 
     return 0;

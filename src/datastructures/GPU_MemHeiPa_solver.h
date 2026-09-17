@@ -24,8 +24,8 @@
  * SOFTWARE.
  ******************************************************************************/
 
-#ifndef GPU_HEIPA_SOLVER_MEMETIC_SHRINKING_H
-#define GPU_HEIPA_SOLVER_MEMETIC_SHRINKING_H
+#ifndef GPU_MEMHEIPA_SOLVER_H
+#define GPU_MEMHEIPA_SOLVER_H
 
 #include <vector>
 #include <limits>
@@ -47,7 +47,7 @@
 #include "../refinement/distance_computations_shrinking.h"
 #include "../initial_partitioning/kway_partitioner/kway_core.h"
 #include "../definitions.h"
-#include "../utility/memetic_configuration.h"
+#include "../GPU_MemHeiPa_configuration.h"
 #include "../utility/profiler.h"
 #include "../utility/asserts.h"
 #include "../utility/edge_cut.h"
@@ -88,8 +88,6 @@ namespace GPU_HeiPa {
 
         // probability for mutation: generate random number in [0,1], mutate if HIGHER than mutation_rate
         f32 mutation_rate = 0.5;
-        f64 starting_temp = 8.0;
-        f64 cooling_factor = 0.9;
 
         PopulationManagement pop_management = PopulationManagement::shrinking;
         size_t reduction_factor = 1;
@@ -206,8 +204,6 @@ namespace GPU_HeiPa {
             inactive_percentile = config.inactive_percentile;
             mutation_percentile = config.mutation_percentile;
             mutation_rate = config.mutation_rate;
-            starting_temp = config.starting_temp;
-            cooling_factor = config.cooling_factor;
             parents_curr = config.num_individuals;
 
             if (config.population_management == "steadystate") {
@@ -1584,6 +1580,9 @@ namespace GPU_HeiPa {
             return;
         }
     };
+
+    using GPU_MemHeiPa_solver = memeticSolverShrinking;
+    using MemeticSolver = memeticSolverShrinking;
 }
 
-#endif //GPU_HEIPA_SOLVER_H
+#endif //GPU_MEMHEIPA_SOLVER_H

@@ -115,17 +115,17 @@ target_link_libraries(COMMON PUBLIC
 
 add_executable(GPU-HeiPa app/GPU-HeiPa.cpp $<TARGET_OBJECTS:COMMON>)
 add_executable(GPU-HeiProMap app/GPU-HeiProMap.cpp $<TARGET_OBJECTS:COMMON>)
-add_executable(GPU-HeiPa-memetic app/GPU-HeiPa-memetic.cpp $<TARGET_OBJECTS:COMMON>)
+add_executable(GPU-MemHeiPa app/GPU-MemHeiPa.cpp $<TARGET_OBJECTS:COMMON>)
 
 target_link_libraries(GPU-HeiPa PRIVATE COMMON kway_lib ${METIS_LIBRARY} ${GKLIB_LIBRARY} Kokkos::kokkos Kokkos::kokkoskernels)
 target_link_libraries(GPU-HeiProMap PRIVATE COMMON kway_lib ${METIS_LIBRARY} ${GKLIB_LIBRARY} Kokkos::kokkos Kokkos::kokkoskernels)
-target_link_libraries(GPU-HeiPa-memetic PRIVATE COMMON kway_lib ${METIS_LIBRARY} ${GKLIB_LIBRARY} Kokkos::kokkos Kokkos::kokkoskernels OpenMP::OpenMP_CXX)
+target_link_libraries(GPU-MemHeiPa PRIVATE COMMON kway_lib ${METIS_LIBRARY} ${GKLIB_LIBRARY} Kokkos::kokkos Kokkos::kokkoskernels OpenMP::OpenMP_CXX)
 
 # Disable CUDA lazy loading via linker flags
 if(Kokkos_ENABLE_CUDA)
     target_link_options(GPU-HeiPa PRIVATE "LINKER:--require-defined,cudaDeviceSynchronize")
     target_link_options(GPU-HeiProMap PRIVATE "LINKER:--require-defined,cudaDeviceSynchronize")
-    target_link_options(GPU-HeiPa-memetic PRIVATE "LINKER:--require-defined,cudaDeviceSynchronize")
+    target_link_options(GPU-MemHeiPa PRIVATE "LINKER:--require-defined,cudaDeviceSynchronize")
 endif()
 
 target_compile_options(GPU-HeiPa PRIVATE
@@ -136,8 +136,9 @@ target_compile_options(GPU-HeiProMap PRIVATE
         -Wno-sign-conversion
 )
 
-target_compile_options(GPU-HeiPa-memetic PRIVATE
+target_compile_options(GPU-MemHeiPa PRIVATE
         -Wno-sign-conversion
 )
+
 
 
