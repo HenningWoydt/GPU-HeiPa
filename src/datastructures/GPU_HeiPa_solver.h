@@ -242,6 +242,7 @@ namespace GPU_HeiPa {
                 }
 
                 contraction(level, dev_mem_stack);
+                contract(partition, mappings.back(), exec_space);
 
                 level += 1;
             }

@@ -46,7 +46,7 @@
 #include "../refinement/mutation.h"
 #include "../refinement/distance_computations_shrinking.h"
 #include "../initial_partitioning/kway_partitioner/kway_core.h"
-#include "../utility/definitions.h"
+#include "../definitions.h"
 #include "../utility/memetic_configuration.h"
 #include "../utility/profiler.h"
 #include "../utility/asserts.h"
@@ -785,9 +785,7 @@ namespace GPU_HeiPa {
                     #pragma omp parallel for num_threads(num_cpu_threads)
                     for (size_t i = 0; i < count_active; ++i) {
                         size_t tid = static_cast<size_t>(omp_get_thread_num());
-                        // refinement(level, mem_stacks[tid], i, tid);
-                        refinement_SA(level, mem_stacks[tid], i, tid);
-                        //refinement_GRASPstyle(level, mem_stacks[tid], i, tid);
+                        refinement(level, mem_stacks[tid], i, tid);
                     }
 
                     refinement_ms += get_milli_seconds(p, get_time_point());
@@ -1079,13 +1077,13 @@ namespace GPU_HeiPa {
             Graph &cur = graphs.back();
             std::pair<weight_t, weight_t> pair;
             if (cur.uniform_vertex_weights && cur.uniform_edge_weights) {
-                pair = jet_refine<true, true>(cur, solutions[level % 2][individual_id], k, lmax, use_ultra, level, curr_edge_cut[individual_id], curr_max_block_weight[individual_id], mem_stack, exec_spaces[tid], starting_temp, cooling_factor);
+                pair = jet_refine<true, true>(cur, solutions[level % 2][individual_id], k, lmax, use_ultra, level, curr_edge_cut[individual_id], curr_max_block_weight[individual_id], mem_stack, exec_spaces[tid]);
             } else if (cur.uniform_vertex_weights) {
-                pair = jet_refine<true, false>(cur, solutions[level % 2][individual_id], k, lmax, use_ultra, level, curr_edge_cut[individual_id], curr_max_block_weight[individual_id], mem_stack, exec_spaces[tid], starting_temp, cooling_factor);
+                pair = jet_refine<true, false>(cur, solutions[level % 2][individual_id], k, lmax, use_ultra, level, curr_edge_cut[individual_id], curr_max_block_weight[individual_id], mem_stack, exec_spaces[tid]);
             } else if (cur.uniform_edge_weights) {
-                pair = jet_refine<false, true>(cur, solutions[level % 2][individual_id], k, lmax, use_ultra, level, curr_edge_cut[individual_id], curr_max_block_weight[individual_id], mem_stack, exec_spaces[tid], starting_temp, cooling_factor);
+                pair = jet_refine<false, true>(cur, solutions[level % 2][individual_id], k, lmax, use_ultra, level, curr_edge_cut[individual_id], curr_max_block_weight[individual_id], mem_stack, exec_spaces[tid]);
             } else {
-                pair = jet_refine<false, false>(cur, solutions[level % 2][individual_id], k, lmax, use_ultra, level, curr_edge_cut[individual_id], curr_max_block_weight[individual_id], mem_stack, exec_spaces[tid], starting_temp, cooling_factor);
+                pair = jet_refine<false, false>(cur, solutions[level % 2][individual_id], k, lmax, use_ultra, level, curr_edge_cut[individual_id], curr_max_block_weight[individual_id], mem_stack, exec_spaces[tid]);
             }
 
             curr_edge_cut[individual_id] = pair.first;

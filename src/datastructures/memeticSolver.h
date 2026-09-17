@@ -44,7 +44,7 @@
 #include "../refinement/memetic_refinement.h"
 #include "../refinement/distance_computations_steady.h"
 #include "../initial_partitioning/kway_partitioner/kway_core.h"
-#include "../utility/definitions.h"
+#include "../definitions.h"
 #include "../utility/memetic_configuration.h"
 #include "../utility/profiler.h"
 #include "../utility/asserts.h"

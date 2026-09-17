@@ -46,7 +46,7 @@ namespace GPU_HeiPa {
     using TeamPolicy_t = Kokkos::TeamPolicy<DeviceExecutionSpace>;
     using TeamMember = TeamPolicy_t::member_type;
 
-    constexpr vertex_t SENTINEL = std::numeric_limits<vertex_t>::max();
+
 
     struct TwoHopMatcher {
         vertex_t n = 0;
@@ -361,21 +361,21 @@ namespace GPU_HeiPa {
             if (uniform_e_weights) {
                 if (g.m / g.n > 32) {
                     HEIPA_PROFILE_SCOPE("coarsening", "coarsen_match", "repick_uniform_team");
-                    pick_neighbor_team<false, uniform_e_weights>(g, thm.vcmap, thm.hn, round_seed, thm.vertex_list, perm_length, exec_space);
+                    pick_neighbor_team<false, uniform_e_weights>(g, partition, thm.vcmap, thm.hn, round_seed, thm.vertex_list, perm_length, exec_space);
                     KOKKOS_PROFILE_FENCE(exec_space);
                 } else {
                     HEIPA_PROFILE_SCOPE("coarsening", "coarsen_match", "repick_uniform_flat");
-                    pick_neighbor_flat<false, uniform_e_weights>(g, thm.vcmap, thm.hn, round_seed, thm.vertex_list, perm_length, exec_space);
+                    pick_neighbor_flat<false, uniform_e_weights>(g, partition, thm.vcmap, thm.hn, round_seed, thm.vertex_list, perm_length, exec_space);
                     KOKKOS_PROFILE_FENCE(exec_space);
                 }
             } else {
                 if (g.m / g.n > 32) {
                     HEIPA_PROFILE_SCOPE("coarsening", "coarsen_match", "repick_team");
-                    pick_neighbor_team<false, uniform_e_weights>(g, thm.vcmap, thm.hn, round_seed, thm.vertex_list, perm_length, exec_space);
+                    pick_neighbor_team<false, uniform_e_weights>(g, partition, thm.vcmap, thm.hn, round_seed, thm.vertex_list, perm_length, exec_space);
                     KOKKOS_PROFILE_FENCE(exec_space);
                 } else {
                     HEIPA_PROFILE_SCOPE("coarsening", "coarsen_match", "repick_flat");
-                    pick_neighbor_flat<false, uniform_e_weights>(g, thm.vcmap, thm.hn, round_seed, thm.vertex_list, perm_length, exec_space);
+                    pick_neighbor_flat<false, uniform_e_weights>(g, partition, thm.vcmap, thm.hn, round_seed, thm.vertex_list, perm_length, exec_space);
                     KOKKOS_PROFILE_FENCE(exec_space);
                 }
             }
@@ -400,6 +400,15 @@ namespace GPU_HeiPa {
             }, perm_length);
             KOKKOS_PROFILE_FENCE(exec_space);
 
+            if (perm_length == prev_perm_length) {
+                stalled_rounds++;
+            } else {
+                stalled_rounds = 0;
+            }
+
+            if (stalled_rounds > 8) {
+                break;
+            }
             round++;
         }
     }
@@ -598,13 +607,6 @@ namespace GPU_HeiPa {
         Kokkos::deep_copy(exec_space, thm.hn, SENTINEL);
         KOKKOS_PROFILE_FENCE(exec_space);
 
-        heavy_edge_matching<uniform_v_weights, uniform_e_weights>(g, thm, 12345u, exec_space);
-            Kokkos::deep_copy(exec_space, thm.vcmap, SENTINEL);
-            Kokkos::deep_copy(exec_space, thm.hn, SENTINEL);
-            exec_space.fence();
-            KOKKOS_PROFILE_FENCE(exec_space);
-        }
-
         heavy_edge_matching<uniform_v_weights, uniform_e_weights>(g, partition, thm, 12345u, exec_space);
 
         vertex_t unmapped = count_unmapped(g, thm, exec_space);
@@ -655,6 +657,8 @@ namespace GPU_HeiPa {
             mapping.mapping(u) = thm.vcmap(u);
         });
         KOKKOS_PROFILE_FENCE(exec_space);
+
+        made_progress = (mapping.coarse_n < mapping.old_n);
 
 
         HEIPA_PROFILE_SCOPE("coarsening", "coarsen_match", "free");

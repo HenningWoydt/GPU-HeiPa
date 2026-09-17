@@ -10,7 +10,7 @@
 #include <algorithm>
 #include <Kokkos_Random.hpp>
 
-#include "../utility/definitions.h"
+#include "../definitions.h"
 #include "../utility/hungarian_algorithm.h"
 #include "../datastructures/partition.h"
 #include "block_conn.h"

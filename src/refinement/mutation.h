@@ -3,9 +3,9 @@
 
 #include <Kokkos_Core.hpp>
 
-#include "../utility/definitions.h"
+#include "../definitions.h"
 #include "../datastructures/partition.h"
-#include "../datastructures/solver.h"
+#include "../datastructures/GPU_HeiPa_solver.h"
 
 
 
