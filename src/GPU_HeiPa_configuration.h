@@ -55,7 +55,7 @@ namespace GPU_HeiPa {
             {"--imbalance", "-e", "Allowed imbalance (for example 0.03).", "0.03", "", false},
             {"--coarsening", "", "Coarsening Config {two-hop, independent-edge-set}.", "two-hop", "", false},
             {"--config", "-c", "Algorithm Config {default, ultra}.", "", "", false},
-            {"--initial-partitioning", "", "Initial partitioning algorithm {kway, biml_bisection, metis}.", "kway", "", false},
+            {"--initial-partitioning", "", "Initial partitioning algorithm {kway, biml_bisection, recursive-bisection, metis}.", "kway", "", false},
             {"--bisection-method", "", "Bisection method {brute-force, heuristic, brute-force-with-heuristic, grasp}.", "grasp", "", false},
             {"--verbose-level", "", "Whether to print.", "1", "", false},
             {"--n-bytes-requested", "", "Total bytes requested from device.", "8589934592", "", false},

@@ -42,6 +42,7 @@
 #include "../initial_partitioning/kway_partitioner/kway_core.h"
 #include "../initial_partitioning/metis_wrapper.h"
 #include "../initial_partitioning/biml_bisection.h"
+#include "../initial_partitioning/recursive_bisection.h"
 #include "../definitions.h"
 #include "../GPU_HeiPa_configuration.h"
 #include "../utility/profiler.h"
@@ -433,6 +434,21 @@ namespace GPU_HeiPa {
                     exit(EXIT_FAILURE);
                 }
                 biml_bisection(graphs.back(), k, config.imbalance, config.seed, config.c, partition, mem_stack, exec_space, method);
+            } else if (config.initial_partitioning == "recursive-bisection" || config.initial_partitioning == "recursive_bisection") {
+                BisectionMethod method = BisectionMethod::BRUTE_FORCE;
+                if (config.bisection_method == "heuristic" || config.bisection_method == "heuristic-only" || config.bisection_method == "HEURISTIC_ONLY") {
+                    method = BisectionMethod::HEURISTIC_ONLY;
+                } else if (config.bisection_method == "grasp" || config.bisection_method == "GRASP") {
+                    method = BisectionMethod::GRASP;
+                } else if (config.bisection_method == "brute-force-with-heuristic" || config.bisection_method == "BRUTE_FORCE_WITH_HEURISTIC") {
+                    method = BisectionMethod::BRUTE_FORCE_WITH_HEURISTIC;
+                } else if (config.bisection_method == "brute-force" || config.bisection_method == "BRUTE_FORCE") {
+                    method = BisectionMethod::BRUTE_FORCE;
+                } else {
+                    std::cerr << "Unknown bisection method: " << config.bisection_method << std::endl;
+                    exit(EXIT_FAILURE);
+                }
+                recursive_bisection(graphs.back(), k, config.imbalance, config.seed, config.c, partition, mem_stack, exec_space, method);
             } else if (config.initial_partitioning == "metis") {
                 metis_partition(graphs.back(), (int) k, config.imbalance, config.seed, partition, exec_space);
             } else {

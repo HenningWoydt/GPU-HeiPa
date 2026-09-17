@@ -43,13 +43,16 @@ namespace GPU_HeiPa {
     template<bool uvw, bool uew>
     inline void batched_heuristic_bisect(const GraphBatch &batch,
                                          const DeviceU8 &active_mask,
+                                         const UnmanagedDevicePartition &active_graph_ids,
+                                         u32 num_active_graphs,
                                          const DeviceU32 &current_targets_dev,
                                          weight_t lmax_global,
                                          KokkosMemoryStack &mem_stack,
                                          DeviceExecutionSpace &exec_space) {
         HEIPA_PROFILE_SCOPE("initial_partitioning", "gpu_rb_partition", "batched_heuristic_bisect");
 
-        const u32 k = batch.k;
+        if (num_active_graphs == 0) return;
+
         auto d_actual_n = batch.batch_ns;
 
         HEIPA_PROFILE_SCOPE("initial_partitioning", "batched_heuristic_bisect", "heuristic_prepass");
@@ -66,9 +69,8 @@ namespace GPU_HeiPa {
         u64 n_bytes_edges_w = round_up_64(b_m) * sizeof(weight_t);
         u64 n_bytes_one_graph = n_bytes_weights + n_bytes_neighborhood + n_bytes_edges_u + n_bytes_edges_v + n_bytes_edges_w;
 
-        Kokkos::parallel_for("heuristic_prepass", Kokkos::TeamPolicy<DeviceExecutionSpace>(exec_space, k, Kokkos::AUTO), KOKKOS_LAMBDA(const Kokkos::TeamPolicy<DeviceExecutionSpace>::member_type &team) {
-            const partition_t graph_id = team.league_rank();
-            if (!active_mask(graph_id)) return;
+        Kokkos::parallel_for("heuristic_prepass", Kokkos::TeamPolicy<DeviceExecutionSpace>(exec_space, num_active_graphs, Kokkos::AUTO), KOKKOS_LAMBDA(const Kokkos::TeamPolicy<DeviceExecutionSpace>::member_type &team) {
+            const partition_t graph_id = active_graph_ids(team.league_rank());
             
             const vertex_t gn = d_actual_n(graph_id);
             if (gn <= 1) {
@@ -201,4 +203,4 @@ namespace GPU_HeiPa {
 
 } // namespace GPU_HeiPa
 
-#endif // GPU_HEIPA_GPU_BISECTION_HEURISTIC_H
+#endif // GPU_HEIPA_BISECTION_HEURISTIC_H
