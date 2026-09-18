@@ -414,16 +414,24 @@ namespace GPU_HeiPa {
         });
         KOKKOS_PROFILE_FENCE(exec_space);
 
-        // Allocate 2-way target scratch for FM refinement
-        UnmanagedDeviceU32 targets_dev_2way((u32 *) get_chunk_back(mem_stack, sizeof(u32) * 2), 2);
-        Kokkos::parallel_for("init_targets_2way", Kokkos::RangePolicy<DeviceExecutionSpace>(exec_space, 0, 2), KOKKOS_LAMBDA(const int i) {
-            if (i == 0) targets_dev_2way(0) = (k1 & 0xFFFF);
-            else targets_dev_2way(1) = (k2 & 0xFFFF);
-        });
-        KOKKOS_PROFILE_FENCE(exec_space);
+        // Strict capacities for 2-way bisection preventing compounding imbalance
+        weight_t lmax_0 = (weight_t) (k1 * lmax_global);
+        weight_t lmax_1 = (weight_t) (k2 * lmax_global);
+
+        // Proportional target limits to avoid lopsided partitions when g_curr is light
+        weight_t target_max_0 = (weight_t) std::ceil((1.0 + imbalance) * ((f64) k1 / (f64) k_sub) * (f64) g_curr.g_weight);
+        weight_t target_max_1 = (weight_t) std::ceil((1.0 + imbalance) * ((f64) k2 / (f64) k_sub) * (f64) g_curr.g_weight);
+
+        weight_t min_w0 = (g_curr.g_weight > lmax_1) ? (g_curr.g_weight - lmax_1) : 0;
+        weight_t min_w1 = (g_curr.g_weight > lmax_0) ? (g_curr.g_weight - lmax_0) : 0;
+
+        lmax_0 = std::min(lmax_0, std::max(target_max_0, min_w0));
+        lmax_1 = std::min(lmax_1, std::max(target_max_1, min_w1));
+
+        std::vector<weight_t> block_lmax_2way = { lmax_0, lmax_1 };
 
         // Refine initial bisection on coarsest graph
-        cpu_fm_refine(graphs.back(), 2, bisect_part, targets_dev_2way, g_curr.g_weight, imbalance, exec_space);
+        cpu_fm_refine(graphs.back(), 2, bisect_part, block_lmax_2way, exec_space);
 
         // --- Phase 3: Uncoarsening and FM refinement back to g_curr ---
         while (!mappings.empty()) {
@@ -451,12 +459,9 @@ namespace GPU_HeiPa {
             KOKKOS_PROFILE_FENCE(exec_space);
 
             // Refine 2-way partition at this uncontracted level
-            cpu_fm_refine(graphs.back(), 2, bisect_part, targets_dev_2way, g_curr.g_weight, imbalance, exec_space);
+            cpu_fm_refine(graphs.back(), 2, bisect_part, block_lmax_2way, exec_space);
             KOKKOS_PROFILE_FENCE(exec_space);
         }
-
-        pop_back(mem_stack); // targets_dev_2way
-        KOKKOS_PROFILE_FENCE(exec_space);
 
         // --- Phase 4: Extract induced subgraphs and recurse ---
         // Extract G1 (part 0)

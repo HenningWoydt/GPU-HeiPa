@@ -72,7 +72,7 @@ namespace GPU_HeiPa {
         using GainVertex = std::pair<weight_t, vertex_t>;
 
         // Perform pairwise 2-way FM passes between interacting blocks
-        for (int pass = 0; pass < 2; ++pass) {
+        for (int pass = 0; pass < 4; ++pass) {
             bool pass_improved = false;
 
             for (partition_t u_id = 0; u_id < k; ++u_id) {
@@ -125,60 +125,95 @@ namespace GPU_HeiPa {
                     std::vector<FMMove> move_history;
                     std::vector<bool> moved(n, false);
 
-                    weight_t curr_gain = 0;
-                    weight_t best_gain = 0;
-                    size_t best_step = 0;
-
                     weight_t u_bw = h_bweights[u_id];
                     weight_t v_bw = h_bweights[v_id];
                     weight_t u_lmax = block_lmax[u_id];
                     weight_t v_lmax = block_lmax[v_id];
+
+                    auto compute_overload = [&](weight_t uw, weight_t vw) -> weight_t {
+                        weight_t ol = 0;
+                        if (uw > u_lmax) ol += (uw - u_lmax);
+                        if (vw > v_lmax) ol += (vw - v_lmax);
+                        return ol;
+                    };
+
+                    weight_t init_overload = compute_overload(u_bw, v_bw);
+                    weight_t min_overload = init_overload;
+                    weight_t curr_gain = 0;
+                    weight_t best_gain = 0;
+                    size_t best_step = 0;
 
                     while (!pq_u.empty() || !pq_v.empty()) {
                         while (!pq_u.empty() && moved[pq_u.top().second]) pq_u.pop();
                         while (!pq_v.empty() && moved[pq_v.top().second]) pq_v.pop();
                         if (pq_u.empty() && pq_v.empty()) break;
 
+                        auto try_candidate = [&](bool is_u, vertex_t &cand_v, weight_t &cand_g, partition_t &cand_from, partition_t &cand_to, weight_t &cand_vw, weight_t &cand_to_nbw, weight_t &cand_from_nbw) -> bool {
+                            auto &pq = is_u ? pq_u : pq_v;
+                            if (pq.empty()) return false;
+                            cand_v = pq.top().second;
+                            cand_g = pq.top().first;
+                            cand_from = is_u ? u_id : v_id;
+                            cand_to = is_u ? v_id : u_id;
+                            cand_vw = h_v_weights[cand_v];
+                            cand_to_nbw = (cand_to == u_id ? u_bw : v_bw) + cand_vw;
+                            cand_from_nbw = (cand_from == u_id ? u_bw : v_bw) - cand_vw;
+                            weight_t to_lmax = (cand_to == u_id ? u_lmax : v_lmax);
+                            if (to_lmax > 0 && cand_to_nbw > to_lmax) {
+                                weight_t new_uw = (cand_from == u_id ? cand_from_nbw : cand_to_nbw);
+                                weight_t new_vw = (cand_from == v_id ? cand_from_nbw : cand_to_nbw);
+                                if (compute_overload(new_uw, new_vw) >= compute_overload(u_bw, v_bw)) {
+                                    return false;
+                                }
+                            }
+                            return true;
+                        };
+
+                        vertex_t vert = 0;
+                        weight_t g_val = 0;
+                        partition_t from = 0, to = 0;
+                        weight_t vw = 0, to_new_bw = 0, from_new_bw = 0;
+
+                        bool u_valid = try_candidate(true, vert, g_val, from, to, vw, to_new_bw, from_new_bw);
+                        vertex_t v_vert = 0;
+                        weight_t v_g_val = 0;
+                        partition_t v_from = 0, v_to = 0;
+                        weight_t v_vw = 0, v_to_new_bw = 0, v_from_new_bw = 0;
+                        bool v_valid = try_candidate(false, v_vert, v_g_val, v_from, v_to, v_vw, v_to_new_bw, v_from_new_bw);
+
                         bool choose_u = true;
-                        if (pq_u.empty()) {
-                            choose_u = false;
-                        } else if (pq_v.empty()) {
-                            choose_u = true;
-                        } else {
-                            if (pq_v.top().first > pq_u.top().first) {
+                        if (u_valid && v_valid) {
+                            if (u_bw > u_lmax && v_bw <= v_lmax) {
+                                choose_u = true;
+                            } else if (v_bw > v_lmax && u_bw <= u_lmax) {
                                 choose_u = false;
-                            } else if (pq_u.top().first == pq_v.top().first) {
+                            } else if (v_g_val > g_val) {
+                                choose_u = false;
+                            } else if (g_val == v_g_val) {
                                 choose_u = (u_bw >= v_bw);
                             }
+                        } else if (u_valid) {
+                            choose_u = true;
+                        } else if (v_valid) {
+                            choose_u = false;
+                        } else {
+                            // Neither top candidate is feasible; pop both if they exist to allow other vertices a chance
+                            if (!pq_u.empty()) pq_u.pop();
+                            if (!pq_v.empty()) pq_v.pop();
+                            continue;
                         }
 
-                        auto &pq = choose_u ? pq_u : pq_v;
-                        vertex_t vert = pq.top().second;
-                        weight_t g_val = pq.top().first;
-                        pq.pop();
-
-                        partition_t from = choose_u ? u_id : v_id;
-                        partition_t to = choose_u ? v_id : u_id;
-                        weight_t vw = h_v_weights[vert];
-
-                        weight_t to_new_bw = (to == u_id ? u_bw : v_bw) + vw;
-                        weight_t from_new_bw = (from == u_id ? u_bw : v_bw) - vw;
-                        weight_t to_lmax = (to == u_id ? u_lmax : v_lmax);
-                        if (to_new_bw > to_lmax && to_new_bw > (to == u_id ? u_bw : v_bw)) {
-                            auto &other_pq = choose_u ? pq_v : pq_u;
-                            while (!other_pq.empty() && moved[other_pq.top().second]) other_pq.pop();
-                            if (other_pq.empty()) break;
-
-                            vert = other_pq.top().second;
-                            g_val = other_pq.top().first;
-                            other_pq.pop();
-
-                            std::swap(from, to);
-                            vw = h_v_weights[vert];
-                            to_new_bw = (to == u_id ? u_bw : v_bw) + vw;
-                            from_new_bw = (from == u_id ? u_bw : v_bw) - vw;
-                            to_lmax = (to == u_id ? u_lmax : v_lmax);
-                            if (to_new_bw > to_lmax) break;
+                        if (choose_u) {
+                            pq_u.pop();
+                        } else {
+                            pq_v.pop();
+                            vert = v_vert;
+                            g_val = v_g_val;
+                            from = v_from;
+                            to = v_to;
+                            vw = v_vw;
+                            to_new_bw = v_to_new_bw;
+                            from_new_bw = v_from_new_bw;
                         }
 
                         moved[vert] = true;
@@ -189,7 +224,22 @@ namespace GPU_HeiPa {
 
                         move_history.push_back({vert, from, to, g_val, vw});
 
-                        if (curr_gain > best_gain && u_bw <= u_lmax && v_bw <= v_lmax) {
+                        weight_t curr_overload = compute_overload(u_bw, v_bw);
+                        bool update_best = false;
+                        if (init_overload > 0) {
+                            if (curr_overload < min_overload) {
+                                update_best = true;
+                            } else if (curr_overload == min_overload && curr_gain > best_gain) {
+                                update_best = true;
+                            }
+                        } else {
+                            if (curr_overload == 0 && curr_gain > best_gain) {
+                                update_best = true;
+                            }
+                        }
+
+                        if (update_best) {
+                            min_overload = curr_overload;
                             best_gain = curr_gain;
                             best_step = move_history.size();
                         }
@@ -212,7 +262,7 @@ namespace GPU_HeiPa {
                         h_map[m.u] = m.from;
                     }
 
-                    if (best_step > 0 && best_gain > 0) {
+                    if (best_step > 0 && (min_overload < init_overload || (min_overload == 0 && best_gain > 0))) {
                         pass_improved = true;
                         overall_improved = true;
                         for (size_t i = 0; i < best_step; ++i) {
@@ -278,6 +328,34 @@ namespace GPU_HeiPa {
             if (num_target_parts == 0) num_target_parts = 1;
             block_lmax[i] = (weight_t) ((((f64) num_target_parts * (1.0 + imbalance) * (f64) g_weight) / (f64) total_target_parts) + 0.999999);
         }
+
+        cpu_fm_refine_internal(n, g.m, h_edge_begin, h_edge_end, h_edges_v, h_edges_w, h_v_weights, k, partition, block_lmax, exec_space);
+    }
+
+    inline void cpu_fm_refine(const SmallGraph &g,
+                              partition_t k,
+                              Partition &partition,
+                              const std::vector<weight_t> &block_lmax,
+                              DeviceExecutionSpace &exec_space) {
+        const vertex_t n = g.n;
+        if (n == 0 || k < 2) return;
+
+        std::vector<u32> h_edge_begin(n);
+        std::vector<u32> h_edge_end(n);
+        std::vector<vertex_t> h_edges_v(g.m);
+        std::vector<weight_t> h_edges_w(g.m, 1);
+        std::vector<weight_t> h_v_weights(n, 1);
+
+        Kokkos::deep_copy(exec_space, Kokkos::View<u32*, Kokkos::HostSpace, Kokkos::MemoryTraits<Kokkos::Unmanaged>>(h_edge_begin.data(), n), g.edge_begin);
+        Kokkos::deep_copy(exec_space, Kokkos::View<u32*, Kokkos::HostSpace, Kokkos::MemoryTraits<Kokkos::Unmanaged>>(h_edge_end.data(), n), g.edge_end);
+        Kokkos::deep_copy(exec_space, Kokkos::View<vertex_t*, Kokkos::HostSpace, Kokkos::MemoryTraits<Kokkos::Unmanaged>>(h_edges_v.data(), g.m), g.edges_v);
+        if (!g.uniform_edge_weights) {
+            Kokkos::deep_copy(exec_space, Kokkos::View<weight_t*, Kokkos::HostSpace, Kokkos::MemoryTraits<Kokkos::Unmanaged>>(h_edges_w.data(), g.m), g.edges_w);
+        }
+        if (!g.uniform_vertex_weights) {
+            Kokkos::deep_copy(exec_space, Kokkos::View<weight_t*, Kokkos::HostSpace, Kokkos::MemoryTraits<Kokkos::Unmanaged>>(h_v_weights.data(), n), g.weights);
+        }
+        exec_space.fence();
 
         cpu_fm_refine_internal(n, g.m, h_edge_begin, h_edge_end, h_edges_v, h_edges_w, h_v_weights, k, partition, block_lmax, exec_space);
     }
