@@ -1,45 +1,53 @@
 <div align="center">
 
-# **GPU**-Accelerated Heidelberg **Partitioning** and **Process Mapping**
+# **GPU-HeiPa**
+### **GPU-Accelerated Graph Partitioning & Process Mapping Framework**
 
 [![License: MIT](https://img.shields.io/badge/License-MIT-blue.svg)](LICENSE)
+[![Release](https://img.shields.io/badge/Release-v1.1.0-brightgreen.svg)](https://github.com/HenningWoydt/GPU-HeiPa/releases)
 [![C++20](https://img.shields.io/badge/C%2B%2B-20-blue.svg)](https://isocpp.org/)
 [![Kokkos](https://img.shields.io/badge/Kokkos-5.0.0-orange.svg)](https://github.com/kokkos/kokkos)
 [![CUDA](https://img.shields.io/badge/CUDA-11.0%2B-green.svg)](https://developer.nvidia.com/cuda-toolkit)
 
-</div>
-
 ---
+
+</div>
 
 ## Overview
 
-GPU-HeiPa is a high-performance graph partitioning and process mapping framework designed for modern GPU architectures. Built with C++20 and [Kokkos](https://github.com/kokkos/kokkos), it delivers portable performance across CUDA-enabled GPUs.
+**GPU-HeiPa** is a high-performance graph partitioning and process mapping framework built for modern GPU architectures using **C++20** and **[Kokkos 5.0](https://github.com/kokkos/kokkos)**. It achieves fast execution and high solution quality through parallel multilevel coarsening, initial partitioning, and deep GPU refinement.
 
-### Key Features
+### Core Tools
 
-- **GPU-Accelerated**: Leverages CUDA through Kokkos for massive parallelism
-- **Suite of Tools**: 
-  - `GPU-HeiPa` - Fast k-way graph partitioning with multilevel refinement
-  - `GPU-HeiProMap` - Hierarchical process mapping with communication cost optimization
-  - `GPU-MemHeiPa` - Memetic evolutionary graph partitioning algorithm combining GPU acceleration with population management
+| Executable | Purpose |
+| :--- | :--- |
+| `GPU-HeiPa` | Fast $k$-way graph partitioning with parallel multilevel refinement |
+| `GPU-HeiProMap` | Hierarchical process mapping minimizing communication cost |
+| `GPU-MemHeiPa` | Evolutionary memetic partitioning combining GPU operators with population search |
 
 ---
 
-### k-way Graph Partitioning
+## Problem Formulations
 
-Given a graph $G = (V, E)$ with vertex weights and edge weights, partition $V$ into $k$ disjoint blocks $V_1, \ldots, V_k$ such that:
-- **Balance**: Each block satisfies $|V_i| \leq L_{\max} = (1 + \varepsilon) \cdot \lceil |V|/k \rceil$ for imbalance $\varepsilon$
-- **Objective**: Minimize edge cut $= |\{(u,v) \in E : u \in V_i, v \in V_j, i \neq j\}|$
+<details>
+<summary><b>1. $k$-way Graph Partitioning</b></summary>
 
-### Hierarchical Process Mapping
+Given an undirected graph $G = (V, E)$ with vertex weights $c(v)$ and edge weights $\omega(e)$, partition $V$ into $k$ disjoint blocks $V_1, \ldots, V_k$:
+- **Balance constraint:**
+  $$\forall i \in \{1, \ldots, k\}: \sum_{v \in V_i} c(v) \leq L_{\max} := (1 + \varepsilon) \cdot \left\lceil \frac{c(V)}{k} \right\rceil$$
+- **Objective:** Minimize total edge cut:
+  $$\text{cut}(V_1, \ldots, V_k) = \sum_{\{u,v\} \in E, \Pi(u) \neq \Pi(v)} \omega(u,v)$$
+</details>
 
-Given a communication graph $G = (V, E)$ with edge weights $\omega : E \to \mathbb{R}_+$ and a hierarchical architecture:
-- **Hierarchy**: $H = a_1 : a_2 : \ldots : a_\ell$ where $k = \prod_{i=1}^{\ell} a_i$ total cores
-- **Distance**: $D = d_1 : d_2 : \ldots : d_\ell$ where $d_i$ is the communication cost at level $i$
+<details>
+<summary><b>2. Hierarchical Process Mapping</b></summary>
 
-Find mapping $\Pi : V \to [k]$ that:
-- **Balance**: $\forall i \leq k : \sum_{j : \Pi(j) = i} c(j) \leq (1 + \varepsilon) \frac{c(V)}{k}$
-- **Objective**: Minimize $J(C, D, \Pi) = \sum_{i, j \leq n} C_{ij} \cdot D_{\Pi(i)\Pi(j)}$
+Given a communication graph $G = (V, E)$ and a target hierarchy $H = a_1 : a_2 : \ldots : a_\ell$ with distance costs $D = d_1 : d_2 : \ldots : d_\ell$:
+- **Balance constraint:**
+  $$\forall i \leq k: \sum_{j: \Pi(j) = i} c(j) \leq (1 + \varepsilon) \frac{c(V)}{k}$$
+- **Objective:** Minimize communication metric:
+  $$J(C, D, \Pi) = \sum_{u, v \in V} C_{uv} \cdot D_{\Pi(u)\Pi(v)}$$
+</details>
 
 ---
 
@@ -47,128 +55,68 @@ Find mapping $\Pi : V \to [k]$ that:
 
 ### Prerequisites
 
-- **CMake** 3.16+
-- **C++20 compiler** (GCC 10+, Clang 11+)
-- **CUDA Toolkit** 11.0+ with compute capability 7.0+
+- **CMake** $\ge$ 3.16
+- **C++20 Compiler** (GCC 10+, Clang 11+)
+- **CUDA Toolkit** $\ge$ 11.0 (Compute Capability $\ge$ 7.0)
 - **OpenMP**
 
 ### Build
 
 ```bash
-# Full build (downloads and builds Kokkos dependencies)
+# Complete build (fetches & builds Kokkos 5.0 dependencies)
 ./build.sh
 
-# Fast rebuild (app only, after dependencies are built)
+# Rebuild application only (fast)
 ./build.sh --download-kokkos=OFF
 ```
 
-The build script automatically:
-- Detects your GPU architecture (ensure correct detection for best performance)
-- Downloads and builds Kokkos 5.0.0 and Kokkos-Kernels 5.0.0
-- Compiles the project executables
-
-**Build outputs:**
-- `build/GPU-HeiPa` - Graph partitioning tool
-- `build/GPU-HeiProMap` - Process mapping tool
-- `build/GPU-MemHeiPa` - Memetic graph partitioning tool
-
-### Build Options
-
-- `--download-kokkos=ON|OFF` - Download and build Kokkos dependencies (default: ON)
-- `--max-threads=N` - Override parallel build jobs (default: nproc - 2)
-- `--kokkos-arch=ARCH` - Manually specify GPU architecture (e.g., `Kokkos_ARCH_AMPERE86`)
-
+#### Custom Build Options
 ```bash
 ./build.sh --max-threads=16 --kokkos-arch=Kokkos_ARCH_AMPERE86
 ```
 
+Output binaries in `build/`:
+- `build/GPU-HeiPa`
+- `build/GPU-HeiProMap`
+- `build/GPU-MemHeiPa`
+
 ---
 
-## Usage
+## Usage & CLI Guide
 
-### GPU-HeiPa: Graph Partitioning
+### 1. `GPU-HeiPa` (Graph Partitioning)
 
-Partition a graph into k balanced blocks:
-
+Partition a graph into $k$ balanced blocks:
 ```bash
-./build/GPU-HeiPa \
-  --graph input.graph \
-  --k 32 \
-  --imbalance 0.03 \
-  --config default
-```
-
-**Options:**
-
-| Option | Short | Description | Default |
-|--------|-------|-------------|---------|
-| `--graph` | `-g` | Filepath to the graph (METIS format) | *required* |
-| `--k` | `-k` | Number of blocks $k$ | *required* |
-| `--config` | `-c` | Algorithm configuration preset: `default`, `ultra` | *required* |
-| `--imbalance` | `-e` | Allowed imbalance $\varepsilon$ (e.g. `0.03`) | `0.03` |
-| `--mapping` | `-m` | Output filepath to the generated partition mapping | `GPU-HeiPa_par.txt` |
-| `--coarsening` | | Coarsening method: `two-hop`, `independent-edge-set` | `two-hop` |
-| `--initial-partitioning` | | Initial partitioning algorithm: `kway`, `biml_bisection`, `recursive-bisection`, `metis` | `kway` |
-| `--bisection-method` | | Bisection method: `brute-force`, `heuristic`, `brute-force-with-heuristic`, `grasp` | `grasp` |
-| `--c-limit` | | Contraction limit parameter $c$ | `64` |
-| `--seed` | | Random seed | `0` (random if omitted) |
-| `--n-bytes-requested` | | Total memory in bytes requested from device | `8589934592` |
-| `--verbose-level` | | Verbosity level (0=quiet, 1=normal, 2=detailed) | `1` |
-| `--help` | | Produce help message | |
-
-**Configuration Presets:**
-- `default` - Fast multilevel partitioning with good cut quality
-- `ultra` - Deep refinement with best cut quality
-
-**Example:**
-```bash
-# Partition a graph into 64 blocks with 3% imbalance tolerance using ultra preset
 ./build/GPU-HeiPa -g data/graph.metis -k 64 -e 0.03 -c ultra -m output.part
 ```
 
+<details>
+<summary><b>View CLI Options Table</b></summary>
+
+| Flag | Short | Description | Default |
+| :--- | :--- | :--- | :--- |
+| `--graph` | `-g` | Path to METIS graph file | *required* |
+| `--k` | `-k` | Number of blocks $k$ | *required* |
+| `--config` | `-c` | Preset: `default`, `ultra` | *required* |
+| `--imbalance` | `-e` | Allowed imbalance $\varepsilon$ (e.g. `0.03`) | `0.03` |
+| `--mapping` | `-m` | Output partition file path | `GPU-HeiPa_par.txt` |
+| `--coarsening` | | Coarsening: `two-hop`, `independent-edge-set` | `two-hop` |
+| `--initial-partitioning` | | Initial partitioner: `kway`, `metis` | `kway` |
+| `--c-limit` | | Contraction limit $c$ | `64` |
+| `--seed` | | Random seed | `0` (random) |
+| `--n-bytes-requested` | | Allocated GPU memory (bytes) | `8589934592` |
+| `--verbose-level` | | Verbosity (0=quiet, 1=normal, 2=detailed) | `1` |
+| `--help` | | Show help message | |
+
+</details>
+
 ---
 
-### GPU-HeiProMap: Process Mapping
+### 2. `GPU-HeiProMap` (Process Mapping)
 
-Map processes to a hierarchical architecture optimizing for communication costs:
-
+Map processes to a multi-level hardware hierarchy:
 ```bash
-./build/GPU-HeiProMap \
-  --graph input.graph \
-  --hierarchy 4:8:6 \
-  --distance 1:10:100 \
-  --imbalance 0.03 \
-  --config HM-ultra
-```
-
-**Options:**
-
-| Option | Short | Description | Default |
-|--------|-------|-------------|---------|
-| `--graph` | `-g` | Input graph file (METIS format) | *required* |
-| `--hierarchy` | `-h` | Hierarchical core structure (levels separated by `:`) | *required* |
-| `--distance` | `-d` | Communication distance costs between levels separated by `:` | *required* |
-| `--config` | `-c` | Algorithm configuration: `IM`, `HM`, `HM-ultra` | *required* |
-| `--imbalance` | `-e` | Allowed imbalance $\varepsilon$ | `0.03` |
-| `--distance-oracle` | | Distance oracle type: `matrix` | `matrix` |
-| `--mapping` | `-m` | Output filepath to the generated mapping | `GPU-HeiProMap_par.txt` |
-| `--initial-partitioning` | | Initial partitioning algorithm: `global_multisection`, `biml_bisection` | `global_multisection` |
-| `--bisection-method` | | Bisection method: `brute-force`, `heuristic`, `brute-force-with-heuristic` | `brute-force` |
-| `--seq-partitioner` | | Sequential partitioner for `global_multisection`: `kway`, `metis` | `kway` |
-| `--c-limit` | | Contraction limit parameter $c$ | `8` |
-| `--seed` | | Random seed | `0` (random if omitted) |
-| `--n-bytes-requested` | | Total memory in bytes requested from device | `8589934592` |
-| `--verbose-level` | | Verbosity level (0=quiet, 1=normal, 2=detailed) | `1` |
-| `--help` | | Produce help message | |
-
-**Configuration Presets:**
-- `IM` - Iterative mapping (fastest, lower quality)
-- `HM` - Hierarchical multisection (balanced speed and quality)
-- `HM-ultra` - Hierarchical multisection with deep refinement (best quality)
-
-**Example:**
-```bash
-# Map to 2 nodes × 4 sockets × 8 cores with hierarchical distances
 ./build/GPU-HeiProMap \
   -g data/comm_graph.metis \
   --hierarchy 2:4:8 \
@@ -177,52 +125,34 @@ Map processes to a hierarchical architecture optimizing for communication costs:
   -m output.map
 ```
 
+<details>
+<summary><b>View CLI Options Table</b></summary>
+
+| Flag | Short | Description | Default |
+| :--- | :--- | :--- | :--- |
+| `--graph` | `-g` | Path to METIS graph file | *required* |
+| `--hierarchy` | `-h` | Hierarchy levels `a1:a2:...:al` | *required* |
+| `--distance` | `-d` | Distance costs `d1:d2:...:dl` | *required* |
+| `--config` | `-c` | Preset: `IM`, `HM`, `HM-ultra` | *required* |
+| `--imbalance` | `-e` | Allowed imbalance $\varepsilon$ | `0.03` |
+| `--distance-oracle` | | Distance oracle: `matrix` | `matrix` |
+| `--mapping` | `-m` | Output mapping file path | `GPU-HeiProMap_par.txt` |
+| `--initial-partitioning` | | Initial partitioner: `global_multisection` | `global_multisection` |
+| `--seq-partitioner` | | Partitioner for multisection: `kway`, `metis` | `kway` |
+| `--c-limit` | | Contraction limit $c$ | `8` |
+| `--seed` | | Random seed | `0` (random) |
+| `--n-bytes-requested` | | Allocated GPU memory (bytes) | `8589934592` |
+| `--verbose-level` | | Verbosity (0=quiet, 1=normal, 2=detailed) | `1` |
+| `--help` | | Show help message | |
+
+</details>
+
 ---
 
-### GPU-MemHeiPa: Memetic Graph Partitioning
+### 3. `GPU-MemHeiPa` (Memetic Evolutionary Algorithm)
 
-Memetic evolutionary partitioning algorithm combining GPU multilevel operators with population-based search:
-
+Run population-based evolutionary graph partitioning:
 ```bash
-./build/GPU-MemHeiPa \
-  --graph input.graph \
-  --k 32 \
-  --imbalance 0.03 \
-  --config default
-```
-
-**Options:**
-
-| Option | Short | Description | Default |
-|--------|-------|-------------|---------|
-| `--graph` | `-g` | Filepath to the graph (METIS format) | *required* |
-| `--k` | `-k` | Number of blocks $k$ | *required* |
-| `--config` | `-c` | Broad algorithm configuration preset | *required* |
-| `--imbalance` | `-e` | Allowed imbalance $\varepsilon$ | `0.03` |
-| `--mapping` | `-m` | Output filepath to the generated partition | `GPU-HeiPa_par.txt` |
-| `--statistics` | | Output filepath to save execution statistics (JSON format) | `GPU-HeiPa_stats.JSON` |
-| `--seed` | `-s` | Random seed | `0` (random if omitted) |
-| `--verbose-level` | | Verbosity level (0=quiet, 1=normal, 2=detailed) | `2` |
-| `--population-management` | | Population management mode: `shrinking`, `steadystate` | `shrinking` |
-| `--num-individuals` | | Population size | `20` |
-| `--num-cpu-threads` | | Number of CPU threads | `4` |
-| `--reduction-factor` | | Population reduction factor for `shrinking` mode | `1` |
-| `--num-crossovers` | | Number of crossovers per generation | `1` |
-| `--num-parents` | | Number of parents for crossover | `2` |
-| `--tournament-size` | | Tournament size for parent selection | `2` |
-| `--crossover-mode` | | Crossover mode: `signature`, `paper` (BBC from paper) | `signature` |
-| `--leftover-strategy` | | Leftover distribution strategy: `random`, `balanced`, `gain`, `mixed` | `mixed` |
-| `--alpha` | | Alpha parameter for mixed leftover strategy | `100.0` |
-| `--extent` | | Extent parameter for backbone crossover in range $[1, k]$ | `1` |
-| `--distance` | | Distance computation mode: `exact`, `sampled` | `exact` |
-| `--inactive-percentile` | | Disable crossover below normalized level percentile in $[0, 1]$ | `0.1` |
-| `--mutation-percentile` | | Enable mutation below normalized level percentile in $[0, 1]$ | `0.1` |
-| `--mutation-rate` | | Mutation probability threshold in $[0, 1]$ | `0.5` |
-| `--help` | | Produce help message | |
-
-**Example:**
-```bash
-# Run memetic partitioning with 10 individuals and 4 CPU threads
 ./build/GPU-MemHeiPa \
   -g data/graph.metis \
   -k 16 \
@@ -234,20 +164,52 @@ Memetic evolutionary partitioning algorithm combining GPU multilevel operators w
   -m output.part
 ```
 
+<details>
+<summary><b>View CLI Options Table</b></summary>
+
+| Flag | Short | Description | Default |
+| :--- | :--- | :--- | :--- |
+| `--graph` | `-g` | Path to METIS graph file | *required* |
+| `--k` | `-k` | Number of blocks $k$ | *required* |
+| `--config` | `-c` | Configuration preset | *required* |
+| `--imbalance` | `-e` | Allowed imbalance $\varepsilon$ | `0.03` |
+| `--mapping` | `-m` | Output partition file path | `GPU-HeiPa_par.txt` |
+| `--statistics` | | Output JSON stats file path | `GPU-HeiPa_stats.JSON` |
+| `--seed` | `-s` | Random seed | `0` (random) |
+| `--verbose-level` | | Verbosity (0=quiet, 1=normal, 2=detailed) | `2` |
+| `--population-management` | | Strategy: `shrinking`, `steadystate` | `shrinking` |
+| `--num-individuals` | | Population size | `20` |
+| `--num-cpu-threads` | | CPU worker threads | `4` |
+| `--reduction-factor` | | Population reduction factor | `1` |
+| `--num-crossovers` | | Crossovers per generation | `1` |
+| `--num-parents` | | Parents per crossover | `2` |
+| `--tournament-size` | | Selection tournament size | `2` |
+| `--crossover-mode` | | Crossover operator: `signature`, `paper` | `signature` |
+| `--leftover-strategy` | | Leftover strategy: `random`, `balanced`, `gain`, `mixed` | `mixed` |
+| `--alpha` | | Alpha parameter for mixed strategy | `100.0` |
+| `--extent` | | Backbone crossover extent in $[1, k]$ | `1` |
+| `--distance` | | Distance calculation: `exact`, `sampled` | `exact` |
+| `--inactive-percentile` | | Crossover lower bound percentile in $[0, 1]$ | `0.1` |
+| `--mutation-percentile` | | Mutation upper bound percentile in $[0, 1]$ | `0.1` |
+| `--mutation-rate` | | Mutation rate in $[0, 1]$ | `0.5` |
+| `--help` | | Show help message | |
+
+</details>
+
 ---
 
 ## Dependencies
 
-Automatically downloaded and built by `build.sh`:
+Dependencies managed automatically via CMake / `build.sh`:
 
-- [**Kokkos 5.0.0**](https://github.com/kokkos/kokkos) - Performance portability layer
-- [**Kokkos-Kernels 5.0.0**](https://github.com/kokkos/kokkos-kernels) - Sparse linear algebra kernels
+- [**Kokkos 5.0.0**](https://github.com/kokkos/kokkos) — Core performance portability framework
+- [**Kokkos-Kernels 5.0.0**](https://github.com/kokkos/kokkos-kernels) — High-performance linear algebra kernels
 
 ---
 
 ## Citation
 
-If you use GPU-HeiPa in your research, please cite [10.48550/arxiv.2510.12196](https://arxiv.org/abs/2510.12196):
+If you use **GPU-HeiPa** in academic research, please cite:
 
 ```bibtex
 @Misc{Samoldekin25,
@@ -265,9 +227,8 @@ If you use GPU-HeiPa in your research, please cite [10.48550/arxiv.2510.12196](h
 
 ## License
 
-This project is licensed under the **MIT License** - see the [LICENSE](LICENSE) file for details.
+Distributed under the **MIT License**. See [`LICENSE`](LICENSE) for details.
 
 **Copyright (c) 2026 Henning Woydt**
 
-This project includes a modified version of METIS, which is licensed under the Apache License 2.0.  
-Copyright (c) Regents of the University of Minnesota.
+> *Note: Includes a modified version of METIS (Apache License 2.0, Copyright (c) Regents of the University of Minnesota).*
