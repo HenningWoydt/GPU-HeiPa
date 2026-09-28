@@ -18,6 +18,9 @@ tests/
 res/
 .clangd
 out.txt
+__pycache__/
+*.pyc
+
 
 *.nsys-rep
 test_*.cpp
