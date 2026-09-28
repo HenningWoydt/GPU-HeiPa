@@ -30,7 +30,7 @@
 ## Problem Formulations
 
 <details>
-<summary><b>1. $k$-way Graph Partitioning</b></summary>
+<summary><b>1. k-way Graph Partitioning</b></summary>
 
 Given an undirected graph $G = (V, E)$ with vertex weights $c(v)$ and edge weights $\omega(e)$, partition $V$ into $k$ disjoint blocks $V_1, \ldots, V_k$:
 - **Balance constraint:**
