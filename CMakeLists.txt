@@ -72,10 +72,10 @@ file(GLOB_RECURSE HEADERS CONFIGURE_DEPENDS "src/*.h")
 
 # --- Kway Partitioning (Warnings Suppressed) ---
 file(GLOB_RECURSE KWAY_SOURCES CONFIGURE_DEPENDS
-        "src/initial_partitioning/kway_partitioner/*.cpp"
+        "src/init_partitioning/kway_partitioner/*.cpp"
 )
 file(GLOB_RECURSE KWAY_HEADERS CONFIGURE_DEPENDS
-        "src/initial_partitioning/kway_partitioner/*.h"
+        "src/init_partitioning/kway_partitioner/*.h"
 )
 
 # Remove kway sources from the general executable source list
@@ -89,7 +89,7 @@ target_compile_options(kway_lib PRIVATE
 )
 
 target_include_directories(kway_lib SYSTEM PUBLIC
-        "${CMAKE_CURRENT_SOURCE_DIR}/src/initial_partitioning/kway_partitioner"
+        "${CMAKE_CURRENT_SOURCE_DIR}/src/init_partitioning/kway_partitioner"
 )
 
 target_link_libraries(kway_lib PUBLIC
@@ -102,7 +102,7 @@ target_compile_options(COMMON PRIVATE
         -Wno-sign-conversion
 )
 target_include_directories(COMMON SYSTEM PUBLIC
-        "${CMAKE_CURRENT_SOURCE_DIR}/src/initial_partitioning/kway_partitioner"
+        "${CMAKE_CURRENT_SOURCE_DIR}/src/init_partitioning/kway_partitioner"
 )
 target_link_libraries(COMMON PUBLIC
         kway_lib

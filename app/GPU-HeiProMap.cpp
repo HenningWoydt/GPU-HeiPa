@@ -28,8 +28,8 @@
 
 #include <Kokkos_Core.hpp>
 
-#include "../src/datastructures/GPU_HeiProMap_solver.h"
-#include "../src/GPU_HeiProMap_configuration.h"
+#include "../src/solver/GPU_HeiProMap_solver.h"
+#include "../src/configuration/GPU_HeiProMap_configuration.h"
 
 using namespace GPU_HeiPa;
 

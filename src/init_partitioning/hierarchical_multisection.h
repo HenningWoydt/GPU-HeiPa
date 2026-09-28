@@ -32,8 +32,8 @@
 
 #include "../definitions.h"
 #include "../datastructures/graph.h"
-#include "../datastructures/GPU_HeiPa_solver.h"
-#include "../GPU_HeiProMap_configuration.h"
+#include "../solver/GPU_HeiPa_solver.h"
+#include "../configuration/GPU_HeiProMap_configuration.h"
 
 #include "../utility/comm_cost.h"
 #include "../distance_oracles/distance_oracle_helpers.h"

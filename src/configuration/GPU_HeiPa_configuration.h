@@ -32,9 +32,9 @@
 #include <string>
 #include <vector>
 
-#include "definitions.h"
-#include "utility/JSON_util.h"
-#include "utility/kokkos_util.h"
+#include "../definitions.h"
+#include "../utility/JSON_util.h"
+#include "../utility/kokkos_util.h"
 
 namespace GPU_HeiPa {
     struct CommandLineOption {

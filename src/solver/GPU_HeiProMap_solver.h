@@ -29,19 +29,19 @@
 
 #include <vector>
 
-#include "graph.h"
-#include "host_graph.h"
-#include "kokkos_memory_stack.h"
-#include "mapping.h"
-#include "partition.h"
+#include "../datastructures/graph.h"
+#include "../datastructures/host_graph.h"
+#include "../datastructures/kokkos_memory_stack.h"
+#include "../datastructures/mapping.h"
+#include "../datastructures/partition.h"
 #include "../coarsening/two_hop_matching.h"
-#include "../initial_partitioning/global_multisection.h"
+#include "../init_partitioning/global_multisection.h"
 #include "../definitions.h"
-#include "../GPU_HeiProMap_configuration.h"
+#include "../configuration/GPU_HeiProMap_configuration.h"
 #include "../utility/profiler.h"
 #include "../utility/asserts.h"
 #include "../distance_oracles/distance_oracle_helpers.h"
-#include "../initial_partitioning/hierarchical_multisection.h"
+#include "../init_partitioning/hierarchical_multisection.h"
 #include "../utility/comm_cost.h"
 #include "../refinement/promap_jet_label_propagation.h"
 

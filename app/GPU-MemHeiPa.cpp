@@ -28,8 +28,8 @@
 
 #include <Kokkos_Core.hpp>
 
-#include "../src/datastructures/GPU_MemHeiPa_solver.h"
-#include "../src/GPU_MemHeiPa_configuration.h"
+#include "../src/solver/GPU_MemHeiPa_solver.h"
+#include "../src/configuration/GPU_MemHeiPa_configuration.h"
 
 using namespace GPU_HeiPa;
 

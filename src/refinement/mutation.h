@@ -31,7 +31,7 @@
 
 #include "../definitions.h"
 #include "../datastructures/partition.h"
-#include "../datastructures/GPU_HeiPa_solver.h"
+#include "../solver/GPU_HeiPa_solver.h"
 
 
 

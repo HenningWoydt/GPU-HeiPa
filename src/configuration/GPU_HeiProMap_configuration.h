@@ -31,7 +31,7 @@
 #include <vector>
 
 #include "GPU_HeiPa_configuration.h"
-#include "utility/util.h"
+#include "../utility/util.h"
 
 namespace GPU_HeiPa {
     class ProMapConfiguration {
