@@ -5,7 +5,7 @@ set(PROJECT_VENDOR "Henning Woydt")
 set(PROJECT_CONTACT "henning.woydt@informatik.uni-heidelberg.de")
 set(PROJECT_URL "https://github.com/HenningWoydt/GPU_HeiProMap")
 set(PROJECT_DESCRIPTION "GPU-HeiPa: Heidelberger Partitioning on GPU")
-set(PROJECT_VERSION "1.0.0")
+set(PROJECT_VERSION "1.1.0")
 set(CMAKE_EXPORT_COMPILE_COMMANDS ON)
 
 # --- Global language/standard policy ---

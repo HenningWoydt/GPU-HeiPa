@@ -44,8 +44,7 @@ namespace GPU_HeiPa {
             {"--distance-oracle", "", "Distance oracle {matrix}.", "matrix", "", false},
             {"--imbalance", "-e", "Allowed imbalance (for example 0.03).", "0.03", "", false},
             {"--config", "-c", "Algorithm Config {IM, HM, HM-ultra}.", "", "", false},
-            {"--initial-partitioning", "", "Initial partitioning algorithm {global_multisection, biml_bisection}", "global_multisection", "", false},
-            {"--bisection-method", "", "Bisection method {brute-force, heuristic, brute-force-with-heuristic}.", "brute-force", "", false},
+            {"--initial-partitioning", "", "Initial partitioning algorithm {global_multisection}", "global_multisection", "", false},
             {"--seq-partitioner", "", "Sequential partitioning algorithm {kway, metis}. Only useful if global_multisection is used.", "kway", "", false},
             {"--verbose-level", "", "Whether to print.", "1", "", false},
             {"--n-bytes-requested", "", "Total bytes requested from device.", "8589934592", "", false},
@@ -76,7 +75,6 @@ namespace GPU_HeiPa {
         
         // initial partitioning algorithm
         std::string initial_partitioning = "global_multisection";
-        std::string bisection_method = "brute-force";
         std::string seq_partitioner = "kway";
 
         // random initialization
@@ -139,7 +137,6 @@ namespace GPU_HeiPa {
             }
 
             initial_partitioning = get("--initial-partitioning");
-            bisection_method = get("--bisection-method");
             seq_partitioner = get("--seq-partitioner");
 
             // random initialization
@@ -237,7 +234,6 @@ namespace GPU_HeiPa {
             s += tabs + to_JSON_MACRO(seed);
             s += tabs + to_JSON_MACRO(device_space);
             s += tabs + to_JSON_MACRO(initial_partitioning);
-            s += tabs + to_JSON_MACRO(bisection_method);
             s += tabs + to_JSON_MACRO(seq_partitioner);
 
             s.pop_back();
