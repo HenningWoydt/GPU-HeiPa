@@ -365,6 +365,7 @@ cd "${ROOT}/build"
 cmake .. -DCMAKE_BUILD_TYPE=Release -DCMAKE_PREFIX_PATH="${ROOT}/extern/local/kokkos;${ROOT}/extern/local/kokkos-kernels" -DCMAKE_CXX_STANDARD=20 -DCMAKE_CXX_EXTENSIONS=OFF -DENABLE_PROFILER=${ENABLE_PROFILER} -DASSERT_ENABLED=${ASSERT_ENABLED} -DBUILD_TESTING=${BUILD_TESTING}
 cmake --build . --parallel "$JOBS" --target GPU-HeiPa
 cmake --build . --parallel "$JOBS" --target GPU-HeiProMap
+cmake --build . --parallel "$JOBS" --target GPU-MemHeiPa
 
 if [ "$BUILD_TESTING" = "ON" ]; then
   cmake --build . --parallel "$JOBS" --target unit_tests
